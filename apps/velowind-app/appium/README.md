@@ -1,6 +1,6 @@
 # iOS Appium 真机功能遍历
 
-这套脚本用于在 iOS 真机上通过 Appium + Python 遍历寻风集 Taro RN App 的主要功能入口。第一版聚焦功能巡检：启动 App、处理常见系统弹窗、切换底部 Tab、尝试城市/日期/搜索等可见入口，并在失败时保存截图和页面 XML。
+这套脚本用于在 iOS 真机上通过 Appium + Python 遍历寻风集 Taro RN App 的主要功能入口。当前用例按功能模块组织：`tests/smoke/` 放快速巡检，`tests/message/` 放消息/资讯浏览流程；失败时会保存截图和页面 XML。
 
 ## 环境准备
 
@@ -68,7 +68,7 @@ appium --log-timestamp
 另开一个终端运行：
 
 ```bash
-python3 -m pytest apps/velowind-app/appium/tests/test_ios_feature_walkthrough.py -q
+python3 -m pytest apps/velowind-app/appium/tests/smoke/test_ios_feature_walkthrough.py -q
 ```
 
 也可以使用仓库脚本：
@@ -84,17 +84,29 @@ pnpm appium:ios:test
 pnpm appium:ios:test:full
 ```
 
-用例运行结束后会自动生成并打开 Allure HTML 报告；如果本机还没有 `allure` 命令，先执行 `brew install allure`。
-
-如果 WebDriverAgent 已经成功安装并验证过，日常调试可跳过 WDA build 预检以减少启动时间：
+消息模块单独运行：
 
 ```bash
-export VW_IOS_SKIP_WDA_PREFLIGHT=true
+PYTHONPATH=apps/velowind-app/appium python3 -m pytest apps/velowind-app/appium/tests/message/test_ios_message_browse.py -q -m full
+```
+
+用例运行结束后会自动生成并打开 Allure HTML 报告；如果本机还没有 `allure` 命令，先执行 `brew install allure`。
+
+WebDriverAgent 默认复用已安装版本，不会在每次运行前执行 WDA build 预检。若需要显式验证 WDA 签名，可开启预检：
+
+```bash
+export VW_IOS_SKIP_WDA_PREFLIGHT=false
 pnpm appium:ios:test
 ```
 
-失败时调试产物会写入：
+如果你是从 PyCharm 直接运行 pytest，用例默认不会在会话结束时自动打开 Allure 报告；如需恢复该行为，可显式设置：
 
+```bash
+export VW_APPIUM_AUTO_OPEN_REPORT=true
+```
+
+失败时调试产物会写入：
+    
 ```text
 .tmp/appium-ios/
 ```
@@ -122,6 +134,14 @@ pnpm appium:ios:allure:open
 失败用例会把截图和页面 XML 作为附件写入报告。
 功能遍历用例会在首页、底部 Tab、返回首页和已进入的功能入口处主动截图；截图会同时保存到 `.tmp/appium-ios/` 并附加到 Allure 报告。
 
+## 用例分包
+
+```text
+apps/velowind-app/appium/tests/
+├── smoke/    # 首页与底部 Tab 的快速巡检
+└── message/  # 普通用户浏览消息详情、留言、图票文案切换
+```
+
 ## 常用环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -136,6 +156,6 @@ pnpm appium:ios:allure:open
 | `VW_IOS_UPDATED_WDA_BUNDLE_ID` | 空 | 独立 WebDriverAgent Runner Bundle ID |
 | `VW_IOS_ALLOW_PROVISIONING_DEVICE_REGISTRATION` | `false` | 是否允许 Xcode 自动更新 provisioning 并注册设备 |
 | `VW_IOS_SHOW_XCODE_LOG` | `false` | 是否在 Appium 日志中输出 Xcode build 日志 |
-| `VW_IOS_SKIP_WDA_PREFLIGHT` | `false` | 是否跳过 preflight 阶段的 WDA build 检查 |
+| `VW_IOS_SKIP_WDA_PREFLIGHT` | `true` | 是否跳过 preflight 阶段的 WDA build 检查；设为 `false` 可显式验证 WDA 签名 |
 | `VW_IOS_USE_NEW_WDA` | `false` | 是否每次重装 WebDriverAgent |
 | `VW_IOS_NO_RESET` | `true` | 是否保留 App 状态 |

@@ -151,6 +151,20 @@ def safe_back(driver: WebDriver) -> None:
         tap_if_present(driver, "login-back", timeout=1)
 
 
+def swipe_vertical(driver: WebDriver, direction: str = "up") -> None:
+    if direction not in {"up", "down"}:
+        raise ValueError(f"Unsupported swipe direction: {direction}")
+
+    try:
+        driver.execute_script("mobile: swipe", {"direction": direction})
+        return
+    except WebDriverException:
+        pass
+
+    fallback_direction = "down" if direction == "up" else "up"
+    driver.execute_script("mobile: scroll", {"direction": fallback_direction})
+
+
 def capture_page_screenshot(driver: WebDriver, artifact_dir: Path, label: str) -> Optional[Path]:
     screenshot_path = timestamped_path(artifact_dir, label, "png")
     try:

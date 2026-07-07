@@ -4,15 +4,18 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Dict, Optional
+import yaml
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:4723"
 DEFAULT_BUNDLE_ID = "com.velowind.rider"
 DEFAULT_ARTIFACT_DIR = Path(".tmp/appium-ios")
+DEFAULT_CONFIG_FILE = Path(__file__).resolve().parents[1] / "ios-appium.yaml"
 
 
 @dataclass(frozen=True)
 class IosAppiumConfig:
+    target: str
     server_url: str
     udid: Optional[str]
     bundle_id: str
@@ -29,6 +32,8 @@ class IosAppiumConfig:
     no_reset: bool
     wait_for_idle_timeout: float
     reduce_motion: bool
+    login_username: Optional[str]
+    login_password: Optional[str]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -38,12 +43,43 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _yaml_bool(data: Dict[str, object], path: str, default: bool) -> bool:
+    value = data.get(path)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _env_text(name: str) -> Optional[str]:
     value = os.environ.get(name)
     if value is None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _read_yaml_config() -> Dict[str, object]:
+    config_path = Path(os.environ.get("VW_APPIUM_CONFIG_FILE", str(DEFAULT_CONFIG_FILE))).expanduser()
+    if not config_path.exists():
+        return {}
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _yaml_text(data: Dict[str, object], *path: str) -> Optional[str]:
+    current: object = data
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    if current is None:
+        return None
+    text = str(current).strip()
+    return text or None
 
 
 def _env_float(name: str, default: float) -> float:
@@ -88,15 +124,23 @@ def auto_detect_online_ios_udid() -> Optional[str]:
 
 
 def load_ios_config() -> IosAppiumConfig:
+    yaml_config = _read_yaml_config()
+    target = _env_text("VW_IOS_TARGET") or _yaml_text(yaml_config, "target") or "device"
     explicit_udid = _env_text("VW_IOS_UDID")
+    target_udid = _yaml_text(yaml_config, target, "udid")
+    bundle_id = _env_text("VW_IOS_BUNDLE_ID") or _yaml_text(yaml_config, "bundle_id") or DEFAULT_BUNDLE_ID
+    app_path = _env_text("VW_IOS_APP") or _yaml_text(yaml_config, "app_path")
+    platform_version = _env_text("VW_IOS_PLATFORM_VERSION") or _yaml_text(yaml_config, target, "platform_version")
+    device_name = _env_text("VW_IOS_DEVICE_NAME") or _yaml_text(yaml_config, target, "device_name")
     return IosAppiumConfig(
+        target=target,
         server_url=os.environ.get("VW_APPIUM_SERVER_URL", DEFAULT_SERVER_URL).strip() or DEFAULT_SERVER_URL,
-        udid=explicit_udid or auto_detect_online_ios_udid(),
-        bundle_id=os.environ.get("VW_IOS_BUNDLE_ID", DEFAULT_BUNDLE_ID).strip() or DEFAULT_BUNDLE_ID,
-        app_path=_env_text("VW_IOS_APP"),
+        udid=explicit_udid or target_udid or auto_detect_online_ios_udid(),
+        bundle_id=bundle_id,
+        app_path=app_path,
         artifact_dir=Path(os.environ.get("VW_APPIUM_ARTIFACT_DIR", str(DEFAULT_ARTIFACT_DIR))).expanduser(),
-        platform_version=_env_text("VW_IOS_PLATFORM_VERSION"),
-        device_name=_env_text("VW_IOS_DEVICE_NAME"),
+        platform_version=platform_version,
+        device_name=device_name,
         xcode_org_id=_env_text("VW_IOS_XCODE_ORG_ID"),
         xcode_signing_id=_env_text("VW_IOS_XCODE_SIGNING_ID"),
         updated_wda_bundle_id=_env_text("VW_IOS_UPDATED_WDA_BUNDLE_ID"),
@@ -106,9 +150,11 @@ def load_ios_config() -> IosAppiumConfig:
             False,
         ),
         use_new_wda=_env_bool("VW_IOS_USE_NEW_WDA", False),
-        no_reset=_env_bool("VW_IOS_NO_RESET", True),
+        no_reset=_env_bool("VW_IOS_NO_RESET", _yaml_bool(yaml_config, "no_reset", True)),
         wait_for_idle_timeout=_env_float("VW_IOS_WAIT_FOR_IDLE_TIMEOUT", 1.0),
         reduce_motion=_env_bool("VW_IOS_REDUCE_MOTION", True),
+        login_username=_env_text("VW_LOGIN_USERNAME") or _yaml_text(yaml_config, "login", "username"),
+        login_password=_env_text("VW_LOGIN_PASSWORD") or _yaml_text(yaml_config, "login", "password"),
     )
 
 

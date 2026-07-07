@@ -20,13 +20,16 @@ def _format_config_value(value):
     return value if value else "<not set>"
 
 
-def _env_bool(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "y", "on"}
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _run_wda_build_preflight(config) -> int:
-    if _env_bool("VW_IOS_SKIP_WDA_PREFLIGHT"):
-        print("WDA build preflight: skipped by VW_IOS_SKIP_WDA_PREFLIGHT=true")
+    if _env_bool("VW_IOS_SKIP_WDA_PREFLIGHT", True):
+        print("WDA build preflight: skipped by default to reuse installed WebDriverAgent")
         return 0
 
     if not config.xcode_org_id or not config.updated_wda_bundle_id:

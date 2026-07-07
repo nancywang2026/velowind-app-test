@@ -34,6 +34,7 @@ def test_find_visible_text_if_present_returns_none_when_driver_never_matches():
 
 def test_load_ios_config_uses_safe_defaults(monkeypatch):
     monkeypatch.setattr("velowind_appium.config.auto_detect_online_ios_udid", lambda: None)
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-appium-config.yaml")
     for key in [
         "VW_APPIUM_SERVER_URL",
         "VW_IOS_UDID",
@@ -53,6 +54,69 @@ def test_load_ios_config_uses_safe_defaults(monkeypatch):
     assert config.artifact_dir == Path(".tmp/appium-ios")
     assert config.wait_for_idle_timeout == 1.0
     assert config.reduce_motion is True
+    assert config.target == "device"
+    assert config.login_username is None
+    assert config.login_password is None
+
+
+def test_load_ios_config_reads_yaml_target_and_login(tmp_path, monkeypatch):
+    config_file = tmp_path / "ios-appium.yaml"
+    config_file.write_text(
+        """
+target: simulator
+bundle_id: com.example.demo
+no_reset: false
+login:
+  username: 13381509990
+  password: 12345678
+simulator:
+  udid: SIM-001
+  device_name: iPhone 17 Pro
+  platform_version: "26.5"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("VW_IOS_UDID", raising=False)
+    monkeypatch.setattr("velowind_appium.config.auto_detect_online_ios_udid", lambda: None)
+
+    config = load_ios_config()
+
+    assert config.target == "simulator"
+    assert config.bundle_id == "com.example.demo"
+    assert config.udid == "SIM-001"
+    assert config.device_name == "iPhone 17 Pro"
+    assert config.platform_version == "26.5"
+    assert config.login_username == "13381509990"
+    assert config.login_password == "12345678"
+    assert config.no_reset is False
+
+
+def test_env_overrides_yaml_target_specific_values(tmp_path, monkeypatch):
+    config_file = tmp_path / "ios-appium.yaml"
+    config_file.write_text(
+        """
+target: device
+device:
+  udid: DEVICE-001
+login:
+  username: 13381509990
+  password: 12345678
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.setenv("VW_IOS_UDID", "DEVICE-OVERRIDE")
+    monkeypatch.setenv("VW_IOS_TARGET", "simulator")
+    monkeypatch.setenv("VW_IOS_DEVICE_NAME", "iPhone Override")
+    monkeypatch.setenv("VW_IOS_PLATFORM_VERSION", "26.5")
+
+    config = load_ios_config()
+
+    assert config.target == "simulator"
+    assert config.udid == "DEVICE-OVERRIDE"
+    assert config.device_name == "iPhone Override"
+    assert config.platform_version == "26.5"
 
 
 def test_build_ios_capabilities_prefers_installed_bundle(monkeypatch):
@@ -110,6 +174,7 @@ def test_build_ios_capabilities_includes_optional_wda_signing(monkeypatch):
 
 
 def test_load_ios_config_auto_detects_online_device(monkeypatch):
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-appium-config.yaml")
     monkeypatch.delenv("VW_IOS_UDID", raising=False)
     monkeypatch.setattr("velowind_appium.config.auto_detect_online_ios_udid", lambda: "device-auto")
 
