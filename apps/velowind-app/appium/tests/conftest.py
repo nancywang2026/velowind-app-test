@@ -1,9 +1,18 @@
 import allure
 import pytest
+import shutil
+import subprocess
+from pathlib import Path
 
 from velowind_appium.actions import capture_debug_artifacts, capture_page_screenshot
 from velowind_appium.config import load_ios_config
 from velowind_appium.driver import create_ios_driver
+
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+ALLURE_RESULTS = REPO_ROOT / ".tmp" / "appium-ios" / "allure-results"
+ALLURE_REPORT = REPO_ROOT / ".tmp" / "appium-ios" / "allure-report"
+WALKTHROUGH_TEST_FILE = "test_ios_feature_walkthrough.py"
 
 
 @pytest.fixture(scope="session")
@@ -39,9 +48,10 @@ def step(capture_page):
         counter["value"] += 1
         step_label = f"{counter['value']:02d}-{label}"
         with allure.step(step_label):
-            result = action() if action is not None else None
-            capture_page(step_label)
-            return result
+            try:
+                return action() if action is not None else None
+            finally:
+                capture_page(step_label)
 
     return _step
 
@@ -63,3 +73,31 @@ def pytest_runtest_makereport(item, call):
         }
         for label, path in artifacts.items():
             allure.attach.file(str(path), name=path.name, attachment_type=attachment_types[label])
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if session.config.workerinput is not None if hasattr(session.config, "workerinput") else False:
+        return
+    if not any(item.location[0].endswith(WALKTHROUGH_TEST_FILE) for item in getattr(session, "items", [])):
+        return
+
+    allure_bin = shutil.which("allure")
+    if allure_bin is None or not ALLURE_RESULTS.exists():
+        return
+
+    generate_result = subprocess.run(
+        [
+            allure_bin,
+            "generate",
+            str(ALLURE_RESULTS),
+            "--clean",
+            "-o",
+            str(ALLURE_REPORT),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    if generate_result.returncode != 0:
+        return
+
+    subprocess.Popen([allure_bin, "open", str(ALLURE_REPORT)], cwd=REPO_ROOT)

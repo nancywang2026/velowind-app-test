@@ -27,6 +27,18 @@ def page_source_contains_any(page_source: str, texts: Iterable[str]) -> Optional
     return None
 
 
+def find_visible_text_if_present(driver: WebDriver, texts: Iterable[str]) -> Optional[str]:
+    for text in texts:
+        quoted_text = _ios_predicate_string(text)
+        predicate = f"name == {quoted_text} OR label == {quoted_text} OR value == {quoted_text}"
+        try:
+            driver.find_element(AppiumBy.IOS_PREDICATE, predicate)
+            return text
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return None
+
+
 def wait_for_accessibility_id(driver: WebDriver, accessibility_id: str, timeout: int = 20):
     return WebDriverWait(driver, timeout).until(
         ec.presence_of_element_located((ACCESSIBILITY_ID_LOCATOR, accessibility_id))
@@ -56,7 +68,13 @@ def wait_for_any_accessibility_id(
 def wait_for_any_visible_text(driver: WebDriver, texts: Iterable[str], timeout: int = 20) -> Optional[str]:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        matched_text = page_source_contains_any(driver.page_source, texts)
+        matched_text = find_visible_text_if_present(driver, texts)
+        if matched_text:
+            return matched_text
+        try:
+            matched_text = page_source_contains_any(driver.page_source, texts)
+        except WebDriverException:
+            matched_text = None
         if matched_text:
             return matched_text
         time.sleep(POLL_INTERVAL_SECONDS)
@@ -75,9 +93,15 @@ def wait_for_any_accessibility_id_or_text(
             try:
                 driver.find_element(ACCESSIBILITY_ID_LOCATOR, accessibility_id)
                 return accessibility_id
-            except NoSuchElementException:
+            except (NoSuchElementException, WebDriverException):
                 pass
-        matched_text = page_source_contains_any(driver.page_source, texts)
+        matched_text = find_visible_text_if_present(driver, texts)
+        if matched_text:
+            return matched_text
+        try:
+            matched_text = page_source_contains_any(driver.page_source, texts)
+        except WebDriverException:
+            matched_text = None
         if matched_text:
             return matched_text
         time.sleep(POLL_INTERVAL_SECONDS)

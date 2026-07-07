@@ -1,12 +1,14 @@
 import os
 from pathlib import Path
 
+from selenium.common.exceptions import NoSuchElementException
+
 from velowind_appium.config import (
     build_ios_capabilities,
     discover_first_online_ios_udid,
     load_ios_config,
 )
-from velowind_appium.actions import ACCESSIBILITY_ID_LOCATOR, _ios_predicate_string, page_source_contains_any
+from velowind_appium.actions import ACCESSIBILITY_ID_LOCATOR, _ios_predicate_string, find_visible_text_if_present, page_source_contains_any
 
 
 def test_actions_use_appium_accessibility_id_locator():
@@ -20,6 +22,14 @@ def test_page_source_contains_any_matches_literal_text():
 
 def test_ios_predicate_string_escapes_quotes():
     assert _ios_predicate_string('说"好"') == '"说\\"好\\""'
+
+
+def test_find_visible_text_if_present_returns_none_when_driver_never_matches():
+    class StubDriver:
+        def find_element(self, *_args, **_kwargs):
+            raise NoSuchElementException("no match")
+
+    assert find_visible_text_if_present(StubDriver(), ["首页", "消息"]) is None
 
 
 def test_load_ios_config_uses_safe_defaults(monkeypatch):
