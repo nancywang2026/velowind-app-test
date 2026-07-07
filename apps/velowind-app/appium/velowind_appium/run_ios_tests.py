@@ -1,4 +1,5 @@
 import shutil
+import importlib.util
 import os
 import subprocess
 import sys
@@ -6,13 +7,22 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-TEST_PATH = REPO_ROOT / "apps" / "velowind-app" / "appium" / "tests" / "test_ios_feature_walkthrough.py"
+TEST_PATH = REPO_ROOT / "apps" / "velowind-app" / "appium" / "tests"
 ALLURE_RESULTS = REPO_ROOT / ".tmp" / "appium-ios" / "allure-results"
 ALLURE_REPORT = REPO_ROOT / ".tmp" / "appium-ios" / "allure-report"
 
 
 def _run(command):
     return subprocess.run(command, cwd=REPO_ROOT, check=False)
+
+
+def _allure_pytest_args() -> list[str]:
+    if importlib.util.find_spec("allure_pytest") is None:
+        return []
+    return [
+        f"--alluredir={ALLURE_RESULTS}",
+        "--clean-alluredir",
+    ]
 
 
 def _generate_and_open_report() -> None:
@@ -51,6 +61,7 @@ def main() -> int:
             "pytest",
             str(TEST_PATH),
             "-q",
+            *_allure_pytest_args(),
             *marker_args,
         ]
     )

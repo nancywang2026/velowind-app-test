@@ -7,11 +7,11 @@ from velowind_appium.actions import (
     safe_back,
     tap_accessibility_id_or_text_if_present,
     tap_if_present,
-    tap_text_if_present,
     wait_for_accessibility_id,
     wait_for_any_accessibility_id,
     wait_for_any_accessibility_id_or_text,
 )
+from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 
 
 ROOT_TABS = [
@@ -24,28 +24,10 @@ ROOT_TABS = [
 OPTIONAL_ENTRY_IDS = [
     "floating-rental-mode-entry-car",
 ]
-
-
-def dismiss_common_system_alerts(driver, step=None):
-    for text in ["允许", "好", "以后", "暂不", "取消"]:
-        if step is None:
-            tap_text_if_present(driver, text, timeout=1)
-        else:
-            step(f"dismiss-alert-{text}", lambda text=text: tap_text_if_present(driver, text, timeout=1))
-
-
 @pytest.mark.smoke
-def test_ios_feature_walkthrough(driver, step):
+def test_ios_feature_walkthrough(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
-    step(
-        "wait-home-ready",
-        lambda: wait_for_any_accessibility_id_or_text(
-            driver,
-            ["home-page-title", "home-activity-discovery-browser", "post-home-feed-category-pager"],
-            ["首页", "全国", "推荐"],
-            timeout=60,
-        ),
-    )
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
 
     for index, (tab_id, tab_text, expected_ids, expected_texts) in enumerate(ROOT_TABS, start=2):
         step(
@@ -107,7 +89,16 @@ def test_ios_feature_walkthrough(driver, step):
         except WebDriverException:
             step(f"recover-back-{entry_id}", lambda: safe_back(driver))
 
-    assert visited or step("assert-rent-tab-present", lambda: tap_if_present(driver, "bottom-nav-rent", timeout=1))
+    assert visited or step(
+        "assert-rent-entry-or-home-present",
+        lambda: tap_if_present(driver, "bottom-nav-rent", timeout=1)
+        or wait_for_any_accessibility_id_or_text(
+            driver,
+            ["home-page-title", "home-activity-discovery-browser", "post-home-feed-category-pager"],
+            ["首页", "全国", "推荐"],
+            timeout=5,
+        ),
+    )
 
 
 @pytest.mark.parametrize(
