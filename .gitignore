@@ -1,0 +1,10 @@
+.DS_Store
+.idea/
+.venv/
+node_modules/
+*.log
+.tmp/
+tmp/
+.pytest_cache/
+__pycache__/
+*.py[cod]

@@ -1,0 +1,14 @@
+{
+  "name": "velowind-app-dev-test",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "appium:ios:test": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.run_ios_tests -m smoke",
+    "appium:ios:test:full": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.run_ios_tests --all",
+    "appium:ios:config-test": "PYTHONPATH=apps/velowind-app/appium python3 -m pytest apps/velowind-app/appium/tests/test_config.py -q",
+    "appium:ios:preflight": "PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.preflight",
+    "appium:ios:allure:generate": "allure generate .tmp/appium-ios/allure-results --clean -o .tmp/appium-ios/allure-report",
+    "appium:ios:allure:open": "allure open .tmp/appium-ios/allure-report"
+  },
+  "packageManager": "pnpm@9.0.0"
+}
