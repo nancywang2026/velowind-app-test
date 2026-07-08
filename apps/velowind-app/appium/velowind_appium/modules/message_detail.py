@@ -9,7 +9,14 @@ from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 
-from velowind_appium.actions import swipe_vertical, tap_if_present, tap_text_if_present
+from velowind_appium.actions import (
+    swipe_vertical,
+    tap_if_present,
+    tap_text_if_present,
+    wait_for_any_accessibility_id_or_text,
+)
+from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
+from velowind_appium.config import IosAppiumConfig
 
 
 DETAIL_READY_IDS = [
@@ -41,6 +48,37 @@ TICKET_TOGGLE_IDS = [
     "ticket-toggle",
 ]
 TICKET_TOGGLE_TEXTS = ["查看图票", "图票", "收起图票"]
+PUBLISH_ENTRY_IDS = [
+    "bottom-nav-publish",
+    "bottom-nav-plus",
+    "bottom-nav-add",
+    "home-publish-entry",
+    "home-create-entry",
+]
+PUBLISH_ENTRY_TEXTS = ["发布", "创建", "+", "＋"]
+NOTE_TYPE_IDS = [
+    "publish-type-note",
+    "publish-type-message",
+    "post-type-note",
+    "note-publish-type",
+]
+NOTE_TYPE_TEXTS = ["笔记", "发布笔记", "图文", "动态"]
+NOTE_FORM_READY_IDS = [
+    "note-publish-page",
+    "message-publish-page",
+    "post-publish-page",
+    "note-submit-button",
+]
+NOTE_FORM_READY_TEXTS = ["发布笔记", "标题", "正文", "话题", "标记地点", "允许评论"]
+NOTE_SUCCESS_TEXTS = ["发布成功", "提交成功", "审核中", "待审核", "提交审核成功"]
+NOTE_SUCCESS_IDS = [
+    "note-publish-success",
+    "message-publish-success",
+    "publish-success-page",
+]
+TITLE_FIELD_KEYWORDS = ["标题", "请输入标题"]
+BODY_FIELD_KEYWORDS = ["正文", "内容", "分享", "描述"]
+LOCATION_FIELD_KEYWORDS = ["标记地点", "地点", "位置"]
 GENERIC_DETAIL_TEXTS = {
     "首页",
     "推荐",
@@ -60,6 +98,20 @@ ATTRIBUTE_PATTERN = re.compile(r'(?:name|label|value)="([^"]+)"')
 VIEW_COUNT_PATTERN = re.compile(r"浏览(?:量)?\D*(\d+)")
 COMMENT_COUNT_PATTERN = re.compile(r"评论(?:数)?\D*(\d+)")
 COUNT_ONLY_PATTERN = re.compile(r"^(?:浏览|评论)\s*(\d+)$")
+CROPPER_VISIBLE_PATTERNS = [
+    'name="publish-note-image-picker-cropper-viewport" enabled="true" visible="true"',
+    'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
+    'name="裁剪图片" label="裁剪图片" enabled="true" visible="true"',
+]
+LOCATION_SECTION_VISIBLE_PATTERNS = [
+    'name="标记地点" label="标记地点" enabled="true" visible="true"',
+    'value="标记地点" name="标记地点" label="标记地点" enabled="true" visible="true"',
+]
+LOCATION_PICKER_VISIBLE_PATTERNS = [
+    'value="标记地点" name="标记地点" label="标记地点" enabled="true" visible="true"',
+    'name="搜索地点" label="搜索地点" enabled="true" visible="true"',
+    'name="不标记地点" label="不标记地点" enabled="true" visible="true"',
+]
 
 
 @dataclass
@@ -71,6 +123,142 @@ class MessageDetailSnapshot:
     comments: list[str]
     empty_comment_hint: str | None
     bottom_action_counts: list[str]
+
+
+@dataclass(frozen=True)
+class MessageNoteDraft:
+    title: str
+    body: str
+    topics: list[str]
+    location: str
+    allow_comments: bool = True
+
+
+def build_changbaishan_note_draft() -> MessageNoteDraft:
+    return MessageNoteDraft(
+        title="长白山真的有种让人瞬间安静下来的魔力",
+        body=(
+            "第一次去长白山，真的会被那种辽阔感击中。一路上的森林、山风、云雾都很治愈，"
+            "像把城市里的疲惫慢慢吹散了。看到天池的那一刻，脑子里突然什么都不想了，"
+            "只想安安静静站着看一会儿。照片根本装不下它的震撼，只有亲眼看到才会懂。"
+        ),
+        topics=["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"],
+        location="长白山",
+        allow_comments=True,
+    )
+
+
+def wait_for_message_note_form(driver: WebDriver, timeout: int = 30) -> str | None:
+    return wait_for_any_accessibility_id_or_text(
+        driver,
+        NOTE_FORM_READY_IDS,
+        NOTE_FORM_READY_TEXTS,
+        timeout=timeout,
+    )
+
+
+def publish_message_note(
+    driver: WebDriver,
+    draft: MessageNoteDraft,
+    *,
+    ios_config: IosAppiumConfig | None = None,
+    timeout: int = 60,
+) -> str:
+    open_message_note_publisher(driver, ios_config=ios_config, timeout=timeout)
+    fill_message_note_form(driver, draft, timeout=timeout)
+    return submit_message_note(driver, timeout=timeout)
+
+
+def open_message_note_publisher(
+    driver: WebDriver,
+    *,
+    ios_config: IosAppiumConfig | None = None,
+    timeout: int = 30,
+) -> None:
+    end_at = time.monotonic() + timeout
+
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if login_required_from_page_source(page_source):
+            if ios_config is None:
+                raise AssertionError("Publish flow reached a login page but no iOS config was provided for re-login")
+            ensure_logged_in_if_needed(driver, ios_config)
+            end_at = time.monotonic() + timeout
+            time.sleep(1)
+            continue
+
+        if message_note_form_is_visible(page_source):
+            return
+
+        if _note_type_visible(page_source) and _tap_note_type_if_present(driver):
+            if _wait_until(lambda: message_note_form_is_visible(_safe_page_source(driver)), timeout=10):
+                return
+
+        if _tap_publish_entry_if_present(driver):
+            time.sleep(0.5)
+            _tap_note_type_if_present(driver)
+            if _wait_until(lambda: message_note_form_is_visible(_safe_page_source(driver)), timeout=10):
+                return
+        time.sleep(0.5)
+
+    raise AssertionError("Unable to open the message note publisher from the home page")
+
+
+def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: int = 60) -> None:
+    wait_for_message_note_form(driver, timeout=timeout)
+
+    _upload_note_image(driver)
+    _fill_note_title(driver, draft.title)
+    _fill_note_body(driver, draft.body)
+    _append_note_topics_to_body(driver, draft.topics)
+    _fill_note_location(driver, draft.location)
+    _set_allow_comments(driver, draft.allow_comments)
+
+
+def submit_message_note(driver: WebDriver, timeout: int = 30) -> str:
+    _hide_keyboard(driver)
+    if not _tap_note_submit(driver):
+        raise AssertionError("Unable to find the publish action on the message note form")
+
+    end_at = time.monotonic() + timeout
+    last_source = ""
+    submitted_again = False
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        last_source = page_source
+        success_signal = message_note_publish_success_signal(page_source)
+        if success_signal:
+            return success_signal
+        if not submitted_again and message_note_form_is_visible(page_source):
+            _hide_keyboard(driver)
+            _tap_note_submit(driver)
+            submitted_again = True
+            time.sleep(0.5)
+            continue
+        if tap_text_if_present(driver, "确定", timeout=1) or tap_text_if_present(driver, "知道了", timeout=1):
+            time.sleep(0.5)
+        time.sleep(0.2)
+
+    raise AssertionError(f"Message note publish did not expose a success signal after submit: {last_source[:500]}")
+
+
+def message_note_form_is_visible(page_source: str) -> bool:
+    texts = _extract_strings(page_source)
+    joined = " ".join(texts)
+    return any(token in joined for token in NOTE_FORM_READY_TEXTS)
+
+
+def message_note_publish_success_signal(page_source: str) -> str | None:
+    texts = _extract_strings(page_source)
+    for token in NOTE_SUCCESS_TEXTS:
+        if token in texts or token in page_source:
+            return token
+    for accessibility_id in NOTE_SUCCESS_IDS:
+        if accessibility_id in page_source:
+            return accessibility_id
+    if "审核" in page_source and "成功" in page_source:
+        return "审核成功提示"
+    return None
 
 
 def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
@@ -154,6 +342,718 @@ def toggle_ticket_text_and_assert_change(driver: WebDriver, timeout: int = 15) -
 def message_detail_is_visible(driver: WebDriver) -> bool:
     snapshot = parse_detail_snapshot(_safe_page_source(driver))
     return bool(snapshot.title and snapshot.body and snapshot.view_count and snapshot.comment_count)
+
+
+def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
+    for accessibility_id in PUBLISH_ENTRY_IDS:
+        if _tap_accessibility_id_now(driver, accessibility_id):
+            return True
+    if _tap_texts_now(driver, PUBLISH_ENTRY_TEXTS):
+        return True
+    for xpath in [
+        '//*[@name="发布" or @label="发布" or @value="发布"]',
+        '//*[@name="+" or @label="+" or @value="+"]',
+        '//*[@name="＋" or @label="＋" or @value="＋"]',
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.5), "y": int(rect["height"] * 0.93)})
+        return True
+    except WebDriverException:
+        return False
+
+
+def _tap_note_type_if_present(driver: WebDriver) -> bool:
+    for accessibility_id in NOTE_TYPE_IDS:
+        if _tap_accessibility_id_now(driver, accessibility_id):
+            return True
+    if _tap_texts_now(driver, NOTE_TYPE_TEXTS):
+        return True
+    for text in NOTE_TYPE_TEXTS:
+        for xpath in [
+            f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
+            f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+        ]:
+            try:
+                driver.find_element(AppiumBy.XPATH, xpath).click()
+                return True
+            except (NoSuchElementException, WebDriverException):
+                continue
+    return False
+
+
+def _note_type_visible(page_source: str) -> bool:
+    return any(text in page_source for text in NOTE_TYPE_TEXTS)
+
+
+def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
+    try:
+        driver.find_element(AppiumBy.ACCESSIBILITY_ID, accessibility_id).click()
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
+
+
+def _tap_texts_now(driver: WebDriver, texts: list[str]) -> bool:
+    escaped_texts = [text.replace("\\", "\\\\").replace('"', '\\"') for text in texts]
+    quoted = ", ".join(f'"{text}"' for text in escaped_texts)
+    predicate = f"name IN {{{quoted}}} OR label IN {{{quoted}}} OR value IN {{{quoted}}}"
+    try:
+        driver.find_element(AppiumBy.IOS_PREDICATE, predicate).click()
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
+
+
+def _fill_note_title(driver: WebDriver, title: str) -> None:
+    for keyword in TITLE_FIELD_KEYWORDS:
+        if _fill_input_near_label(driver, keyword, title):
+            return
+    for xpath in [
+        '//XCUIElementTypeTextField[contains(@value, "标题")]',
+        "//XCUIElementTypeTextField[1]",
+    ]:
+        try:
+            _replace_text(driver.find_element(AppiumBy.XPATH, xpath), title)
+            _hide_keyboard(driver)
+            return
+        except (NoSuchElementException, WebDriverException):
+            continue
+    raise AssertionError("Unable to locate the note title input")
+
+
+def _fill_note_body(driver: WebDriver, body: str) -> None:
+    for keyword in BODY_FIELD_KEYWORDS:
+        if _fill_input_near_label(driver, keyword, body, prefer_text_view=True):
+            return
+    for xpath in [
+        '//XCUIElementTypeTextView[contains(@value, "正文") or contains(@value, "分享") or contains(@value, "内容")]',
+        "//XCUIElementTypeTextView[1]",
+        "(//XCUIElementTypeTextField)[2]",
+    ]:
+        try:
+            _replace_text(driver.find_element(AppiumBy.XPATH, xpath), body)
+            _hide_keyboard(driver)
+            return
+        except (NoSuchElementException, WebDriverException):
+            continue
+    raise AssertionError("Unable to locate the note body input")
+
+
+def _upload_note_image(driver: WebDriver) -> None:
+    if not _tap_note_image_plus(driver):
+        raise AssertionError("Unable to find the note image plus button")
+
+    if not _choose_photo_library_source(driver):
+        raise AssertionError("Unable to choose phone photo library as the image source")
+
+    for text in ["允许访问所有照片", "允许", "好"]:
+        tap_text_if_present(driver, text, timeout=2)
+
+    if not _photo_library_visible(driver, timeout=5):
+        raise AssertionError(
+            "Photo library did not open after choosing phone album. "
+            "If this is a simulator, verify Photos permission and seed at least one image."
+        )
+
+    if _choose_local_photo(driver):
+        return
+
+    if _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and _choose_local_photo(
+        driver
+    ):
+        return
+
+    raise AssertionError(
+        "Photo library opened but no selectable photo was found. "
+        "If this is a simulator, seed at least one image into Photos."
+    )
+
+
+def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
+    if not topics:
+        return
+    if not (_tap_text_or_contains(driver, "#话题") or _tap_text_or_contains(driver, "话题")):
+        raise AssertionError("Unable to find the #topic action on the note editor")
+
+    topic_text = " " + " ".join(topics)
+    for xpath in [
+        "//XCUIElementTypeTextView[1]",
+        '(//XCUIElementTypeTextField)[2]',
+        '//XCUIElementTypeTextView[contains(@value, "长白山") or contains(@value, "正文") or contains(@value, "分享")]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            element.click()
+            element.send_keys(topic_text)
+            _dismiss_editor_keyboard(driver)
+            return
+        except (NoSuchElementException, WebDriverException):
+            continue
+    raise AssertionError("Unable to append topics to the note body")
+
+
+def _tap_note_image_plus(driver: WebDriver) -> bool:
+    for accessibility_id in [
+        "note-image-add",
+        "note-photo-add",
+        "post-image-add",
+        "publish-image-add",
+    ]:
+        if tap_if_present(driver, accessibility_id, timeout=1):
+            return True
+    for text in ["添加图片", "上传图片", "+", "＋"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            return True
+    for xpath in [
+        '//*[@name="+" or @label="+" or @value="+"]',
+        '//*[@name="＋" or @label="＋" or @value="＋"]',
+        '//XCUIElementTypeOther[contains(@name, "添加图片") or contains(@label, "添加图片")]',
+        "//XCUIElementTypeOther[@x='13' and @y='161' and @width='94' and @height='94']",
+        "//XCUIElementTypeOther[@x='25' and @y='115' and @width='101' and @height='100']",
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    try:
+        driver.execute_script("mobile: tap", {"x": 60, "y": 206})
+        return True
+    except WebDriverException:
+        return False
+
+
+def _choose_photo_library_source(driver: WebDriver) -> bool:
+    source_texts = ["从手机相册选择", "手机相册", "从相册选择", "相册"]
+    if _tap_photo_source_option(driver, source_texts):
+        return True
+    for text in source_texts:
+        if tap_text_if_present(driver, text, timeout=1):
+            return True
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": size["width"] * 0.5,
+                "y": size["height"] * 0.87,
+            },
+        )
+        return True
+    except WebDriverException:
+        return False
+
+
+def _tap_photo_source_option(driver: WebDriver, texts: list[str]) -> bool:
+    for text in texts:
+        for xpath in [
+            f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
+            f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+        ]:
+            try:
+                element = driver.find_element(AppiumBy.XPATH, xpath)
+                rect = element.rect
+                try:
+                    size = driver.get_window_size()
+                    x = size["width"] / 2
+                except WebDriverException:
+                    x = rect["x"] + rect["width"] / 2
+                driver.execute_script(
+                    "mobile: tap",
+                    {
+                        "x": x,
+                        "y": rect["y"] + rect["height"] / 2,
+                    },
+                )
+                return True
+            except (NoSuchElementException, WebDriverException):
+                continue
+    return False
+
+
+def _photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if any(text in page_source for text in ["最近项目", "照片图库", "所有照片", "照片", "选择项目"]):
+            return True
+        for xpath in [
+            "(//XCUIElementTypeCell)[1]",
+            "(//XCUIElementTypeImage)[1]",
+        ]:
+            try:
+                driver.find_element(AppiumBy.XPATH, xpath)
+                return True
+            except (NoSuchElementException, WebDriverException, AttributeError):
+                continue
+        time.sleep(0.2)
+    return False
+
+
+def _choose_local_photo(driver: WebDriver) -> bool:
+    for xpath in [
+        "(//XCUIElementTypeCell)[1]",
+        "(//XCUIElementTypeImage)[1]",
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+            if _confirm_note_image_cropper(driver):
+                return True
+            return _confirm_system_photo_picker_selection(driver)
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if _cropper_visible(page_source):
+            if _tap_cropper_confirm_button(driver) and _wait_until(
+                lambda: not _cropper_visible(_safe_page_source(driver)),
+                timeout=5,
+            ):
+                return True
+        time.sleep(0.2)
+    return False
+
+
+def _confirm_system_photo_picker_selection(driver: WebDriver, timeout: int = 10) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if any(text in page_source for text in ["选择最多", "1张照片", "照片"]):
+            tapped_done = False
+            for accessibility_id in ["Add"]:
+                if _tap_accessibility_id_now(driver, accessibility_id):
+                    tapped_done = True
+                    break
+            if not tapped_done:
+                for text in ["完成", "添加"]:
+                    if _tap_text_or_contains(driver, text):
+                        tapped_done = True
+                        break
+            if tapped_done:
+                return _wait_until(lambda: _photo_picker_transition_completed(driver), timeout=10)
+        time.sleep(0.2)
+    return False
+
+
+def _cropper_visible(page_source: str) -> bool:
+    return any(pattern in page_source for pattern in CROPPER_VISIBLE_PATTERNS)
+
+
+def _photo_picker_transition_completed(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if _cropper_visible(page_source):
+        return _confirm_note_image_cropper(driver, timeout=5)
+    return not any(text in page_source for text in ["选择最多9张照片。", 'name="Add" label="完成"'])
+
+
+def _tap_cropper_confirm_button(driver: WebDriver) -> bool:
+    try:
+        size = driver.get_window_size()
+    except (AttributeError, WebDriverException):
+        size = None
+
+    for xpath in [
+        '//*[@name="确认裁剪" or @label="确认裁剪" or @value="确认裁剪"]',
+        '//*[contains(@name, "确认裁剪") or contains(@label, "确认裁剪") or contains(@value, "确认裁剪")]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            rect = element.rect
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": rect["x"] + rect["width"] / 2,
+                    "y": rect["y"] + rect["height"] / 2,
+                },
+            )
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    if size is not None:
+        try:
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": size["width"] * 0.74,
+                    "y": size["height"] * 0.91,
+                },
+            )
+            return True
+        except WebDriverException:
+            pass
+    return False
+
+
+def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
+    for text in preferred_texts:
+        if tap_text_if_present(driver, text, timeout=2):
+            return True
+
+    for xpath in [
+        "(//XCUIElementTypeCell)[1]",
+        "(//XCUIElementTypeButton)[1]",
+        "(//XCUIElementTypeStaticText)[1]",
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+            tap_text_if_present(driver, "确定", timeout=1)
+            tap_text_if_present(driver, "完成", timeout=1)
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _fill_note_location(driver: WebDriver, location: str) -> None:
+    _prepare_note_location_section(driver)
+    if _tap_text_or_contains(driver, "标记地点") or _tap_text_or_contains(driver, "地点"):
+        if _choose_note_location_option(driver, location):
+            return
+        if _choose_note_location_option(driver, location):
+            return
+    raise AssertionError("Unable to select a note location option")
+
+
+def _prepare_note_location_section(driver: WebDriver) -> None:
+    _dismiss_editor_keyboard(driver)
+    if _location_section_visible(_safe_page_source(driver)):
+        return
+    for _ in range(3):
+        _dismiss_editor_keyboard(driver)
+        if _location_section_visible(_safe_page_source(driver)):
+            return
+        try:
+            swipe_vertical(driver, direction="up")
+        except WebDriverException:
+            pass
+        time.sleep(0.3)
+        if _location_section_visible(_safe_page_source(driver)):
+            return
+
+
+def _location_section_visible(page_source: str) -> bool:
+    return any(pattern in page_source for pattern in LOCATION_SECTION_VISIBLE_PATTERNS)
+
+
+def _choose_note_location_option(driver: WebDriver, location: str) -> bool:
+    if _location_picker_visible(_safe_page_source(driver)):
+        return _choose_first_valid_location_from_picker(driver)
+
+    option_elements = _find_visible_location_option_elements(driver)
+    if not option_elements:
+        return False
+
+    for element in option_elements:
+        if _tap_element_center(driver, element):
+            return True
+    return False
+
+
+def _location_picker_visible(page_source: str) -> bool:
+    return any(pattern in page_source for pattern in LOCATION_PICKER_VISIBLE_PATTERNS)
+
+
+def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
+    for xpath in [
+        '(//*[contains(@name, " | ") and @visible="true"])[1]',
+        '(//XCUIElementTypeStaticText[@visible="true" and not(@name="不标记地点") and not(@name="搜索地点")])[1]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            if _tap_element_center(driver, element) and _wait_until(
+                lambda: not _location_picker_visible(_safe_page_source(driver)),
+                timeout=5,
+            ):
+                return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _find_visible_location_option_elements(driver: WebDriver) -> list:
+    xpaths = [
+        '//*[@name="标记地点" or @label="标记地点" or @value="标记地点"]'
+        '/following::XCUIElementTypeScrollView[1]//XCUIElementTypeStaticText[@visible="true"]',
+        '//*[@name="标记地点" or @label="标记地点" or @value="标记地点"]'
+        '/following::XCUIElementTypeScrollView[1]//XCUIElementTypeOther[@visible="true"]',
+    ]
+    seen: set[tuple[str, float, float, float, float]] = set()
+    elements: list = []
+    for xpath in xpaths:
+        try:
+            candidates = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (AttributeError, WebDriverException):
+            continue
+        for element in candidates:
+            name = _element_name(element)
+            rect = getattr(element, "rect", {}) or {}
+            if not _looks_like_location_option(name, rect):
+                continue
+            key = (
+                name,
+                float(rect.get("x", 0)),
+                float(rect.get("y", 0)),
+                float(rect.get("width", 0)),
+                float(rect.get("height", 0)),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            elements.append(element)
+    elements.sort(key=lambda element: ((getattr(element, "rect", {}) or {}).get("x", 0)))
+    return elements
+
+
+def _looks_like_location_option(name: str, rect: dict) -> bool:
+    text = (name or "").strip()
+    if not text:
+        return False
+    if any(token in text for token in ["标记地点", "允许评论", "发布笔记", "存草稿", "Vertical scroll bar", "Horizontal scroll bar"]):
+        return False
+    if len(text) > 20:
+        return False
+    width = rect.get("width", 0) or 0
+    height = rect.get("height", 0) or 0
+    if width <= 0 or height <= 0:
+        return False
+    return True
+
+
+def _element_name(element) -> str:
+    for attribute in ["name", "label", "value"]:
+        try:
+            value = element.get_attribute(attribute)
+        except WebDriverException:
+            value = None
+        if value:
+            return str(value)
+    return ""
+
+
+def _tap_element_center(driver: WebDriver, element) -> bool:
+    rect = getattr(element, "rect", {}) or {}
+    width = rect.get("width", 0) or 0
+    height = rect.get("height", 0) or 0
+    if width <= 0 or height <= 0:
+        return False
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": rect["x"] + width / 2,
+                "y": rect["y"] + height / 2,
+            },
+        )
+        return True
+    except WebDriverException:
+        try:
+            element.click()
+            return True
+        except WebDriverException:
+            return False
+
+
+def _tap_named_element_center(driver: WebDriver, text: str) -> bool:
+    for xpath in [
+        f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
+        f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            rect = element.rect
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": rect["x"] + rect["width"] / 2,
+                    "y": rect["y"] + rect["height"] / 2,
+                },
+            )
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _set_allow_comments(driver: WebDriver, allow_comments: bool) -> None:
+    if allow_comments:
+        if "不允许评论" in _safe_page_source(driver):
+            _tap_text_or_contains(driver, "允许评论")
+        return
+    for text in ["允许评论", "评论"]:
+        if _tap_text_or_contains(driver, text):
+            return
+
+
+def _fill_input_near_label(
+    driver: WebDriver,
+    keyword: str,
+    value: str,
+    *,
+    prefer_text_view: bool = False,
+) -> bool:
+    element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"] if prefer_text_view else [
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeTextView",
+    ]
+    for element_type in element_types:
+        for xpath in [
+            f'//*[contains(@name, "{keyword}") or contains(@label, "{keyword}") or contains(@value, "{keyword}")]/following::{element_type}[1]',
+            f'//{element_type}[contains(@name, "{keyword}") or contains(@label, "{keyword}") or contains(@value, "{keyword}")]',
+        ]:
+            try:
+                _replace_text(driver.find_element(AppiumBy.XPATH, xpath), value)
+                _hide_keyboard(driver)
+                return True
+            except (NoSuchElementException, WebDriverException):
+                continue
+    return False
+
+
+def _fill_first_available_text_input(driver: WebDriver, value: str) -> bool:
+    for xpath in [
+        '//XCUIElementTypeTextField[@value="" or not(@value) or contains(@value, "请输入")]',
+        '//XCUIElementTypeTextView[@value="" or not(@value) or contains(@value, "请输入")]',
+        "//XCUIElementTypeTextField[1]",
+        "//XCUIElementTypeTextView[1]",
+    ]:
+        try:
+            _replace_text(driver.find_element(AppiumBy.XPATH, xpath), value)
+            _hide_keyboard(driver)
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _replace_text(element, value: str) -> None:
+    element.click()
+    try:
+        element.clear()
+    except WebDriverException:
+        pass
+    element.send_keys(value)
+
+
+def _hide_keyboard(driver: WebDriver) -> None:
+    for kwargs in [
+        {},
+        {"key_name": "Done"},
+        {"key_name": "Return"},
+        {"key_name": "Next"},
+        {"strategy": "pressKey", "key_name": "Done"},
+    ]:
+        try:
+            driver.hide_keyboard(**kwargs)
+            return
+        except WebDriverException:
+            continue
+    _dismiss_keyboard_with_safe_tap(driver)
+
+
+def _dismiss_editor_keyboard(driver: WebDriver) -> None:
+    _hide_keyboard(driver)
+    _tap_outside_editor(driver)
+    time.sleep(0.2)
+
+
+def _tap_outside_editor(driver: WebDriver) -> None:
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": size["width"] * 0.9,
+                "y": size["height"] * 0.18,
+            },
+        )
+    except WebDriverException:
+        pass
+
+
+def _dismiss_keyboard_with_safe_tap(driver: WebDriver) -> None:
+    for text in ["完成", "收起键盘", "隐藏", "确定"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            time.sleep(0.2)
+            return
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": size["width"] * 0.9,
+                "y": size["height"] * 0.18,
+            },
+        )
+        time.sleep(0.2)
+    except WebDriverException:
+        pass
+
+
+def _tap_text_or_contains(driver: WebDriver, text: str) -> bool:
+    if tap_text_if_present(driver, text, timeout=1):
+        return True
+    for xpath in [
+        f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _confirm_overlay(driver: WebDriver) -> None:
+    for text in ["确定", "完成", "保存"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            return
+
+
+def _tap_note_submit(driver: WebDriver) -> bool:
+    for accessibility_id in ["note-submit-button", "message-submit-button", "post-submit-button", "publish-submit-button"]:
+        if tap_if_present(driver, accessibility_id, timeout=2):
+            return True
+    for xpath in [
+        '//*[@name="发布笔记" or @label="发布笔记" or @value="发布笔记"]',
+        '//*[contains(@name, "发布笔记") or contains(@label, "发布笔记") or contains(@value, "发布笔记")]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            rect = element.rect
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": rect["x"] + rect["width"] / 2,
+                    "y": rect["y"] + rect["height"] / 2,
+                },
+            )
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    for text in ["发布", "提交", "提交审核"]:
+        if tap_text_if_present(driver, text, timeout=2):
+            return True
+    return False
+
+
+def _wait_until(predicate, timeout: int) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        if predicate():
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def _extract_strings(page_source: str) -> list[str]:
@@ -248,7 +1148,7 @@ def _contains_detail_meta(text: str) -> bool:
 def _safe_page_source(driver: WebDriver) -> str:
     try:
         return driver.page_source
-    except WebDriverException:
+    except (AttributeError, WebDriverException):
         return ""
 
 
