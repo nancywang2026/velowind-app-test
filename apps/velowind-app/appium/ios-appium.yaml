@@ -1,0 +1,17 @@
+target: device
+bundle_id: com.velowind.rider
+no_reset: false
+
+login:
+  username: "13381509990"
+  password: "12345678"
+
+simulator:
+  udid: "CA90503A-AA77-44C2-BFEE-E2DB3F71359C"
+  device_name: "iPhone 17 Pro"
+  platform_version: "26.5"
+
+device:
+  udid: "00008150-0006799C2693401C"
+  device_name: "Zhigang的iPhone"
+  platform_version: "26.2.1"

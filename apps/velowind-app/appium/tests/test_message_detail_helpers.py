@@ -2,6 +2,7 @@ from velowind_appium.modules import message_detail
 from velowind_appium.modules.message_detail import (
     build_changbaishan_note_draft,
     message_note_form_is_visible,
+    message_note_publish_error_signal,
     message_note_publish_success_signal,
     parse_detail_snapshot,
 )
@@ -61,6 +62,17 @@ def test_message_note_publish_success_signal_detects_review_state():
     """
 
     assert message_note_publish_success_signal(page_source) == "提交成功"
+
+
+def test_message_note_publish_error_signal_detects_backend_failure():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="服务开小差了，请稍后重试" />
+      <XCUIElementTypeStaticText name="http=500" />
+    </AppiumAUT>
+    """
+
+    assert message_note_publish_error_signal(page_source) == "服务开小差了，请稍后重试"
 
 
 def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeypatch):
@@ -214,13 +226,23 @@ def test_note_submit_prefers_bottom_publish_button_region():
     taps = []
 
     class FakeElement:
-        rect = {"x": 145, "y": 781, "width": 244, "height": 47}
+        def __init__(self, rect):
+            self.rect = rect
 
     class FakeDriver:
         def find_element(self, by, value):
-            if "发布笔记" in value:
-                return FakeElement()
             raise message_detail.NoSuchElementException()
+
+        def find_elements(self, by, value):
+            if "发布笔记" not in value:
+                return []
+            return [
+                FakeElement({"x": 13, "y": 67, "width": 376, "height": 56}),
+                FakeElement({"x": 145, "y": 781, "width": 244, "height": 47}),
+            ]
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
 
         def execute_script(self, script, payload):
             taps.append((script, payload))

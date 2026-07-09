@@ -76,6 +76,7 @@ NOTE_SUCCESS_IDS = [
     "message-publish-success",
     "publish-success-page",
 ]
+NOTE_ERROR_TEXTS = ["服务开小差了，请稍后重试", "服务器内部错误", "发布失败", "提交失败"]
 TITLE_FIELD_KEYWORDS = ["标题", "请输入标题"]
 BODY_FIELD_KEYWORDS = ["正文", "内容", "分享", "描述"]
 LOCATION_FIELD_KEYWORDS = ["标记地点", "地点", "位置"]
@@ -229,6 +230,9 @@ def submit_message_note(driver: WebDriver, timeout: int = 30) -> str:
         success_signal = message_note_publish_success_signal(page_source)
         if success_signal:
             return success_signal
+        error_signal = message_note_publish_error_signal(page_source)
+        if error_signal:
+            raise AssertionError(f"Message note publish failed after submit: {error_signal}")
         if not submitted_again and message_note_form_is_visible(page_source):
             _hide_keyboard(driver)
             _tap_note_submit(driver)
@@ -258,6 +262,16 @@ def message_note_publish_success_signal(page_source: str) -> str | None:
             return accessibility_id
     if "审核" in page_source and "成功" in page_source:
         return "审核成功提示"
+    return None
+
+
+def message_note_publish_error_signal(page_source: str) -> str | None:
+    texts = _extract_strings(page_source)
+    for token in NOTE_ERROR_TEXTS:
+        if token in texts or token in page_source:
+            return token
+    if "http=500" in page_source or "服务器内部错误" in page_source:
+        return "服务器内部错误"
     return None
 
 
@@ -1024,27 +1038,45 @@ def _tap_note_submit(driver: WebDriver) -> bool:
     for accessibility_id in ["note-submit-button", "message-submit-button", "post-submit-button", "publish-submit-button"]:
         if tap_if_present(driver, accessibility_id, timeout=2):
             return True
+    submit_element = _find_bottom_submit_element(driver)
+    if submit_element is not None and _tap_element_center(driver, submit_element):
+        return True
+    for text in ["发布", "提交", "提交审核"]:
+        if tap_text_if_present(driver, text, timeout=2):
+            return True
+    return False
+
+
+def _find_bottom_submit_element(driver: WebDriver):
+    try:
+        size = driver.get_window_size()
+        min_y = size["height"] * 0.75
+    except WebDriverException:
+        min_y = 700
+
+    candidates = []
     for xpath in [
         '//*[@name="发布笔记" or @label="发布笔记" or @value="发布笔记"]',
         '//*[contains(@name, "发布笔记") or contains(@label, "发布笔记") or contains(@value, "发布笔记")]',
     ]:
         try:
-            element = driver.find_element(AppiumBy.XPATH, xpath)
-            rect = element.rect
-            driver.execute_script(
-                "mobile: tap",
-                {
-                    "x": rect["x"] + rect["width"] / 2,
-                    "y": rect["y"] + rect["height"] / 2,
-                },
-            )
-            return True
-        except (NoSuchElementException, WebDriverException):
+            candidates.extend(driver.find_elements(AppiumBy.XPATH, xpath))
+        except (AttributeError, WebDriverException):
             continue
-    for text in ["发布", "提交", "提交审核"]:
-        if tap_text_if_present(driver, text, timeout=2):
-            return True
-    return False
+
+    best_element = None
+    best_y = -1
+    for element in candidates:
+        rect = getattr(element, "rect", {}) or {}
+        y = rect.get("y", 0) or 0
+        height = rect.get("height", 0) or 0
+        width = rect.get("width", 0) or 0
+        if y < min_y or height <= 0 or width <= 0:
+            continue
+        if y > best_y:
+            best_element = element
+            best_y = y
+    return best_element
 
 
 def _wait_until(predicate, timeout: int) -> bool:
