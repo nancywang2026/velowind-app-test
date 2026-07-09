@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import html
+from pathlib import Path
 import re
 import time
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
+import yaml
 
 from velowind_appium.actions import (
     swipe_vertical,
@@ -113,6 +115,7 @@ LOCATION_PICKER_VISIBLE_PATTERNS = [
     'name="搜索地点" label="搜索地点" enabled="true" visible="true"',
     'name="不标记地点" label="不标记地点" enabled="true" visible="true"',
 ]
+NOTE_TESTDATA_FILE = Path(__file__).resolve().parents[2] / "tests" / "message" / "testdata" / "publish_notes.yaml"
 
 
 @dataclass
@@ -132,20 +135,69 @@ class MessageNoteDraft:
     body: str
     topics: list[str]
     location: str
+    album: str | None = None
+    picture: int = 1
     allow_comments: bool = True
 
 
 def build_changbaishan_note_draft() -> MessageNoteDraft:
+    return load_message_note_draft("publish-note-changbaishan")
+
+
+def load_message_note_draft(use_case_id: str, *, testdata_path: Path | None = None) -> MessageNoteDraft:
+    cases = _load_message_note_cases(testdata_path=testdata_path)
+    for case in cases:
+        if str(case.get("id", "")).strip() == use_case_id:
+            return _build_note_draft_from_case(case)
+    raise AssertionError(f"Unable to find publish note use case: {use_case_id}")
+
+
+def _load_message_note_cases(*, testdata_path: Path | None = None) -> list[dict]:
+    source_path = testdata_path or NOTE_TESTDATA_FILE
+    data = yaml.safe_load(source_path.read_text(encoding="utf-8")) or {}
+    use_cases = data.get("use_cases", [])
+    if not isinstance(use_cases, list):
+        raise AssertionError(f"Invalid publish note testdata format: {source_path}")
+    return [case for case in use_cases if isinstance(case, dict)]
+
+
+def list_message_note_use_case_ids(*, testdata_path: Path | None = None) -> list[str]:
+    return [
+        str(case.get("id", "")).strip()
+        for case in _load_message_note_cases(testdata_path=testdata_path)
+        if str(case.get("id", "")).strip()
+    ]
+
+
+def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
+    note = use_case.get("note", {}) if isinstance(use_case.get("note"), dict) else {}
+    title = str(note.get("title", "")).strip()
+    body = str(note.get("body", "")).strip()
+    if not title or not body:
+        raise AssertionError(f"Publish note use case is missing title/body: {use_case.get('id')}")
+    topics = note.get("topics", [])
+    if isinstance(topics, str):
+        topics = [token for token in topics.split() if token]
+    if not isinstance(topics, list):
+        topics = []
+    location = str(note.get("location", "")).strip()
+    album = str(note.get("album", "")).strip() or None
+    picture = note.get("picture", 1)
+    try:
+        picture_index = int(picture)
+    except (TypeError, ValueError):
+        picture_index = 1
+    allow_comments = note.get("allow_comments", True)
+    if isinstance(allow_comments, str):
+        allow_comments = allow_comments.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
     return MessageNoteDraft(
-        title="长白山真的有种让人瞬间安静下来的魔力",
-        body=(
-            "第一次去长白山，真的会被那种辽阔感击中。一路上的森林、山风、云雾都很治愈，"
-            "像把城市里的疲惫慢慢吹散了。看到天池的那一刻，脑子里突然什么都不想了，"
-            "只想安安静静站着看一会儿。照片根本装不下它的震撼，只有亲眼看到才会懂。"
-        ),
-        topics=["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"],
-        location="长白山",
-        allow_comments=True,
+        title=title,
+        body=body,
+        topics=[str(topic).strip() for topic in topics if str(topic).strip()],
+        location=location,
+        album=album,
+        picture=picture_index,
+        allow_comments=bool(allow_comments),
     )
 
 
@@ -208,7 +260,7 @@ def open_message_note_publisher(
 def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: int = 60) -> None:
     wait_for_message_note_form(driver, timeout=timeout)
 
-    _upload_note_image(driver)
+    _upload_note_image(driver, draft)
     _fill_note_title(driver, draft.title)
     _fill_note_body(driver, draft.body)
     _append_note_topics_to_body(driver, draft.topics)
@@ -459,7 +511,7 @@ def _fill_note_body(driver: WebDriver, body: str) -> None:
     raise AssertionError("Unable to locate the note body input")
 
 
-def _upload_note_image(driver: WebDriver) -> None:
+def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
     if not _tap_note_image_plus(driver):
         raise AssertionError("Unable to find the note image plus button")
 
@@ -475,11 +527,13 @@ def _upload_note_image(driver: WebDriver) -> None:
             "If this is a simulator, verify Photos permission and seed at least one image."
         )
 
-    if _choose_local_photo(driver):
+    if _choose_local_photo(driver, picture_index=draft.picture, album_name=draft.album):
         return
 
     if _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and _choose_local_photo(
-        driver
+        driver,
+        picture_index=draft.picture,
+        album_name=draft.album,
     ):
         return
 
@@ -610,11 +664,12 @@ def _photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
     return False
 
 
-def _choose_local_photo(driver: WebDriver) -> bool:
-    for xpath in [
-        "(//XCUIElementTypeCell)[1]",
-        "(//XCUIElementTypeImage)[1]",
-    ]:
+def _choose_local_photo(driver: WebDriver, *, picture_index: int = 1, album_name: str | None = None) -> bool:
+    normalized_index = max(1, picture_index)
+    if album_name and not _open_photo_album(driver, album_name):
+        return False
+
+    for xpath in _photo_candidate_xpaths(normalized_index):
         try:
             driver.find_element(AppiumBy.XPATH, xpath).click()
             if _confirm_note_image_cropper(driver):
@@ -623,6 +678,25 @@ def _choose_local_photo(driver: WebDriver) -> bool:
         except (NoSuchElementException, WebDriverException):
             continue
     return False
+
+
+def _open_photo_album(driver: WebDriver, album_name: str) -> bool:
+    if _tap_named_element_center(driver, album_name):
+        time.sleep(0.5)
+        return True
+    if _choose_first_option(driver, preferred_texts=[album_name]):
+        time.sleep(0.5)
+        return True
+    return False
+
+
+def _photo_candidate_xpaths(picture_index: int) -> list[str]:
+    return [
+        f"(//XCUIElementTypeCell)[{picture_index}]",
+        f"(//XCUIElementTypeImage)[{picture_index}]",
+        "(//XCUIElementTypeCell)[1]",
+        "(//XCUIElementTypeImage)[1]",
+    ]
 
 
 def _confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:

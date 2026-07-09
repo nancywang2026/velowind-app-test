@@ -1,12 +1,15 @@
 from velowind_appium.modules import message_detail
+from pathlib import Path
+
 from velowind_appium.modules.message_detail import (
     build_changbaishan_note_draft,
+    list_message_note_use_case_ids,
+    load_message_note_draft,
     message_note_form_is_visible,
     message_note_publish_error_signal,
     message_note_publish_success_signal,
     parse_detail_snapshot,
 )
-
 
 def test_parse_detail_snapshot_extracts_title_counts_and_comments():
     page_source = """
@@ -38,7 +41,35 @@ def test_build_changbaishan_note_draft_uses_requested_content():
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
     assert draft.location == "长白山"
+    assert draft.album == "长白山"
+    assert draft.picture == 1
     assert draft.allow_comments is True
+
+
+def test_load_message_note_draft_reads_yaml_use_case():
+    testdata_path = (
+        Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
+    )
+
+    draft = load_message_note_draft("publish-note-changbaishan", testdata_path=testdata_path)
+
+    assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
+    assert draft.album == "长白山"
+    assert draft.picture == 1
+    assert draft.location == "长白山"
+
+
+def test_list_message_note_use_case_ids_reads_all_yaml_cases():
+    testdata_path = (
+        Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
+    )
+
+    use_case_ids = list_message_note_use_case_ids(testdata_path=testdata_path)
+
+    assert "publish-note-changbaishan" in use_case_ids
+    assert "publish-note-yunnan-erhai" in use_case_ids
+    assert "publish-note-hangzhou-hiking" in use_case_ids
+    assert "publish-note-beijing-forbidden-city" in use_case_ids
 
 
 def test_message_note_form_is_visible_from_publish_page_source():
@@ -80,7 +111,7 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
     draft = build_changbaishan_note_draft()
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
-    monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver: events.append("upload-image"))
+    monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.picture, draft.album)))
     monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)))
     monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)))
     monkeypatch.setattr(
@@ -103,7 +134,7 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
 
     assert events == [
         "wait-form",
-        "upload-image",
+        ("upload-image", draft.picture, draft.album),
         ("title", draft.title),
         ("body", draft.body),
         ("body-topics", draft.topics),
@@ -129,13 +160,14 @@ def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeyp
 
 
 def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch):
+    draft = build_changbaishan_note_draft()
     monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: True)
     monkeypatch.setattr(message_detail, "_choose_photo_library_source", lambda driver: True)
     monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: False)
     monkeypatch.setattr(message_detail, "_photo_library_visible", lambda driver, timeout=5: False, raising=False)
 
     try:
-        message_detail._upload_note_image(object())
+        message_detail._upload_note_image(object(), draft)
     except AssertionError as error:
         assert "Photo library did not open" in str(error)
     else:
@@ -179,7 +211,7 @@ def test_choose_local_photo_confirms_cropper_when_present(monkeypatch):
 
     monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: events.append("confirm-cropper") or True)
 
-    assert message_detail._choose_local_photo(FakeDriver()) is True
+    assert message_detail._choose_local_photo(FakeDriver(), picture_index=1, album_name=None) is True
     assert events == ["pick-photo", "confirm-cropper"]
 
 
@@ -218,8 +250,47 @@ def test_choose_local_photo_taps_picker_done_when_system_picker_stays_open(monke
     monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: False)
     monkeypatch.setattr(message_detail, "_confirm_system_photo_picker_selection", lambda driver, timeout=10: events.append("picker-done") or True)
 
-    assert message_detail._choose_local_photo(FakeDriver()) is True
+    assert message_detail._choose_local_photo(FakeDriver(), picture_index=1, album_name=None) is True
     assert events == ["pick-photo", "picker-done"]
+
+
+def test_choose_local_photo_prefers_requested_picture_index(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("pick-photo")
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            if value == "(//XCUIElementTypeCell)[3]":
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: True)
+
+    assert message_detail._choose_local_photo(FakeDriver(), picture_index=3, album_name=None) is True
+    assert events == ["pick-photo"]
+
+
+def test_choose_local_photo_opens_requested_album_first(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("pick-photo")
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            if value == "(//XCUIElementTypeCell)[2]":
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_open_photo_album", lambda driver, album_name: events.append(("open-album", album_name)) or True)
+    monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: True)
+
+    assert message_detail._choose_local_photo(FakeDriver(), picture_index=2, album_name="长白山") is True
+    assert events == [("open-album", "长白山"), "pick-photo"]
 
 
 def test_note_submit_prefers_bottom_publish_button_region():
