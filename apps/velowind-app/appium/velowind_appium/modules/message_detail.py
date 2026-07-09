@@ -101,6 +101,7 @@ ATTRIBUTE_PATTERN = re.compile(r'(?:name|label|value)="([^"]+)"')
 VIEW_COUNT_PATTERN = re.compile(r"浏览(?:量)?\D*(\d+)")
 COMMENT_COUNT_PATTERN = re.compile(r"评论(?:数)?\D*(\d+)")
 COUNT_ONLY_PATTERN = re.compile(r"^(?:浏览|评论)\s*(\d+)$")
+BOTTOM_ACTION_PATTERN = re.compile(r"用户\s+\S+\s+(\d+)\s+(\d+)\s+(\d+)")
 CROPPER_VISIBLE_PATTERNS = [
     'name="publish-note-image-picker-cropper-viewport" enabled="true" visible="true"',
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -136,7 +137,6 @@ class MessageNoteDraft:
     topics: list[str]
     location: str
     album: str | None = None
-    picture: int = 1
     allow_comments: bool = True
 
 
@@ -182,11 +182,6 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         topics = []
     location = str(note.get("location", "")).strip()
     album = str(note.get("album", "")).strip() or None
-    picture = note.get("picture", 1)
-    try:
-        picture_index = int(picture)
-    except (TypeError, ValueError):
-        picture_index = 1
     allow_comments = note.get("allow_comments", True)
     if isinstance(allow_comments, str):
         allow_comments = allow_comments.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
@@ -196,7 +191,6 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         topics=[str(topic).strip() for topic in topics if str(topic).strip()],
         location=location,
         album=album,
-        picture=picture_index,
         allow_comments=bool(allow_comments),
     )
 
@@ -410,6 +404,28 @@ def message_detail_is_visible(driver: WebDriver) -> bool:
     return bool(snapshot.title and snapshot.body and snapshot.view_count and snapshot.comment_count)
 
 
+def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSnapshot:
+    return read_message_detail_snapshot(driver, timeout=timeout)
+
+
+def like_note(driver: WebDriver, timeout: int = 15) -> tuple[list[str], list[str]]:
+    return _toggle_bottom_action_and_wait_for_change(driver, action_index=0, timeout=timeout)
+
+
+def favorite_note(driver: WebDriver, timeout: int = 15) -> tuple[list[str], list[str]]:
+    return _toggle_bottom_action_and_wait_for_change(driver, action_index=1, timeout=timeout)
+
+
+def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
+    if not _tap_detail_share_button(driver):
+        raise AssertionError("Unable to find the note share entry point")
+    if not _wait_until(lambda: _share_sheet_visible(_safe_page_source(driver)), timeout=timeout):
+        raise AssertionError("Share sheet did not appear after tapping the share entry point")
+    if not _tap_share_target(driver, "朋友圈"):
+        raise AssertionError("Unable to find the Moments share target")
+    return "朋友圈"
+
+
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
     for accessibility_id in PUBLISH_ENTRY_IDS:
         if _tap_accessibility_id_now(driver, accessibility_id):
@@ -528,12 +544,11 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
             "If this is a simulator, verify Photos permission and seed at least one image."
         )
 
-    if _choose_local_photo(driver, picture_index=draft.picture, album_name=draft.album):
+    if _choose_local_photo(driver, album_name=draft.album):
         return
 
     if _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and _choose_local_photo(
         driver,
-        picture_index=draft.picture,
         album_name=draft.album,
     ):
         return
@@ -825,6 +840,27 @@ def _switch_photo_picker_to_collections(driver: WebDriver) -> bool:
         return False
     time.sleep(0.5)
     return True
+
+
+def _select_all_album_photos(driver: WebDriver, max_photos: int = 30) -> bool:
+    selected_any = False
+    for index in range(1, max_photos + 1):
+        tapped = False
+        for xpath in [
+            f"(//XCUIElementTypeCell)[{index}]",
+            f"(//XCUIElementTypeImage)[{index}]",
+        ]:
+            try:
+                driver.find_element(AppiumBy.XPATH, xpath).click()
+                tapped = True
+                selected_any = True
+                time.sleep(0.2)
+                break
+            except (NoSuchElementException, WebDriverException):
+                continue
+        if not tapped:
+            break
+    return selected_any
 
 
 def _confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
@@ -1372,6 +1408,9 @@ def _extract_bottom_action_counts(texts: list[str]) -> list[str]:
             candidate = texts[index + 1].split()
             if len(candidate) == 3 and all(part.isdigit() for part in candidate):
                 return candidate
+        match = BOTTOM_ACTION_PATTERN.search(text)
+        if match:
+            return list(match.groups())
     return []
 
 
@@ -1434,15 +1473,107 @@ def _tap_ticket_toggle(driver: WebDriver) -> bool:
 
 
 def _tap_bottom_action(driver: WebDriver) -> bool:
+    return _tap_bottom_action_at_index(driver, 0)
+
+
+def _toggle_bottom_action_and_wait_for_change(
+    driver: WebDriver,
+    *,
+    action_index: int,
+    timeout: int,
+) -> tuple[list[str], list[str]]:
+    before_counts = parse_detail_snapshot(_safe_page_source(driver)).bottom_action_counts
+    if len(before_counts) <= action_index:
+        raise AssertionError(f"Bottom action counts did not expose index {action_index}: {before_counts}")
+    if not _tap_bottom_action_at_index(driver, action_index):
+        raise AssertionError(f"Unable to tap bottom action at index {action_index}")
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        after_counts = parse_detail_snapshot(_safe_page_source(driver)).bottom_action_counts
+        if len(after_counts) > action_index and after_counts[action_index] != before_counts[action_index]:
+            return before_counts, after_counts
+        time.sleep(0.2)
+    raise AssertionError(
+        f"Bottom action at index {action_index} did not change. before={before_counts}"
+    )
+
+
+def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
+    candidates = _find_bottom_action_elements(driver)
+    if len(candidates) <= action_index:
+        return False
+    return _tap_element_center(driver, candidates[action_index])
+
+
+def _find_bottom_action_elements(driver: WebDriver) -> list:
+    try:
+        candidates = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
+    except (AttributeError, WebDriverException):
+        return []
+
+    action_elements = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for element in candidates:
+        rect = getattr(element, "rect", {}) or {}
+        x = float(rect.get("x", 0) or 0)
+        y = float(rect.get("y", 0) or 0)
+        width = float(rect.get("width", 0) or 0)
+        height = float(rect.get("height", 0) or 0)
+        if not (45 <= width <= 70 and 20 <= height <= 32):
+            continue
+        if y < 780:
+            continue
+        key = (x, y, width, height)
+        if key in seen:
+            continue
+        seen.add(key)
+        action_elements.append(element)
+    action_elements.sort(key=lambda element: ((getattr(element, "rect", {}) or {}).get("x", 0)))
+    return action_elements
+
+
+def _tap_detail_share_button(driver: WebDriver) -> bool:
+    try:
+        candidates = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
+    except (AttributeError, WebDriverException):
+        candidates = []
+
+    share_candidate = None
+    best_x = -1.0
+    for element in candidates:
+        rect = getattr(element, "rect", {}) or {}
+        x = float(rect.get("x", 0) or 0)
+        y = float(rect.get("y", 0) or 0)
+        width = float(rect.get("width", 0) or 0)
+        height = float(rect.get("height", 0) or 0)
+        if not (35 <= width <= 50 and 35 <= height <= 50):
+            continue
+        if y > 120:
+            continue
+        if x > best_x:
+            best_x = x
+            share_candidate = element
+    if share_candidate is not None and _tap_element_center(driver, share_candidate):
+        return True
+    return False
+
+
+def _share_sheet_visible(page_source: str) -> bool:
+    return any(token in page_source for token in ["朋友圈", "微信好友", "发送给朋友", "微信"])
+
+
+def _tap_share_target(driver: WebDriver, target_text: str) -> bool:
+    if tap_text_if_present(driver, target_text, timeout=2):
+        return True
     for xpath in [
-        '(//XCUIElementTypeOther[@name="0"])[1]',
-        '(//XCUIElementTypeOther[@name="1"])[1]',
-        '(//XCUIElementTypeOther[@name="0"])[2]',
+        f'//*[@name="{target_text}" or @label="{target_text}" or @value="{target_text}"]',
+        f'//*[contains(@name, "{target_text}") or contains(@label, "{target_text}") or contains(@value, "{target_text}")]',
     ]:
         try:
             driver.find_element(AppiumBy.XPATH, xpath).click()
             return True
-        except (NoSuchElementException, TimeoutException, WebDriverException):
+        except (NoSuchElementException, WebDriverException):
             continue
     return False
 

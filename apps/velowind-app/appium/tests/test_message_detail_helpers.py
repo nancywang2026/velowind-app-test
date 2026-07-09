@@ -35,6 +35,18 @@ def test_parse_detail_snapshot_extracts_title_counts_and_comments():
     assert snapshot.bottom_action_counts == []
 
 
+def test_parse_detail_snapshot_extracts_bottom_action_counts():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="用户 abcdef 1 0 3" label="用户 abcdef 1 0 3" />
+    </AppiumAUT>
+    """
+
+    snapshot = parse_detail_snapshot(page_source)
+
+    assert snapshot.bottom_action_counts == ["1", "0", "3"]
+
+
 def test_build_changbaishan_note_draft_uses_requested_content():
     draft = build_changbaishan_note_draft()
 
@@ -43,7 +55,6 @@ def test_build_changbaishan_note_draft_uses_requested_content():
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
     assert draft.location == "长白山"
     assert draft.album == "长白山"
-    assert draft.picture == 1
     assert draft.allow_comments is True
 
 
@@ -56,7 +67,6 @@ def test_load_message_note_draft_reads_yaml_use_case():
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
-    assert draft.picture == 1
     assert draft.location == "长白山"
 
 
@@ -112,7 +122,7 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
     draft = build_changbaishan_note_draft()
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
-    monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.picture, draft.album)))
+    monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.album)))
     monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)))
     monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)))
     monkeypatch.setattr(
@@ -135,13 +145,102 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
 
     assert events == [
         "wait-form",
-        ("upload-image", draft.picture, draft.album),
+        ("upload-image", draft.album),
         ("title", draft.title),
         ("body", draft.body),
         ("body-topics", draft.topics),
         ("location", draft.location),
         ("allow-comments", True),
     ]
+
+
+def test_browse_note_detail_delegates_to_snapshot_reader(monkeypatch):
+    expected = object()
+    events = []
+
+    monkeypatch.setattr(
+        message_detail,
+        "read_message_detail_snapshot",
+        lambda driver, timeout=20: events.append(("read-snapshot", timeout)) or expected,
+    )
+
+    assert message_detail.browse_note_detail(object(), timeout=18) is expected
+    assert events == [("read-snapshot", 18)]
+
+
+def test_like_note_toggles_first_bottom_action_and_waits_for_count_change(monkeypatch):
+    events = []
+    signatures = iter([
+        message_detail.MessageDetailSnapshot("标题", "正文", "4", "2", [], None, ["1", "0", "3"]),
+        message_detail.MessageDetailSnapshot("标题", "正文", "4", "2", [], None, ["2", "0", "3"]),
+    ])
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: next(signatures))
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_bottom_action_at_index",
+        lambda driver, action_index: events.append(("tap-bottom-action", action_index)) or True,
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    before, after = message_detail.like_note(driver=object(), timeout=3)
+
+    assert before == ["1", "0", "3"]
+    assert after == ["2", "0", "3"]
+    assert events == [("tap-bottom-action", 0)]
+
+
+def test_favorite_note_toggles_second_bottom_action_and_waits_for_count_change(monkeypatch):
+    events = []
+    signatures = iter([
+        message_detail.MessageDetailSnapshot("标题", "正文", "4", "2", [], None, ["1", "0", "3"]),
+        message_detail.MessageDetailSnapshot("标题", "正文", "4", "2", [], None, ["1", "1", "3"]),
+    ])
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: next(signatures))
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_bottom_action_at_index",
+        lambda driver, action_index: events.append(("tap-bottom-action", action_index)) or True,
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    before, after = message_detail.favorite_note(driver=object(), timeout=3)
+
+    assert before == ["1", "0", "3"]
+    assert after == ["1", "1", "3"]
+    assert events == [("tap-bottom-action", 1)]
+
+
+def test_share_note_to_moments_taps_share_then_target(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_detail_share_button",
+        lambda driver: events.append("tap-share") or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_wait_until",
+        lambda predicate, timeout: events.append(("wait-until", timeout)) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_share_sheet_visible",
+        lambda page_source: True,
+    )
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "朋友圈")
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_share_target",
+        lambda driver, target_text: events.append(("tap-share-target", target_text)) or True,
+    )
+
+    assert message_detail.share_note_to_moments(object(), timeout=6) == "朋友圈"
+    assert events == ["tap-share", ("wait-until", 6), ("tap-share-target", "朋友圈")]
 
 
 def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeypatch):
@@ -296,6 +395,7 @@ def test_choose_local_photo_opens_requested_album_first(monkeypatch):
         lambda driver: [
             FakeElement({"x": 0, "y": 142, "width": 133, "height": 133}),
             FakeElement({"x": 134, "y": 142, "width": 134, "height": 133}),
+            FakeElement({"x": 268, "y": 142, "width": 134, "height": 133}),
         ],
     )
     monkeypatch.setattr(message_detail, "_open_photo_album", lambda driver, album_name: events.append(("open-album", album_name)) or True)
@@ -306,6 +406,7 @@ def test_choose_local_photo_opens_requested_album_first(monkeypatch):
         ("open-album", "长白山"),
         ("mobile: tap", {"x": 66.5, "y": 208.5}),
         ("mobile: tap", {"x": 201.0, "y": 208.5}),
+        ("mobile: tap", {"x": 335.0, "y": 208.5}),
         "picker-done",
     ]
 
