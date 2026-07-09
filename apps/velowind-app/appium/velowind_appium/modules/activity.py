@@ -34,6 +34,7 @@ ACTIVITY_TYPE_IDS = [
     "activity-publish-type",
 ]
 ACTIVITY_TYPE_TEXTS = ["活动", "发布活动"]
+PUBLISH_SHEET_TEXTS = ["选择发布类型"]
 FORM_READY_IDS = [
     "activity-publish-page",
     "activity-create-page",
@@ -79,15 +80,15 @@ def build_activity_draft() -> ActivityDraft:
     now = datetime.now()
     stamp = now.strftime("%Y-%m-%d %H:%M:%S")
     return ActivityDraft(
-        title=f"自动化测试活动 {now.strftime('%m%d%H%M')}",
+        title="杭州西湖徒步",
         description=f"自动化测试活动描述，创建时间：{stamp}。用于验证发布活动流程可提交审核。",
         itinerary=(
             f"09:00 集合签到；10:00 热身出发；12:00 补给休息；15:00 返回解散。"
             f" 自动化填写时间：{stamp}"
         ),
         activity_type="骑行",
-        province="上海",
-        city="上海",
+        province="浙江省",
+        city="杭州",
         contact_name="自动化测试",
         contact_phone="13800138000",
         location="自动化测试集合点",
@@ -130,6 +131,7 @@ def open_activity_publisher(
             if ios_config is None:
                 raise AssertionError("Publish flow reached a login page but no iOS config was provided for re-login")
             ensure_logged_in_if_needed(driver, ios_config)
+            end_at = time.monotonic() + timeout
             time.sleep(1)
             continue
 
@@ -161,6 +163,7 @@ def fill_activity_form(driver: WebDriver, draft: ActivityDraft, timeout: int = 6
     _fill_description(driver, draft.description)
     _fill_itinerary(driver, draft.itinerary)
     _fill_known_text_fields(driver, draft)
+    _resolve_picker_fields(driver, timeout=timeout)
 
     if not _required_field_markers_resolved(driver):
         raise AssertionError("The activity form still shows unresolved required placeholders after filling")
@@ -232,7 +235,7 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
 def _publish_sheet_visible(driver):
     def _check() -> bool:
         source = _safe_page_source(driver)
-        return any(text in source for text in ACTIVITY_TYPE_TEXTS)
+        return any(text in source for text in PUBLISH_SHEET_TEXTS)
 
     return _check
 
@@ -258,9 +261,12 @@ def _tap_activity_type_if_present(driver: WebDriver) -> bool:
 
 def _fill_title(driver: WebDriver, title: str) -> None:
     for keyword in TITLE_LABEL_KEYWORDS:
-        if _fill_input_near_label(driver, keyword, title):
+        if _fill_input_near_label(driver, keyword, title, overwrite_existing=False):
             return
-    _fill_first_empty_input(driver, title)
+    title_input = _find_first_title_input(driver)
+    if _field_has_user_value(title_input):
+        return
+    _replace_text(title_input, title)
 
 
 def _fill_description(driver: WebDriver, description: str) -> None:
@@ -271,7 +277,7 @@ def _fill_description(driver: WebDriver, description: str) -> None:
     for keyword in DESCRIPTION_LABEL_KEYWORDS:
         if _fill_input_near_label(driver, keyword, description, prefer_text_view=True):
             return
-    _fill_first_empty_text_view(driver, description)
+    raise AssertionError("Unable to open or fill the activity description editor")
 
 
 def _fill_itinerary(driver: WebDriver, itinerary: str) -> None:
@@ -279,6 +285,7 @@ def _fill_itinerary(driver: WebDriver, itinerary: str) -> None:
         _fill_editor_body(driver, itinerary)
         _close_editor(driver)
         return
+    raise AssertionError("Unable to open or fill the activity itinerary editor")
 
 
 def _fill_city(driver: WebDriver, city: str) -> None:
@@ -299,27 +306,52 @@ def _fill_city(driver: WebDriver, city: str) -> None:
 def _select_activity_type(driver: WebDriver, activity_type: str) -> None:
     if not _tap_form_field(driver, "选择活动类型", fallback_point=(110, 404)):
         return
-    _choose_first_option(driver, preferred_texts=[activity_type, "骑行", "跑步", "完成"])
+    _choose_specific_overlay_option(driver, activity_type)
 
 
 def _select_province(driver: WebDriver, province: str) -> None:
     if not _tap_form_field(driver, "选择所属省份", fallback_point=(111, 499)):
         return
-    _choose_first_option(driver, preferred_texts=[province, "上海", "浙江", "北京", "完成"])
+    _choose_specific_overlay_option(driver, _province_option_texts(province))
 
 
 def _upload_activity_image(driver: WebDriver) -> None:
     if not _tap_image_picker(driver):
         return
 
+    _choose_photo_library_source(driver)
+
     for text in ["允许访问所有照片", "允许", "好"]:
         tap_text_if_present(driver, text, timeout=2)
 
-    if _choose_first_option(
-        driver,
-        preferred_texts=["最近项目", "照片图库", "照片", "所有照片", "完成", "确定"],
+    if _choose_local_photo(driver):
+        return
+
+    if _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and _choose_local_photo(
+        driver
     ):
         return
+    raise AssertionError("Unable to upload an activity image from the local photo library")
+
+
+def _choose_photo_library_source(driver: WebDriver) -> bool:
+    if tap_text_if_present(driver, "从手机相册选择", timeout=1):
+        return True
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": size["width"] * 0.5,
+                "y": size["height"] * 0.87,
+            },
+        )
+        return True
+    except WebDriverException:
+        return False
+
+
+def _choose_local_photo(driver: WebDriver) -> bool:
     for xpath in [
         "(//XCUIElementTypeCell)[1]",
         "(//XCUIElementTypeImage)[1]",
@@ -331,6 +363,7 @@ def _upload_activity_image(driver: WebDriver) -> None:
             return
         except (NoSuchElementException, WebDriverException):
             continue
+    return False
 
 
 def _fill_known_text_fields(driver: WebDriver, draft: ActivityDraft) -> None:
@@ -404,6 +437,7 @@ def _fill_input_near_label(
     value: str,
     *,
     prefer_text_view: bool = False,
+    overwrite_existing: bool = True,
 ) -> bool:
     element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"]
     if prefer_text_view:
@@ -420,7 +454,10 @@ def _fill_input_near_label(
             xpath = template.format(element_type=element_type)
             try:
                 element = driver.find_element(AppiumBy.XPATH, xpath)
+                if not overwrite_existing and _field_has_user_value(element):
+                    return True
                 _replace_text(element, value)
+                _hide_keyboard(driver)
                 return True
             except (NoSuchElementException, WebDriverException):
                 continue
@@ -428,13 +465,16 @@ def _fill_input_near_label(
 
 
 def _fill_first_empty_input(driver: WebDriver, value: str) -> None:
+    _replace_text(_find_first_title_input(driver), value)
+
+
+def _find_first_title_input(driver: WebDriver):
     for xpath in [
         '//XCUIElementTypeTextField[@value="" or not(@value)]',
         '//XCUIElementTypeTextField[contains(@value, "请输入")]',
     ]:
         try:
-            _replace_text(driver.find_element(AppiumBy.XPATH, xpath), value)
-            return
+            return driver.find_element(AppiumBy.XPATH, xpath)
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to locate a title input in the activity publish form")
@@ -461,6 +501,39 @@ def _replace_text(element, value: str) -> None:
     element.send_keys(value)
 
 
+def _hide_keyboard(driver: WebDriver) -> None:
+    for kwargs in [
+        {},
+        {"key_name": "Done"},
+        {"key_name": "Return"},
+        {"key_name": "Next"},
+        {"strategy": "pressKey", "key_name": "Done"},
+    ]:
+        try:
+            driver.hide_keyboard(**kwargs)
+            return
+        except WebDriverException:
+            continue
+
+
+def _field_has_user_value(element) -> bool:
+    try:
+        current_value = (element.get_attribute("value") or "").strip()
+    except WebDriverException:
+        current_value = ""
+    try:
+        placeholder_value = (element.get_attribute("placeholderValue") or "").strip()
+    except WebDriverException:
+        placeholder_value = ""
+    if not current_value:
+        return False
+    if placeholder_value and current_value == placeholder_value:
+        return False
+    if any(token in current_value for token in ["请输入", "选择", "填写", "上传"]):
+        return False
+    return True
+
+
 def _select_placeholder_field(driver: WebDriver, placeholder: str) -> bool:
     if not _tap_placeholder(driver, placeholder):
         return False
@@ -484,7 +557,35 @@ def _select_placeholder_field(driver: WebDriver, placeholder: str) -> bool:
 
 
 def _open_editor(driver: WebDriver, entry_text: str) -> bool:
-    return _tap_form_field(driver, entry_text)
+    _hide_keyboard(driver)
+    baseline = _safe_page_source(driver)
+    if not _tap_form_field(driver, entry_text):
+        return False
+
+    if _wait_until(lambda: _editor_opened(_safe_page_source(driver), baseline, entry_text), timeout=4):
+        return True
+
+    try:
+        element = driver.find_element(
+            AppiumBy.XPATH,
+            f'//*[@name="{entry_text}" or @label="{entry_text}" or @value="{entry_text}"]',
+        )
+        rect = element.rect
+        driver.execute_script("mobile: tap", {"x": 201, "y": rect["y"] + rect["height"] / 2})
+    except (NoSuchElementException, WebDriverException):
+        return False
+
+    return _wait_until(lambda: _editor_opened(_safe_page_source(driver), baseline, entry_text), timeout=4)
+
+
+def _editor_opened(page_source: str, baseline: str, entry_text: str) -> bool:
+    if not page_source or page_source == baseline:
+        return False
+    if "编辑活动说明" in page_source or "编辑活动行程" in page_source:
+        return True
+    if entry_text in page_source and "提交审核" in page_source:
+        return False
+    return "完成" in page_source or "请输入" in page_source
 
 
 def _fill_editor_body(driver: WebDriver, body: str) -> None:
@@ -501,11 +602,43 @@ def _fill_editor_body(driver: WebDriver, body: str) -> None:
 
 
 def _close_editor(driver: WebDriver) -> None:
-    tap_text_if_present(driver, "完成", timeout=2)
+    _hide_keyboard(driver)
+    try:
+        driver.back()
+        time.sleep(0.5)
+    except WebDriverException:
+        pass
+    if tap_text_if_present(driver, "完成", timeout=1):
+        _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4)
+        return
+    for xpath in [
+        "//XCUIElementTypeOther[@x='72' and @y='85' and @width='20' and @height='20']",
+        "(//XCUIElementTypeStaticText[@name='编辑活动说明' or @label='编辑活动说明']/preceding::XCUIElementTypeOther[@visible='true'])[last()]",
+        "(//XCUIElementTypeStaticText[@name='编辑活动行程' or @label='编辑活动行程']/preceding::XCUIElementTypeOther[@visible='true'])[last()]",
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+            if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
+                return
+        except (NoSuchElementException, WebDriverException):
+            continue
+    try:
+        driver.execute_script("mobile: tap", {"x": 82, "y": 95})
+        if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
+            return
+    except WebDriverException:
+        pass
+    raise AssertionError("Unable to close the activity editor and return to the publish form")
+
+
+def _editor_page_visible(page_source: str) -> bool:
+    return "编辑活动说明" in page_source or "编辑活动行程" in page_source
 
 
 def _tap_image_picker(driver: WebDriver) -> bool:
     for xpath in [
+        "//XCUIElementTypeOther[@x='13' and @y='161' and @width='94' and @height='94']",
+        "//XCUIElementTypeOther[@x='13' and @y='161' and @width='90' and @height='90']",
         "//XCUIElementTypeOther[@x='25' and @y='115' and @width='101' and @height='100']",
         "//XCUIElementTypeOther[@x='26' and @y='159' and @width='96' and @height='96']",
     ]:
@@ -515,7 +648,7 @@ def _tap_image_picker(driver: WebDriver) -> bool:
         except (NoSuchElementException, WebDriverException):
             continue
     try:
-        driver.execute_script("mobile: tap", {"x": 105, "y": 211})
+        driver.execute_script("mobile: tap", {"x": 60, "y": 206})
         return True
     except WebDriverException:
         return False
@@ -526,7 +659,7 @@ def _tap_form_field(driver: WebDriver, text: str, fallback_point: tuple[int, int
         return True
     xpath = f'//*[@name="{text}" or @label="{text}" or @value="{text}"]'
     try:
-        driver.find_element(AppiumBy.XPATH, xpath).click()
+        _tap_element_center(driver, driver.find_element(AppiumBy.XPATH, xpath))
         return True
     except (NoSuchElementException, WebDriverException):
         pass
@@ -545,10 +678,21 @@ def _tap_placeholder(driver: WebDriver, placeholder: str) -> bool:
         return True
     xpath = f'//*[@name="{placeholder}" or @label="{placeholder}" or @value="{placeholder}"]'
     try:
-        driver.find_element(AppiumBy.XPATH, xpath).click()
+        _tap_element_center(driver, driver.find_element(AppiumBy.XPATH, xpath))
         return True
     except (NoSuchElementException, WebDriverException):
         return False
+
+
+def _tap_element_center(driver: WebDriver, element) -> None:
+    rect = element.rect
+    driver.execute_script(
+        "mobile: tap",
+        {
+            "x": rect["x"] + rect["width"] / 2,
+            "y": rect["y"] + rect["height"] / 2,
+        },
+    )
 
 
 def _confirm_date_picker(driver: WebDriver) -> bool:
@@ -568,6 +712,57 @@ def _confirm_date_picker(driver: WebDriver) -> bool:
 
 def _first_picker_wheel(driver: WebDriver):
     return driver.find_element(AppiumBy.XPATH, "//XCUIElementTypePickerWheel[1]")
+
+
+def _province_option_texts(province: str) -> list[str]:
+    candidates = [province]
+    if not province.endswith(("省", "市", "自治区", "特别行政区")):
+        candidates.extend([f"{province}市", f"{province}省"])
+    else:
+        candidates.append(province.removesuffix("省").removesuffix("市"))
+    return [candidate for candidate in candidates if candidate]
+
+
+def _choose_specific_overlay_option(driver: WebDriver, texts: str | list[str]) -> bool:
+    target_texts = [texts] if isinstance(texts, str) else texts
+
+    for text in target_texts:
+        if tap_text_if_present(driver, text, timeout=2):
+            _confirm_overlay_selection(driver)
+            return True
+
+    for text in target_texts:
+        for xpath in [
+            f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
+            f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+        ]:
+            try:
+                _tap_element_center(driver, driver.find_element(AppiumBy.XPATH, xpath))
+                _confirm_overlay_selection(driver)
+                return True
+            except (NoSuchElementException, WebDriverException):
+                continue
+
+    for text in target_texts:
+        if _set_first_picker_wheel_value(driver, text):
+            _confirm_overlay_selection(driver)
+            return True
+
+    return False
+
+
+def _set_first_picker_wheel_value(driver: WebDriver, text: str) -> bool:
+    try:
+        _first_picker_wheel(driver).send_keys(text)
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
+
+
+def _confirm_overlay_selection(driver: WebDriver) -> None:
+    for text in ["确定", "完成"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            return
 
 
 def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:

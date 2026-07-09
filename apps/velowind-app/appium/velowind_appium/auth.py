@@ -58,11 +58,18 @@ def _perform_password_login(driver: WebDriver, username: str, password: str) -> 
     _save_password_if_prompted(driver)
 
     end_at = time.monotonic() + 20
+    last_submit_at = time.monotonic()
     while time.monotonic() < end_at:
         _dismiss_login_agreement_sheet(driver)
         _save_password_if_prompted(driver)
-        if not login_required_from_page_source(_safe_page_source(driver)):
+        current_source = _safe_page_source(driver)
+        if not login_required_from_page_source(current_source):
             return
+        if time.monotonic() - last_submit_at >= 2:
+            _tap_agreement(driver)
+            _tap_login_submit(driver)
+            _save_password_if_prompted(driver)
+            last_submit_at = time.monotonic()
         time.sleep(0.5)
 
     raise AssertionError("Login page remained visible after submitting credentials")
@@ -73,27 +80,34 @@ def _find_phone_input(driver: WebDriver):
 
 
 def _find_password_input(driver: WebDriver):
-    for xpath in [
-        "//XCUIElementTypeSecureTextField[1]",
-        "(//XCUIElementTypeTextField)[2]",
-    ]:
-        try:
-            return driver.find_element(AppiumBy.XPATH, xpath)
-        except NoSuchElementException:
-            continue
+    end_at = time.monotonic() + 10
+    retried_password_tab = False
+    while time.monotonic() < end_at:
+        for xpath in [
+            "//XCUIElementTypeSecureTextField[1]",
+            "(//XCUIElementTypeTextField)[2]",
+        ]:
+            try:
+                return driver.find_element(AppiumBy.XPATH, xpath)
+            except NoSuchElementException:
+                continue
+        if not retried_password_tab:
+            retried_password_tab = True
+            _open_password_login_form(driver)
+        time.sleep(0.3)
     raise AssertionError("Unable to locate the password input on the login page")
 
 
 def _open_password_login_form(driver: WebDriver) -> None:
-    if _has_password_input(driver):
+    baseline = _safe_page_source(driver)
+    if _has_password_input(driver) and "请输入手机号和密码完成登录" in baseline:
         return
 
-    baseline = _safe_page_source(driver)
-
     for xpath in [
+        "//XCUIElementTypeStaticText[@name='密码登录']",
+        "//XCUIElementTypeStaticText[@label='密码登录']",
         "(//*[@name='密码登录'])[1]",
         "(//*[@label='密码登录'])[1]",
-        "//XCUIElementTypeStaticText[@name='密码登录']",
     ]:
         try:
             driver.find_element(AppiumBy.XPATH, xpath).click()
@@ -111,7 +125,10 @@ def _password_form_visible(driver: WebDriver, baseline: str) -> bool:
     if _has_password_input(driver):
         return True
     current = _safe_page_source(driver)
-    return current != baseline and "密码登录" not in current
+    return (
+        "请输入手机号和密码完成登录" in current
+        or "登录" in current and "请输入手机号" in current and current != baseline
+    )
 
 
 def _has_password_input(driver: WebDriver) -> bool:
@@ -128,24 +145,62 @@ def _has_password_input(driver: WebDriver) -> bool:
 
 
 def _tap_agreement(driver: WebDriver) -> None:
+    for accessibility_id in [
+        "login-agreement-checkbox",
+        "login-agreement",
+        "agreement-checkbox",
+    ]:
+        try:
+            driver.find_element(AppiumBy.ACCESSIBILITY_ID, accessibility_id).click()
+            return
+        except (NoSuchElementException, WebDriverException):
+            continue
+
     for xpath in [
         '//XCUIElementTypeOther[@name="我已阅读并同意《寻风集用户协议》《隐私政策》"]/XCUIElementTypeOther[1]',
         '(//XCUIElementTypeOther[@name="我已阅读并同意《寻风集用户协议》《隐私政策》"])[1]',
     ]:
         try:
             element = driver.find_element(AppiumBy.XPATH, xpath)
-            rect = element.rect
-            driver.execute_script(
-                "mobile: tap",
-                {
-                    "x": rect["x"] + rect["width"] / 2,
-                    "y": rect["y"] + rect["height"] / 2,
-                },
-            )
-            time.sleep(0.5)
+            _tap_element_center(driver, element)
             return
         except (NoSuchElementException, WebDriverException):
             continue
+
+    predicate = (
+        '(name CONTAINS "已阅读" AND name CONTAINS "同意") OR '
+        '(label CONTAINS "已阅读" AND label CONTAINS "同意") OR '
+        '(value CONTAINS "已阅读" AND value CONTAINS "同意")'
+    )
+    try:
+        element = driver.find_element(AppiumBy.IOS_PREDICATE, predicate)
+        _tap_element_leading_checkbox(driver, element)
+    except (NoSuchElementException, WebDriverException):
+        return
+
+
+def _tap_element_center(driver: WebDriver, element) -> None:
+    rect = element.rect
+    driver.execute_script(
+        "mobile: tap",
+        {
+            "x": rect["x"] + rect["width"] / 2,
+            "y": rect["y"] + rect["height"] / 2,
+        },
+    )
+    time.sleep(0.2)
+
+
+def _tap_element_leading_checkbox(driver: WebDriver, element) -> None:
+    rect = element.rect
+    driver.execute_script(
+        "mobile: tap",
+        {
+            "x": rect["x"] + min(12, rect["width"] / 2),
+            "y": rect["y"] + rect["height"] / 2,
+        },
+    )
+    time.sleep(0.2)
 
 
 def _dismiss_login_agreement_sheet(driver: WebDriver) -> None:
@@ -168,7 +223,16 @@ def _tap_login_submit(driver: WebDriver) -> bool:
         except NoSuchElementException:
             continue
 
-    return tap_text_if_present(driver, "验证并登录", timeout=1) or tap_text_if_present(driver, "登录", timeout=1)
+    predicate = (
+        'name IN {"验证并登录", "登录"} OR '
+        'label IN {"验证并登录", "登录"} OR '
+        'value IN {"验证并登录", "登录"}'
+    )
+    try:
+        driver.find_element(AppiumBy.IOS_PREDICATE, predicate).click()
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
 
 
 def _safe_page_source(driver: WebDriver) -> str:

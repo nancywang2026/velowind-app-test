@@ -64,6 +64,58 @@ def test_dismiss_common_system_alerts_uses_short_optional_probes(monkeypatch):
     assert calls == [(text, 0.2) for text in session.COMMON_ALERT_TEXTS]
 
 
+def test_home_visible_rejects_publish_form_overlay():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="首页" />
+      <XCUIElementTypeStaticText name="全国" />
+      <XCUIElementTypeStaticText name="发布活动" />
+      <XCUIElementTypeStaticText name="提交审核" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    assert session._home_visible(FakeDriver(page_source)) is False
+
+
+def test_home_visible_rejects_message_detail_overlay():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="首页" />
+      <XCUIElementTypeStaticText name="全国" />
+      <XCUIElementTypeStaticText name="写留言" />
+      <XCUIElementTypeOther name="post-detail-banner-pager" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    assert session._home_visible(FakeDriver(page_source)) is False
+
+
+def test_home_visible_rejects_login_sheet_overlay():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="首页" />
+      <XCUIElementTypeStaticText name="全国" />
+      <XCUIElementTypeStaticText name="手机号登录" />
+      <XCUIElementTypeTextField value="请输入手机号" />
+      <XCUIElementTypeStaticText name="验证并登录" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    assert session._home_visible(FakeDriver(page_source)) is False
+
+
 def test_ensure_logged_in_from_me_then_home_opens_me_before_login(monkeypatch):
     events = []
 
@@ -93,3 +145,21 @@ def test_ensure_logged_in_from_me_then_home_opens_me_before_login(monkeypatch):
     ]
     assert "login" in events
     assert ("tap-tab", "bottom-nav-home", "首页") in events
+
+
+def test_ensure_logged_in_from_me_then_home_can_login_when_me_tab_is_not_tappable(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: events.append("dismiss-alerts"))
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False if accessibility_id == "bottom-nav-me" else True,
+    )
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: "密码登录 请输入手机号和密码完成登录 登录")
+    monkeypatch.setattr(session, "ensure_logged_in_if_needed", lambda driver, config: events.append("login") or True)
+    monkeypatch.setattr(session, "_home_visible", lambda driver: True)
+
+    assert session.ensure_logged_in_from_me_then_home(object(), object()) is True
+    assert "login" in events
