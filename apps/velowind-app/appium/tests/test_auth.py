@@ -84,9 +84,7 @@ def test_tap_agreement_targets_checkbox_before_label():
     class FakeDriver:
         def find_element(self, by, value):
             attempted_xpaths.append(value)
-            if attempted_xpaths == [
-                '//XCUIElementTypeOther[@name="我已阅读并同意《寻风集用户协议》《隐私政策》"]/XCUIElementTypeOther[1]'
-            ]:
+            if value == '//XCUIElementTypeOther[@name="我已阅读并同意《寻风集用户协议》《隐私政策》"]/XCUIElementTypeOther[1]':
                 return FakeElement({"x": 46, "y": 450, "width": 20, "height": 20})
             raise NoSuchElementException()
 
@@ -96,6 +94,47 @@ def test_tap_agreement_targets_checkbox_before_label():
     auth._tap_agreement(FakeDriver())
 
     assert taps == [("mobile: tap", {"x": 56.0, "y": 460.0})]
+
+
+def test_tap_agreement_handles_updated_age_confirmation_copy():
+    taps = []
+
+    class FakeElement:
+        rect = {"x": 46, "y": 450, "width": 280, "height": 24}
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            if "CONTAINS" in value and "已阅读" in value and "同意" in value:
+                return FakeElement()
+            raise NoSuchElementException()
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    auth._tap_agreement(FakeDriver())
+
+    assert taps == [("mobile: tap", {"x": 58, "y": 462.0})]
+
+
+def test_tap_login_submit_uses_immediate_predicate_lookup(monkeypatch):
+    calls = []
+
+    class FakeElement:
+        def click(self):
+            calls.append("click")
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            calls.append((by, value))
+            if "验证并登录" in value:
+                return FakeElement()
+            raise NoSuchElementException()
+
+    monkeypatch.setattr(auth, "tap_text_if_present", lambda *args, **kwargs: calls.append("slow-fallback") or False)
+
+    assert auth._tap_login_submit(FakeDriver()) is True
+    assert "slow-fallback" not in calls
+    assert calls[-1] == "click"
 
 
 def test_perform_password_login_uses_password_form_then_saves_password(monkeypatch):
@@ -146,3 +185,41 @@ def test_perform_password_login_uses_password_form_then_saves_password(monkeypat
         "tap-agreement",
         "save-password",
     ]
+
+
+def test_perform_password_login_retries_submit_when_login_page_persists(monkeypatch):
+    events = []
+    page_states = iter(
+        [
+            "密码登录 请输入手机号和密码完成登录 登录",
+            "密码登录 请输入手机号和密码完成登录 登录",
+            "",
+        ]
+    )
+
+    class FakeField:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def send_keys(self, value):
+            events.append(("send", value))
+
+    monkeypatch.setattr(auth, "_dismiss_login_agreement_sheet", lambda driver: events.append("dismiss-sheet"))
+    monkeypatch.setattr(auth, "_open_password_login_form", lambda driver: events.append("open-password-form"))
+    monkeypatch.setattr(auth, "_find_phone_input", lambda driver: FakeField())
+    monkeypatch.setattr(auth, "_find_password_input", lambda driver: FakeField())
+    monkeypatch.setattr(auth, "_tap_agreement", lambda driver: events.append("tap-agreement"))
+    monkeypatch.setattr(auth, "_save_password_if_prompted", lambda driver: events.append("save-password"))
+    monkeypatch.setattr(auth, "_tap_login_submit", lambda driver: events.append("submit") or True)
+    monkeypatch.setattr(auth, "_safe_page_source", lambda driver: next(page_states))
+
+    monotonic_values = iter([0, 1, 2, 3, 4, 5, 6, 7, 8])
+    monkeypatch.setattr(auth.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+
+    auth._perform_password_login(object(), "13300000000", "secret")
+
+    assert events.count("submit") >= 2

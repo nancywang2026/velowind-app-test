@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
@@ -7,7 +9,6 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException,
 from velowind_appium.actions import (
     swipe_vertical,
     tap_if_present,
-    wait_for_any_accessibility_id_or_text,
 )
 from velowind_appium.modules.message_detail import message_detail_is_visible
 
@@ -18,6 +19,21 @@ HOME_READY_IDS = [
     "post-home-feed-category-pager",
 ]
 HOME_READY_TEXTS = ["首页", "全国", "推荐"]
+HOME_BLOCKING_TEXTS = [
+    "发布活动",
+    "提交审核",
+    "存草稿",
+    "活动图片",
+    "写留言",
+    "手机号登录",
+    "请输入手机号",
+    "密码登录",
+    "验证并登录",
+    "post-detail-banner-pager",
+    "post-detail-page",
+    "message-detail-page",
+    "article-detail-page",
+]
 FIRST_MESSAGE_IDS = [
     "post-home-feed-item-0",
     "post-home-feed-card-0",
@@ -32,12 +48,18 @@ FIRST_MESSAGE_XPATHS = [
 
 
 def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
-    return wait_for_any_accessibility_id_or_text(
-        driver,
-        HOME_READY_IDS,
-        HOME_READY_TEXTS,
-        timeout=timeout,
-    )
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if page_source and any(text in page_source for text in HOME_BLOCKING_TEXTS):
+            time.sleep(0.2)
+            continue
+        if _home_ready_id_present(driver):
+            return "home-feed-id"
+        if page_source and _home_ready_text_present(page_source):
+            return "home-feed-text"
+        time.sleep(0.2)
+    raise TimeoutException("Home feed did not become ready")
 
 
 def open_first_home_message(driver: WebDriver, max_swipes: int = 3) -> None:
@@ -52,6 +74,7 @@ def open_first_home_message(driver: WebDriver, max_swipes: int = 3) -> None:
             for _ in range(20):
                 if message_detail_is_visible(driver):
                     return
+                time.sleep(0.2)
         if message_detail_is_visible(driver):
             return
         if not _tap_first_visible_card(driver):
@@ -90,3 +113,26 @@ def _tap_first_visible_card(driver: WebDriver) -> bool:
         return True
     except WebDriverException:
         return False
+
+
+def _home_ready_id_present(driver: WebDriver) -> bool:
+    for accessibility_id in HOME_READY_IDS:
+        try:
+            driver.find_element(AppiumBy.ACCESSIBILITY_ID, accessibility_id)
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _home_ready_text_present(page_source: str) -> bool:
+    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+        return False
+    return "首页" in page_source and ("全国" in page_source or "推荐" in page_source)
+
+
+def _safe_page_source(driver: WebDriver) -> str:
+    try:
+        return driver.page_source
+    except WebDriverException:
+        return ""

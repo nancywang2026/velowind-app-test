@@ -10,6 +10,21 @@ from velowind_appium.modules.home_feed import wait_for_home_feed
 
 COMMON_ALERT_TEXTS = ["允许", "好", "以后", "暂不", "取消"]
 OPTIONAL_ALERT_TIMEOUT_SECONDS = 0.2
+HOME_BLOCKING_TEXTS = [
+    "发布活动",
+    "提交审核",
+    "存草稿",
+    "活动图片",
+    "写留言",
+    "手机号登录",
+    "请输入手机号",
+    "密码登录",
+    "验证并登录",
+    "post-detail-banner-pager",
+    "post-detail-page",
+    "message-detail-page",
+    "article-detail-page",
+]
 
 
 def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
@@ -29,7 +44,8 @@ def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumC
     tap_text_if_present(driver, "同意", timeout=1)
 
     if not tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=8):
-        raise AssertionError("Unable to open the Me tab before running regression cases")
+        if not login_required_from_page_source(_safe_page_source(driver)):
+            raise AssertionError("Unable to open the Me tab before running regression cases")
     if login_required_from_page_source(_safe_page_source(driver)):
         if not ensure_logged_in_if_needed(driver, ios_config):
             raise AssertionError("Unable to log in from the Me tab before running regression cases")
@@ -94,11 +110,15 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
 
 def _home_or_login_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
+    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+        return False
     return any(text in page_source for text in ["首页", "全国", "推荐", "密码登录", "手机号登录", "请输入手机号"])
 
 
 def _home_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
+    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+        return False
     return all(text in page_source for text in ["首页", "活动", "消息", "我的"]) or any(
         text in page_source for text in ["全国", "推荐", "骑行", "徒步"]
     )
