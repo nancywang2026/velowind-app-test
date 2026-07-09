@@ -114,7 +114,6 @@ LOCATION_SECTION_VISIBLE_PATTERNS = [
 LOCATION_PICKER_VISIBLE_PATTERNS = [
     'value="标记地点" name="标记地点" label="标记地点" enabled="true" visible="true"',
     'name="搜索地点" label="搜索地点" enabled="true" visible="true"',
-    'name="不标记地点" label="不标记地点" enabled="true" visible="true"',
 ]
 NOTE_TESTDATA_FILE = Path(__file__).resolve().parents[2] / "tests" / "message" / "testdata" / "publish_notes.yaml"
 
@@ -180,7 +179,8 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         topics = [token for token in topics.split() if token]
     if not isinstance(topics, list):
         topics = []
-    location = str(note.get("location", "")).strip()
+    raw_location = note.get("location", "")
+    location = "" if raw_location is None else str(raw_location).strip()
     album = str(note.get("album", "")).strip() or None
     allow_comments = note.get("allow_comments", True)
     if isinstance(allow_comments, str):
@@ -258,7 +258,8 @@ def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: 
     _fill_note_title(driver, draft.title)
     _fill_note_body(driver, draft.body)
     _append_note_topics_to_body(driver, draft.topics)
-    _fill_note_location(driver, draft.location)
+    if draft.location:
+        _fill_note_location(driver, draft.location)
     _set_allow_comments(driver, draft.allow_comments)
 
 
@@ -279,6 +280,8 @@ def submit_message_note(driver: WebDriver, timeout: int = 30) -> str:
         error_signal = message_note_publish_error_signal(page_source)
         if error_signal:
             raise AssertionError(f"Message note publish failed after submit: {error_signal}")
+        if not message_note_form_is_visible(page_source) and message_detail_is_visible(driver):
+            return "detail-page"
         if not submitted_again and message_note_form_is_visible(page_source):
             _hide_keyboard(driver)
             _tap_note_submit(driver)
@@ -736,7 +739,7 @@ def _choose_local_photo(driver: WebDriver, *, picture_index: int = 1, album_name
     if album_name and not _open_photo_album(driver, album_name):
         return False
     if album_name:
-        if not _tap_all_photo_grid_candidates(driver):
+        if not _select_all_album_photos(driver):
             return False
         return _confirm_system_photo_picker_selection(driver)
 
@@ -774,6 +777,59 @@ def _tap_photo_grid_candidate(driver: WebDriver, picture_index: int) -> bool:
     if rect is None:
         return False
     return _tap_rect_center(driver, rect)
+
+
+def _select_all_album_photos(driver: WebDriver) -> bool:
+    if _tap_all_photo_grid_selection_badges(driver):
+        return True
+    return _tap_all_photo_grid_candidates(driver)
+
+
+def _tap_all_photo_grid_selection_badges(driver: WebDriver) -> bool:
+    badges = _find_photo_grid_selection_badges(driver)
+    rects = [rect for rect in (_rect_snapshot(badge) for badge in badges) if rect is not None]
+    tapped_any = False
+    for rect in rects:
+        if _tap_rect_center(driver, rect):
+            tapped_any = True
+            time.sleep(0.2)
+    return tapped_any
+
+
+def _find_photo_grid_selection_badges(driver: WebDriver) -> list:
+    badges = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for xpath in [
+        "//XCUIElementTypeOther",
+        "//XCUIElementTypeButton",
+        "//XCUIElementTypeImage",
+    ]:
+        try:
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (AttributeError, WebDriverException):
+            continue
+        for element in elements:
+            rect = getattr(element, "rect", {}) or {}
+            x = float(rect.get("x", 0) or 0)
+            y = float(rect.get("y", 0) or 0)
+            width = float(rect.get("width", 0) or 0)
+            height = float(rect.get("height", 0) or 0)
+            if not (12 <= width <= 24 and 12 <= height <= 24):
+                continue
+            if not (90 <= x <= 390 and 120 <= y <= 220):
+                continue
+            key = (x, y, width, height)
+            if key in seen:
+                continue
+            seen.add(key)
+            badges.append(element)
+    badges.sort(
+        key=lambda element: (
+            ((getattr(element, "rect", {}) or {}).get("y", 0)),
+            ((getattr(element, "rect", {}) or {}).get("x", 0)),
+        )
+    )
+    return badges
 
 
 def _tap_all_photo_grid_candidates(driver: WebDriver) -> bool:
@@ -842,27 +898,6 @@ def _switch_photo_picker_to_collections(driver: WebDriver) -> bool:
     return True
 
 
-def _select_all_album_photos(driver: WebDriver, max_photos: int = 30) -> bool:
-    selected_any = False
-    for index in range(1, max_photos + 1):
-        tapped = False
-        for xpath in [
-            f"(//XCUIElementTypeCell)[{index}]",
-            f"(//XCUIElementTypeImage)[{index}]",
-        ]:
-            try:
-                driver.find_element(AppiumBy.XPATH, xpath).click()
-                tapped = True
-                selected_any = True
-                time.sleep(0.2)
-                break
-            except (NoSuchElementException, WebDriverException):
-                continue
-        if not tapped:
-            break
-    return selected_any
-
-
 def _confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
@@ -872,6 +907,10 @@ def _confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
                 lambda: not _cropper_visible(_safe_page_source(driver)),
                 timeout=5,
             ):
+                try:
+                    setattr(driver, "_cropper_confirmed_once", True)
+                except Exception:
+                    pass
                 return True
         time.sleep(0.2)
     return False
@@ -905,6 +944,8 @@ def _cropper_visible(page_source: str) -> bool:
 def _photo_picker_transition_completed(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _cropper_visible(page_source):
+        if getattr(driver, "_cropper_confirmed_once", False):
+            return True
         return _confirm_note_image_cropper(driver, timeout=5)
     return not any(text in page_source for text in ["选择最多9张照片。", 'name="Add" label="完成"'])
 
@@ -968,13 +1009,27 @@ def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
 
 
 def _fill_note_location(driver: WebDriver, location: str) -> None:
+    if _should_skip_note_location(location):
+        return
     _prepare_note_location_section(driver)
-    if _tap_text_or_contains(driver, "标记地点") or _tap_text_or_contains(driver, "地点"):
+    if _open_note_location_picker(driver):
         if _choose_note_location_option(driver, location):
             return
         if _choose_note_location_option(driver, location):
             return
     raise AssertionError("Unable to select a note location option")
+
+
+def _should_skip_note_location(location: str) -> bool:
+    normalized = (location or "").strip()
+    return normalized in {"", "不标记地点", "none", "skip"}
+
+
+def _open_note_location_picker(driver: WebDriver) -> bool:
+    for text in ["不标记地点", "标记地点", "地点"]:
+        if _tap_text_or_contains(driver, text):
+            return True
+    return False
 
 
 def _prepare_note_location_section(driver: WebDriver) -> None:
@@ -1000,6 +1055,8 @@ def _location_section_visible(page_source: str) -> bool:
 
 def _choose_note_location_option(driver: WebDriver, location: str) -> bool:
     if _location_picker_visible(_safe_page_source(driver)):
+        if _search_note_location_from_picker(driver, location):
+            return _choose_first_valid_location_from_picker(driver)
         return _choose_first_valid_location_from_picker(driver)
 
     option_elements = _find_visible_location_option_elements(driver)
@@ -1016,21 +1073,94 @@ def _location_picker_visible(page_source: str) -> bool:
     return any(pattern in page_source for pattern in LOCATION_PICKER_VISIBLE_PATTERNS)
 
 
-def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
+def _search_note_location_from_picker(driver: WebDriver, location: str) -> bool:
+    normalized = (location or "").strip()
+    if not normalized:
+        return False
+    search_input = _find_location_search_input(driver)
+    if search_input is None:
+        return False
+    try:
+        _replace_text(search_input, normalized)
+    except WebDriverException:
+        return False
+    _hide_keyboard(driver)
+    _tap_text_or_contains(driver, "搜索")
+    time.sleep(0.5)
+    return True
+
+
+def _find_location_search_input(driver: WebDriver):
     for xpath in [
-        '(//*[contains(@name, " | ") and @visible="true"])[1]',
-        '(//XCUIElementTypeStaticText[@visible="true" and not(@name="不标记地点") and not(@name="搜索地点")])[1]',
+        '//*[@name="搜索地点" or @label="搜索地点" or @value="搜索地点"]',
+        '//*[contains(@name, "搜索地点") or contains(@label, "搜索地点") or contains(@value, "搜索地点")]',
+        '//XCUIElementTypeTextField[contains(@value, "搜索")]',
+        '//XCUIElementTypeSearchField',
     ]:
         try:
-            element = driver.find_element(AppiumBy.XPATH, xpath)
-            if _tap_element_center(driver, element) and _wait_until(
-                lambda: not _location_picker_visible(_safe_page_source(driver)),
-                timeout=5,
-            ):
-                return True
+            return driver.find_element(AppiumBy.XPATH, xpath)
         except (NoSuchElementException, WebDriverException):
             continue
+    return None
+
+
+def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
+    result_elements = _find_location_result_elements(driver)
+    for element in result_elements:
+        if _tap_element_center(driver, element) and _wait_until(
+            lambda: not _location_picker_visible(_safe_page_source(driver)),
+            timeout=5,
+        ):
+            return True
     return False
+
+
+def _find_location_result_elements(driver: WebDriver) -> list:
+    elements = []
+    seen: set[tuple[str, float, float, float, float]] = set()
+    for xpath in [
+        '//XCUIElementTypeOther[@visible="true"]',
+        '//XCUIElementTypeStaticText[@visible="true"]',
+    ]:
+        try:
+            candidates = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (AttributeError, WebDriverException):
+            continue
+        for element in candidates:
+            name = _element_name(element)
+            rect = getattr(element, "rect", {}) or {}
+            if not _looks_like_location_result(name, rect):
+                continue
+            key = (
+                name,
+                float(rect.get("x", 0) or 0),
+                float(rect.get("y", 0) or 0),
+                float(rect.get("width", 0) or 0),
+                float(rect.get("height", 0) or 0),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            elements.append(element)
+    elements.sort(key=lambda element: ((getattr(element, "rect", {}) or {}).get("y", 0), (getattr(element, "rect", {}) or {}).get("x", 0)))
+    return elements
+
+
+def _looks_like_location_result(name: str, rect: dict) -> bool:
+    text = (name or "").strip()
+    if not text:
+        return False
+    if any(token in text for token in ["标记地点", "不标记地点", "搜索地点", "没有找到匹配地点", "Vertical scroll bar", "Horizontal scroll bar"]):
+        return False
+    x = float(rect.get("x", 0) or 0)
+    y = float(rect.get("y", 0) or 0)
+    width = float(rect.get("width", 0) or 0)
+    height = float(rect.get("height", 0) or 0)
+    if width < 250 or height < 40:
+        return False
+    if x > 40 or y < 450:
+        return False
+    return True
 
 
 def _find_visible_location_option_elements(driver: WebDriver) -> list:

@@ -53,7 +53,7 @@ def test_build_changbaishan_note_draft_uses_requested_content():
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
-    assert draft.location == "长白山"
+    assert draft.location == "黑龙江"
     assert draft.album == "长白山"
     assert draft.allow_comments is True
 
@@ -67,7 +67,19 @@ def test_load_message_note_draft_reads_yaml_use_case():
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
-    assert draft.location == "长白山"
+    assert draft.location == "黑龙江"
+
+
+def test_load_message_note_draft_reads_no_location_variant():
+    testdata_path = (
+        Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
+    )
+
+    draft = load_message_note_draft("publish-note-changbaishan-no-location", testdata_path=testdata_path)
+
+    assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
+    assert draft.album == "长白山"
+    assert draft.location == ""
 
 
 def test_list_message_note_use_case_ids_reads_all_yaml_cases():
@@ -78,6 +90,7 @@ def test_list_message_note_use_case_ids_reads_all_yaml_cases():
     use_case_ids = list_message_note_use_case_ids(testdata_path=testdata_path)
 
     assert "publish-note-changbaishan" in use_case_ids
+    assert "publish-note-changbaishan-no-location" in use_case_ids
     assert "publish-note-yunnan-erhai" in use_case_ids
     assert "publish-note-hangzhou-hiking" in use_case_ids
     assert "publish-note-beijing-forbidden-city" in use_case_ids
@@ -154,6 +167,45 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
     ]
 
 
+def test_fill_message_note_form_skips_location_when_select_location_is_false(monkeypatch):
+    events = []
+    draft = load_message_note_draft(
+        "publish-note-changbaishan-no-location",
+        testdata_path=Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml",
+    )
+
+    monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
+    monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.album)))
+    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)))
+    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)))
+    monkeypatch.setattr(
+        message_detail,
+        "_append_note_topics_to_body",
+        lambda driver, topics: events.append(("body-topics", topics)),
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_fill_note_location",
+        lambda driver, location: events.append(("location", location)),
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_set_allow_comments",
+        lambda driver, allow_comments: events.append(("allow-comments", allow_comments)),
+    )
+
+    message_detail.fill_message_note_form(object(), draft, timeout=60)
+
+    assert events == [
+        "wait-form",
+        ("upload-image", draft.album),
+        ("title", draft.title),
+        ("body", draft.body),
+        ("body-topics", draft.topics),
+        ("allow-comments", True),
+    ]
+
+
 def test_browse_note_detail_delegates_to_snapshot_reader(monkeypatch):
     expected = object()
     events = []
@@ -166,6 +218,41 @@ def test_browse_note_detail_delegates_to_snapshot_reader(monkeypatch):
 
     assert message_detail.browse_note_detail(object(), timeout=18) is expected
     assert events == [("read-snapshot", 18)]
+
+
+def test_submit_message_note_treats_detail_page_as_success(monkeypatch):
+    events = []
+    recorded_sources = []
+    page_sources = iter([
+        "发布笔记 标题 正文",
+        "长白山真的有种让人瞬间安静下来的魔力 浏览 评论 写留言",
+    ])
+
+    class FakeDriver:
+        current_page_source = ""
+
+    driver = FakeDriver()
+
+    def fake_page_source(_driver):
+        try:
+            driver.current_page_source = next(page_sources)
+        except StopIteration:
+            pass
+        recorded_sources.append(driver.current_page_source)
+        return driver.current_page_source
+
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+    monkeypatch.setattr(message_detail, "_tap_note_submit", lambda driver: events.append("tap-submit") or True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", fake_page_source)
+    monkeypatch.setattr(message_detail, "message_note_publish_success_signal", lambda source: None)
+    monkeypatch.setattr(message_detail, "message_note_publish_error_signal", lambda source: None)
+    monkeypatch.setattr(message_detail, "message_note_form_is_visible", lambda source: "发布笔记" in source)
+    monkeypatch.setattr(message_detail, "message_detail_is_visible", lambda driver: "长白山" in driver.current_page_source)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    assert message_detail.submit_message_note(driver, timeout=3) == "detail-page"
+    assert events == ["hide-keyboard", "tap-submit", "hide-keyboard", "tap-submit"]
 
 
 def test_like_note_toggles_first_bottom_action_and_waits_for_count_change(monkeypatch):
@@ -333,6 +420,37 @@ def test_cropper_confirm_button_taps_button_center():
     assert taps == [("mobile: tap", {"x": 295.5, "y": 795.5})]
 
 
+def test_photo_picker_transition_completed_confirms_cropper_once(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "确认裁剪")
+    monkeypatch.setattr(message_detail, "_cropper_visible", lambda page_source: True)
+    monkeypatch.setattr(
+        message_detail,
+        "_confirm_note_image_cropper",
+        lambda driver, timeout=5: events.append(("confirm-cropper", timeout)) or True,
+    )
+
+    assert message_detail._photo_picker_transition_completed(object()) is True
+    assert events == [("confirm-cropper", 5)]
+
+
+def test_photo_picker_transition_completed_skips_cropper_after_first_confirmation(monkeypatch):
+    events = []
+    driver = type("FakeDriver", (), {"_cropper_confirmed_once": True})()
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "确认裁剪")
+    monkeypatch.setattr(message_detail, "_cropper_visible", lambda page_source: True)
+    monkeypatch.setattr(
+        message_detail,
+        "_confirm_note_image_cropper",
+        lambda driver, timeout=5: events.append(("confirm-cropper", timeout)) or True,
+    )
+
+    assert message_detail._photo_picker_transition_completed(driver) is True
+    assert events == []
+
+
 def test_choose_local_photo_taps_picker_done_when_system_picker_stays_open(monkeypatch):
     events = []
 
@@ -391,11 +509,11 @@ def test_choose_local_photo_opens_requested_album_first(monkeypatch):
 
     monkeypatch.setattr(
         message_detail,
-        "_find_photo_grid_candidates",
+        "_find_photo_grid_selection_badges",
         lambda driver: [
-            FakeElement({"x": 0, "y": 142, "width": 133, "height": 133}),
-            FakeElement({"x": 134, "y": 142, "width": 134, "height": 133}),
-            FakeElement({"x": 268, "y": 142, "width": 134, "height": 133}),
+            FakeElement({"x": 116, "y": 136, "width": 17, "height": 17}),
+            FakeElement({"x": 215, "y": 136, "width": 17, "height": 17}),
+            FakeElement({"x": 314, "y": 136, "width": 17, "height": 17}),
         ],
     )
     monkeypatch.setattr(message_detail, "_open_photo_album", lambda driver, album_name: events.append(("open-album", album_name)) or True)
@@ -404,9 +522,43 @@ def test_choose_local_photo_opens_requested_album_first(monkeypatch):
     assert message_detail._choose_local_photo(FakeDriver(), picture_index=2, album_name="长白山") is True
     assert events == [
         ("open-album", "长白山"),
+        ("mobile: tap", {"x": 124.5, "y": 144.5}),
+        ("mobile: tap", {"x": 223.5, "y": 144.5}),
+        ("mobile: tap", {"x": 322.5, "y": 144.5}),
+        "picker-done",
+    ]
+
+
+def test_choose_local_photo_falls_back_to_all_grid_images_when_badges_absent(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    class FakeDriver:
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_find_photo_grid_selection_badges", lambda driver: [])
+    monkeypatch.setattr(
+        message_detail,
+        "_find_photo_grid_candidates",
+        lambda driver: [
+            FakeElement({"x": 0, "y": 142, "width": 133, "height": 133}),
+            FakeElement({"x": 134, "y": 142, "width": 134, "height": 133}),
+            FakeElement({"x": 269, "y": 142, "width": 133, "height": 133}),
+        ],
+    )
+    monkeypatch.setattr(message_detail, "_open_photo_album", lambda driver, album_name: events.append(("open-album", album_name)) or True)
+    monkeypatch.setattr(message_detail, "_confirm_system_photo_picker_selection", lambda driver, timeout=10: events.append("picker-done") or True)
+
+    assert message_detail._choose_local_photo(FakeDriver(), album_name="云南洱海") is True
+    assert events == [
+        ("open-album", "云南洱海"),
         ("mobile: tap", {"x": 66.5, "y": 208.5}),
         ("mobile: tap", {"x": 201.0, "y": 208.5}),
-        ("mobile: tap", {"x": 335.0, "y": 208.5}),
+        ("mobile: tap", {"x": 335.5, "y": 208.5}),
         "picker-done",
     ]
 
@@ -494,6 +646,28 @@ def test_find_photo_grid_candidates_keeps_album_images_under_shorter_header():
     assert [element.rect for element in candidates] == [
         {"x": 0, "y": 142, "width": 133, "height": 133},
         {"x": 134, "y": 142, "width": 134, "height": 133},
+    ]
+
+
+def test_find_photo_grid_selection_badges_targets_top_right_selection_marks():
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            return [
+                FakeElement({"x": 116, "y": 136, "width": 17, "height": 17}),
+                FakeElement({"x": 215, "y": 136, "width": 17, "height": 17}),
+                FakeElement({"x": 13, "y": 205, "width": 18, "height": 17}),
+                FakeElement({"x": 0, "y": 142, "width": 133, "height": 133}),
+            ]
+
+    badges = message_detail._find_photo_grid_selection_badges(FakeDriver())
+
+    assert [element.rect for element in badges] == [
+        {"x": 116, "y": 136, "width": 17, "height": 17},
+        {"x": 215, "y": 136, "width": 17, "height": 17},
     ]
 
 
@@ -661,3 +835,136 @@ def test_choose_note_location_option_falls_back_to_first_visible_chip(monkeypatc
     assert message_detail._choose_note_location_option(driver, "长白山") is True
 
     assert taps == [("mobile: tap", {"x": 58.5, "y": 581.5})]
+
+
+def test_fill_note_location_opens_picker_from_unselected_row(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail, "_prepare_note_location_section", lambda driver: events.append("prepared"))
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_text_or_contains",
+        lambda driver, text: events.append(("tap", text)) or text == "不标记地点",
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_choose_note_location_option",
+        lambda driver, location: events.append(("choose", location)) or True,
+    )
+
+    message_detail._fill_note_location(object(), "长白山")
+
+    assert events == [
+        "prepared",
+        ("tap", "不标记地点"),
+        ("choose", "长白山"),
+    ]
+
+
+def test_choose_note_location_option_searches_requested_location_from_picker(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def __init__(self):
+            self.values = []
+
+        def click(self):
+            events.append("click-search-input")
+
+        def clear(self):
+            events.append("clear-search-input")
+
+        def send_keys(self, value):
+            self.values.append(value)
+            events.append(("type-search-input", value))
+
+    class FakeDriver:
+        def __init__(self):
+            self.search_input = FakeElement()
+
+        def find_element(self, by, value):
+            events.append(("find-element", by, value))
+            if "搜索地点" in value:
+                return self.search_input
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_location_picker_visible", lambda source: True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "搜索地点")
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: events.append(("tap-text", text)) or text == "搜索")
+    monkeypatch.setattr(
+        message_detail,
+        "_choose_first_valid_location_from_picker",
+        lambda driver: events.append("choose-first-location") or True,
+    )
+
+    assert message_detail._choose_note_location_option(FakeDriver(), "长白山") is True
+    assert events == [
+        ("find-element", message_detail.AppiumBy.XPATH, '//*[@name="搜索地点" or @label="搜索地点" or @value="搜索地点"]'),
+        "click-search-input",
+        "clear-search-input",
+        ("type-search-input", "长白山"),
+        "hide-keyboard",
+        ("tap-text", "搜索"),
+        "choose-first-location",
+    ]
+
+
+def test_choose_first_valid_location_from_picker_prefers_first_result_row(monkeypatch):
+    taps = []
+
+    class FakeElement:
+        def __init__(self, name, rect):
+            self._name = name
+            self.rect = rect
+
+        def get_attribute(self, attribute):
+            if attribute in {"name", "label", "value"}:
+                return self._name
+            return None
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            return [
+                FakeElement("不标记地点", {"x": 13, "y": 451, "width": 376, "height": 57}),
+                FakeElement("黑龙江炒货 上海市上海市杨浦区三门路316-2号", {"x": 13, "y": 521, "width": 376, "height": 90}),
+                FakeElement("黑龙江炒货(泰禾红御店) 上海市上海市宝山区恒高路83弄1-121号", {"x": 13, "y": 611, "width": 376, "height": 70}),
+                FakeElement("没有找到匹配地点，换个关键词试试", {"x": 13, "y": 765, "width": 376, "height": 46}),
+            ]
+
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_element_center",
+        lambda driver, element: taps.append(element.rect) or True,
+    )
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout=5: True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "done")
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert taps == [{"x": 13, "y": 521, "width": 376, "height": 90}]
+
+
+def test_location_picker_visible_ignores_collapsed_unselected_row():
+    page_source = 'name="不标记地点" label="不标记地点" enabled="true" visible="true"'
+
+    assert message_detail._location_picker_visible(page_source) is False
+
+
+def test_fill_note_location_skips_when_configured_to_not_mark_location(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail, "_prepare_note_location_section", lambda driver: events.append("prepared"))
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_text_or_contains",
+        lambda driver, text: events.append(("tap", text)) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_choose_note_location_option",
+        lambda driver, location: events.append(("choose", location)) or True,
+    )
+
+    message_detail._fill_note_location(object(), "不标记地点")
+
+    assert events == []

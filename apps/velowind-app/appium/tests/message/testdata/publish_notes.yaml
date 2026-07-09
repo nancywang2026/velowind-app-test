@@ -11,7 +11,21 @@ use_cases:
         - "#治愈系风景"
         - "#长白山天池"
         - "#东北旅行"
-      location: 长白山
+      location: 黑龙江
+      allow_comments: true
+  - id: publish-note-changbaishan-no-location
+    description: 发布笔记 - 长白山（不选地点）
+    note:
+      title: 长白山真的有种让人瞬间安静下来的魔力
+      body: 第一次去长白山，真的会被那种辽阔感击中。一路上的森林、山风、云雾都很治愈，像把城市里的疲惫慢慢吹散了。看到天池的那一刻，脑子里突然什么都不想了，只想安安静静站着看一会儿。照片根本装不下它的震撼，只有亲眼看到才会懂。
+      album: 长白山
+      topics:
+        - "#长白山"
+        - "#旅行日记"
+        - "#治愈系风景"
+        - "#长白山天池"
+        - "#东北旅行"
+      location:
       allow_comments: true
   - id: publish-note-yunnan-erhai
     description: 发布笔记 - 云南
