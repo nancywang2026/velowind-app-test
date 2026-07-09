@@ -512,6 +512,7 @@ def _fill_note_body(driver: WebDriver, body: str) -> None:
 
 
 def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
+    _clear_existing_note_images(driver)
     if not _tap_note_image_plus(driver):
         raise AssertionError("Unable to find the note image plus button")
 
@@ -541,6 +542,57 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
         "Photo library opened but no selectable photo was found. "
         "If this is a simulator, seed at least one image into Photos."
     )
+
+
+def _clear_existing_note_images(driver: WebDriver, max_images: int = 9) -> None:
+    if not message_note_form_is_visible(_safe_page_source(driver)):
+        return
+    for _ in range(max_images):
+        remove_buttons = _find_note_image_remove_buttons(driver)
+        if not remove_buttons:
+            return
+        before_count = len(remove_buttons)
+        if not _tap_note_image_remove_button(driver, remove_buttons[-1]):
+            return
+        if not _wait_until(lambda: len(_find_note_image_remove_buttons(driver)) < before_count, timeout=2):
+            return
+
+
+def _find_note_image_remove_buttons(driver: WebDriver) -> list:
+    try:
+        candidates = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
+    except (AttributeError, WebDriverException):
+        return []
+
+    remove_buttons = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for element in candidates:
+        rect = getattr(element, "rect", {}) or {}
+        x = float(rect.get("x", 0) or 0)
+        y = float(rect.get("y", 0) or 0)
+        width = float(rect.get("width", 0) or 0)
+        height = float(rect.get("height", 0) or 0)
+        if not (12 <= width <= 24 and 12 <= height <= 24):
+            continue
+        if not (120 <= y <= 180 and 70 <= x <= 390):
+            continue
+        key = (x, y, width, height)
+        if key in seen:
+            continue
+        seen.add(key)
+        remove_buttons.append(element)
+    remove_buttons.sort(key=lambda element: ((getattr(element, "rect", {}) or {}).get("x", 0)))
+    return remove_buttons
+
+
+def _tap_note_image_remove_button(driver: WebDriver, element) -> bool:
+    if _tap_element_center(driver, element):
+        return True
+    try:
+        element.click()
+        return True
+    except WebDriverException:
+        return False
 
 
 def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
@@ -668,35 +720,111 @@ def _choose_local_photo(driver: WebDriver, *, picture_index: int = 1, album_name
     normalized_index = max(1, picture_index)
     if album_name and not _open_photo_album(driver, album_name):
         return False
+    if album_name:
+        if not _tap_all_photo_grid_candidates(driver):
+            return False
+        return _confirm_system_photo_picker_selection(driver)
 
-    for xpath in _photo_candidate_xpaths(normalized_index):
-        try:
-            driver.find_element(AppiumBy.XPATH, xpath).click()
-            if _confirm_note_image_cropper(driver):
-                return True
-            return _confirm_system_photo_picker_selection(driver)
-        except (NoSuchElementException, WebDriverException):
-            continue
+    if _tap_photo_grid_candidate(driver, normalized_index):
+        if _confirm_note_image_cropper(driver):
+            return True
+        return _confirm_system_photo_picker_selection(driver)
     return False
 
 
 def _open_photo_album(driver: WebDriver, album_name: str) -> bool:
-    if _tap_named_element_center(driver, album_name):
-        time.sleep(0.5)
+    if _photo_album_title(driver) == album_name:
         return True
-    if _choose_first_option(driver, preferred_texts=[album_name]):
-        time.sleep(0.5)
-        return True
+    if not _switch_photo_picker_to_collections(driver):
+        return False
+    for _ in range(4):
+        if _tap_named_element_center(driver, album_name):
+            time.sleep(0.5)
+            if _photo_album_title(driver) == album_name:
+                return True
+        try:
+            swipe_vertical(driver, direction="up")
+        except WebDriverException:
+            pass
+        time.sleep(0.3)
     return False
 
 
-def _photo_candidate_xpaths(picture_index: int) -> list[str]:
-    return [
-        f"(//XCUIElementTypeCell)[{picture_index}]",
-        f"(//XCUIElementTypeImage)[{picture_index}]",
-        "(//XCUIElementTypeCell)[1]",
-        "(//XCUIElementTypeImage)[1]",
-    ]
+def _tap_photo_grid_candidate(driver: WebDriver, picture_index: int) -> bool:
+    candidates = _find_photo_grid_candidates(driver)
+    if not candidates:
+        return False
+    target_index = min(max(1, picture_index), len(candidates)) - 1
+    rect = _rect_snapshot(candidates[target_index])
+    if rect is None:
+        return False
+    return _tap_rect_center(driver, rect)
+
+
+def _tap_all_photo_grid_candidates(driver: WebDriver) -> bool:
+    candidates = _find_photo_grid_candidates(driver)
+    rects = [rect for rect in (_rect_snapshot(candidate) for candidate in candidates) if rect is not None]
+    tapped_any = False
+    for rect in rects:
+        if _tap_rect_center(driver, rect):
+            tapped_any = True
+            time.sleep(0.2)
+    return tapped_any
+
+
+def _find_photo_grid_candidates(driver: WebDriver) -> list:
+    candidates = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for xpath in [
+        "//XCUIElementTypeImage[@name='PXGGridLayout-Info']",
+        "//XCUIElementTypeImage[contains(@label, 'Screenshot')]",
+        "//XCUIElementTypeImage",
+    ]:
+        try:
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (AttributeError, WebDriverException):
+            continue
+        for element in elements:
+            rect = getattr(element, "rect", {}) or {}
+            x = float(rect.get("x", 0) or 0)
+            y = float(rect.get("y", 0) or 0)
+            width = float(rect.get("width", 0) or 0)
+            height = float(rect.get("height", 0) or 0)
+            if width < 80 or height < 80:
+                continue
+            if y < 135:
+                continue
+            key = (x, y, width, height)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(element)
+    candidates.sort(key=lambda element: (((getattr(element, "rect", {}) or {}).get("y", 0)), ((getattr(element, "rect", {}) or {}).get("x", 0))))
+    return candidates
+
+
+def _photo_album_title(driver: WebDriver) -> str | None:
+    for xpath in [
+        "//XCUIElementTypeNavigationBar/XCUIElementTypeStaticText[1]",
+        "(//XCUIElementTypeNavigationBar//*[self::XCUIElementTypeStaticText or self::XCUIElementTypeOther][@name])[1]",
+    ]:
+        try:
+            text = driver.find_element(AppiumBy.XPATH, xpath).get_attribute("name")
+            normalized = (text or "").strip()
+            if normalized and normalized not in {"照片"}:
+                return normalized
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+    return None
+
+
+def _switch_photo_picker_to_collections(driver: WebDriver) -> bool:
+    if _photo_album_title(driver) not in {None, "选择最多9张照片。"}:
+        return True
+    if not _tap_text_or_contains(driver, "精选集"):
+        return False
+    time.sleep(0.5)
+    return True
 
 
 def _confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
@@ -930,26 +1058,47 @@ def _element_name(element) -> str:
 
 
 def _tap_element_center(driver: WebDriver, element) -> bool:
-    rect = getattr(element, "rect", {}) or {}
-    width = rect.get("width", 0) or 0
-    height = rect.get("height", 0) or 0
-    if width <= 0 or height <= 0:
+    rect = _rect_snapshot(element)
+    if rect is None:
         return False
+    if _tap_rect_center(driver, rect):
+        return True
+    try:
+        element.click()
+        return True
+    except WebDriverException:
+        return False
+
+
+def _rect_snapshot(element) -> dict[str, float] | None:
+    try:
+        rect = getattr(element, "rect", {}) or {}
+    except WebDriverException:
+        return None
+    width = float(rect.get("width", 0) or 0)
+    height = float(rect.get("height", 0) or 0)
+    if width <= 0 or height <= 0:
+        return None
+    return {
+        "x": float(rect.get("x", 0) or 0),
+        "y": float(rect.get("y", 0) or 0),
+        "width": width,
+        "height": height,
+    }
+
+
+def _tap_rect_center(driver: WebDriver, rect: dict[str, float]) -> bool:
     try:
         driver.execute_script(
             "mobile: tap",
             {
-                "x": rect["x"] + width / 2,
-                "y": rect["y"] + height / 2,
+                "x": rect["x"] + rect["width"] / 2,
+                "y": rect["y"] + rect["height"] / 2,
             },
         )
         return True
     except WebDriverException:
-        try:
-            element.click()
-            return True
-        except WebDriverException:
-            return False
+        return False
 
 
 def _tap_named_element_center(driver: WebDriver, text: str) -> bool:

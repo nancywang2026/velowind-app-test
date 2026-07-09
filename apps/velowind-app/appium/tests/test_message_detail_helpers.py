@@ -1,5 +1,6 @@
 from velowind_appium.modules import message_detail
 from pathlib import Path
+from selenium.common.exceptions import StaleElementReferenceException
 
 from velowind_appium.modules.message_detail import (
     build_changbaishan_note_draft,
@@ -161,6 +162,7 @@ def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeyp
 
 def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch):
     draft = build_changbaishan_note_draft()
+    monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: None)
     monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: True)
     monkeypatch.setattr(message_detail, "_choose_photo_library_source", lambda driver: True)
     monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: False)
@@ -200,19 +202,17 @@ def test_choose_local_photo_confirms_cropper_when_present(monkeypatch):
     events = []
 
     class FakeElement:
-        def click(self):
-            events.append("pick-photo")
+        rect = {"x": 20, "y": 140, "width": 120, "height": 120}
+    monkeypatch.setattr(message_detail, "_find_photo_grid_candidates", lambda driver: [FakeElement()])
 
     class FakeDriver:
-        def find_element(self, by, value):
-            if value == "(//XCUIElementTypeCell)[1]":
-                return FakeElement()
-            raise message_detail.NoSuchElementException()
+        def execute_script(self, script, payload):
+            events.append((script, payload))
 
     monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: events.append("confirm-cropper") or True)
 
     assert message_detail._choose_local_photo(FakeDriver(), picture_index=1, album_name=None) is True
-    assert events == ["pick-photo", "confirm-cropper"]
+    assert events == [("mobile: tap", {"x": 80.0, "y": 200.0}), "confirm-cropper"]
 
 
 def test_cropper_confirm_button_taps_button_center():
@@ -238,59 +238,162 @@ def test_choose_local_photo_taps_picker_done_when_system_picker_stays_open(monke
     events = []
 
     class FakeElement:
-        def click(self):
-            events.append("pick-photo")
+        rect = {"x": 20, "y": 140, "width": 120, "height": 120}
+    monkeypatch.setattr(message_detail, "_find_photo_grid_candidates", lambda driver: [FakeElement()])
 
     class FakeDriver:
-        def find_element(self, by, value):
-            if value == "(//XCUIElementTypeCell)[1]":
-                return FakeElement()
-            raise message_detail.NoSuchElementException()
+        def execute_script(self, script, payload):
+            events.append((script, payload))
 
     monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: False)
     monkeypatch.setattr(message_detail, "_confirm_system_photo_picker_selection", lambda driver, timeout=10: events.append("picker-done") or True)
 
     assert message_detail._choose_local_photo(FakeDriver(), picture_index=1, album_name=None) is True
-    assert events == ["pick-photo", "picker-done"]
+    assert events == [("mobile: tap", {"x": 80.0, "y": 200.0}), "picker-done"]
 
 
 def test_choose_local_photo_prefers_requested_picture_index(monkeypatch):
     events = []
 
     class FakeElement:
-        def click(self):
-            events.append("pick-photo")
+        def __init__(self, rect):
+            self.rect = rect
+
+    monkeypatch.setattr(
+        message_detail,
+        "_find_photo_grid_candidates",
+        lambda driver: [
+            FakeElement({"x": 20, "y": 140, "width": 120, "height": 120}),
+            FakeElement({"x": 160, "y": 140, "width": 120, "height": 120}),
+            FakeElement({"x": 300, "y": 140, "width": 120, "height": 120}),
+        ],
+    )
 
     class FakeDriver:
-        def find_element(self, by, value):
-            if value == "(//XCUIElementTypeCell)[3]":
-                return FakeElement()
-            raise message_detail.NoSuchElementException()
+        def execute_script(self, script, payload):
+            events.append((script, payload))
 
     monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: True)
 
     assert message_detail._choose_local_photo(FakeDriver(), picture_index=3, album_name=None) is True
-    assert events == ["pick-photo"]
+    assert events == [("mobile: tap", {"x": 360.0, "y": 200.0})]
 
 
 def test_choose_local_photo_opens_requested_album_first(monkeypatch):
     events = []
 
     class FakeElement:
-        def click(self):
-            events.append("pick-photo")
+        def __init__(self, rect):
+            self.rect = rect
 
     class FakeDriver:
-        def find_element(self, by, value):
-            if value == "(//XCUIElementTypeCell)[2]":
-                return FakeElement()
-            raise message_detail.NoSuchElementException()
+        def execute_script(self, script, payload):
+            events.append((script, payload))
 
+    monkeypatch.setattr(
+        message_detail,
+        "_find_photo_grid_candidates",
+        lambda driver: [
+            FakeElement({"x": 0, "y": 142, "width": 133, "height": 133}),
+            FakeElement({"x": 134, "y": 142, "width": 134, "height": 133}),
+        ],
+    )
     monkeypatch.setattr(message_detail, "_open_photo_album", lambda driver, album_name: events.append(("open-album", album_name)) or True)
-    monkeypatch.setattr(message_detail, "_confirm_note_image_cropper", lambda driver, timeout=10: True)
+    monkeypatch.setattr(message_detail, "_confirm_system_photo_picker_selection", lambda driver, timeout=10: events.append("picker-done") or True)
 
     assert message_detail._choose_local_photo(FakeDriver(), picture_index=2, album_name="长白山") is True
-    assert events == [("open-album", "长白山"), "pick-photo"]
+    assert events == [
+        ("open-album", "长白山"),
+        ("mobile: tap", {"x": 66.5, "y": 208.5}),
+        ("mobile: tap", {"x": 201.0, "y": 208.5}),
+        "picker-done",
+    ]
+
+
+def test_open_photo_album_switches_to_collections_before_switching(monkeypatch):
+    events = []
+    titles = iter([None, None, "杭州"])
+
+    monkeypatch.setattr(message_detail, "_photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: events.append(("tap-text", text)) or text == "精选集")
+    monkeypatch.setattr(message_detail, "_tap_named_element_center", lambda driver, text: events.append(("tap-album", text)) or text == "杭州")
+    monkeypatch.setattr(message_detail, "swipe_vertical", lambda driver, direction="up": events.append(("swipe", direction)))
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "")
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    assert message_detail._open_photo_album(object(), "杭州") is True
+    assert events == [
+        ("tap-text", "精选集"),
+        ("tap-album", "杭州"),
+    ]
+
+
+def test_open_photo_album_does_not_treat_background_page_text_as_success(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail, "_photo_album_title", lambda driver: "选择最多9张照片。")
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: events.append(("tap-text", text)) or text == "精选集")
+    monkeypatch.setattr(message_detail, "_tap_named_element_center", lambda driver, text: events.append(("tap-album", text)) or False)
+    monkeypatch.setattr(message_detail, "swipe_vertical", lambda driver, direction="up": events.append(("swipe", direction)))
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "发布笔记 长白山真的有种让人瞬间安静下来的魔力")
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    assert message_detail._open_photo_album(object(), "长白山") is False
+    assert events == [
+        ("tap-text", "精选集"),
+        ("tap-album", "长白山"),
+        ("swipe", "up"),
+        ("tap-album", "长白山"),
+        ("swipe", "up"),
+        ("tap-album", "长白山"),
+        ("swipe", "up"),
+        ("tap-album", "长白山"),
+        ("swipe", "up"),
+    ]
+
+
+def test_tap_photo_grid_candidate_uses_rect_snapshot_when_element_stales(monkeypatch):
+    class FakeElement:
+        def __init__(self):
+            self._reads = 0
+
+        @property
+        def rect(self):
+            self._reads += 1
+            if self._reads > 1:
+                raise StaleElementReferenceException("stale")
+            return {"x": 134, "y": 184, "width": 134, "height": 133}
+
+    taps = []
+    monkeypatch.setattr(message_detail, "_find_photo_grid_candidates", lambda driver: [FakeElement()])
+
+    class FakeDriver:
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_photo_grid_candidate(FakeDriver(), 1) is True
+    assert taps == [("mobile: tap", {"x": 201.0, "y": 250.5})]
+
+
+def test_find_photo_grid_candidates_keeps_album_images_under_shorter_header():
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            return [
+                FakeElement({"x": 0, "y": 142, "width": 133, "height": 133}),
+                FakeElement({"x": 134, "y": 142, "width": 134, "height": 133}),
+                FakeElement({"x": 346, "y": 92, "width": 36, "height": 36}),
+            ]
+
+    candidates = message_detail._find_photo_grid_candidates(FakeDriver())
+
+    assert [element.rect for element in candidates] == [
+        {"x": 0, "y": 142, "width": 133, "height": 133},
+        {"x": 134, "y": 142, "width": 134, "height": 133},
+    ]
 
 
 def test_note_submit_prefers_bottom_publish_button_region():
@@ -320,6 +423,86 @@ def test_note_submit_prefers_bottom_publish_button_region():
 
     assert message_detail._tap_note_submit(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 267.0, "y": 804.5})]
+
+
+def test_clear_existing_note_images_taps_scoped_remove_buttons_until_gone(monkeypatch):
+    taps = []
+
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    groups = iter([
+        [
+            FakeElement({"x": 86, "y": 132, "width": 17, "height": 17}),
+            FakeElement({"x": 185, "y": 132, "width": 17, "height": 17}),
+        ],
+        [FakeElement({"x": 86, "y": 132, "width": 17, "height": 17})],
+        [FakeElement({"x": 86, "y": 132, "width": 17, "height": 17})],
+        [],
+    ])
+
+    monkeypatch.setattr(message_detail, "message_note_form_is_visible", lambda source: True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "发布笔记 标题 正文")
+    monkeypatch.setattr(message_detail, "_find_note_image_remove_buttons", lambda driver: next(groups, []))
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+
+    class FakeDriver:
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    message_detail._clear_existing_note_images(FakeDriver())
+
+    assert taps == [
+        ("mobile: tap", {"x": 193.5, "y": 140.5}),
+        ("mobile: tap", {"x": 94.5, "y": 140.5}),
+    ]
+
+
+def test_tap_note_image_remove_button_falls_back_to_click_when_needed():
+    events = []
+
+    class FakeElement:
+        rect = {"x": 86, "y": 132, "width": 17, "height": 17}
+
+        def click(self):
+            events.append("click")
+
+    monkeypatch_driver = type("FakeDriver", (), {})()
+
+    original = message_detail._tap_element_center
+    try:
+        message_detail._tap_element_center = lambda driver, element: False
+        assert message_detail._tap_note_image_remove_button(monkeypatch_driver, FakeElement()) is True
+    finally:
+        message_detail._tap_element_center = original
+
+    assert events == ["click"]
+
+
+def test_find_note_image_remove_buttons_scopes_to_top_thumbnail_strip():
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            return [
+                FakeElement({"x": 86, "y": 132, "width": 17, "height": 17}),
+                FakeElement({"x": 185, "y": 132, "width": 17, "height": 17}),
+                FakeElement({"x": 17, "y": 88, "width": 7, "height": 12}),
+                FakeElement({"x": 118, "y": 207, "width": 6, "height": 13}),
+                FakeElement({"x": 364, "y": 78, "width": 34, "height": 31}),
+            ]
+
+    buttons = message_detail._find_note_image_remove_buttons(FakeDriver())
+
+    assert [element.rect for element in buttons] == [
+        {"x": 86, "y": 132, "width": 17, "height": 17},
+        {"x": 185, "y": 132, "width": 17, "height": 17},
+    ]
 
 
 def test_choose_note_location_option_taps_first_visible_chip(monkeypatch):
