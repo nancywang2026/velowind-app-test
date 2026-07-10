@@ -1,0 +1,185 @@
+activities:
+  - activityName: "太行山峡谷耐力骑行挑战"
+    activityType: "骑行"
+    province: "浙江省"
+    city: "石家庄市"
+    album: "太行山"
+    activityDescription: "围绕太行山沿线打造的中高强度骑行活动，适合具备一定长距离骑行经验的用户参与。"
+    activityItinerary:
+      - title: "Day1 集合说明"
+        subtitle: "石家庄集合签到"
+        body: "完成签到、路线说明与安全须知确认。"
+      - title: "Day2 主线骑行"
+        subtitle: "峡谷耐力挑战"
+        body: "完成主线路骑行并设置2个补给点。"
+      - title: "Day3 返程收尾"
+        subtitle: "自由骑行返程"
+        body: "自由骑行返程，完成活动复盘后解散。"
+    advancedOptions:
+      referenceDuration: "2天1晚"
+      activityTags: ["耐力骑行", "山地路线", "周末活动"]
+      totalMileage: 142
+      maxAltitude: 1680
+      elevationGain: 1950
+      defaultMeetingPoint: "石家庄站东广场"
+      sceneryTags: ["峡谷", "山脉", "乡村公路"]
+      suitableMonths: ["4月", "5月", "9月", "10月"]
+      riskLevel: "中"
+
+#  - activityName: "青岛海岸线春日骑游"
+#    activityType: "骑行"
+#    province: "山东省"
+#    city: "青岛市"
+#    album: 长白山
+#    activityDescription: "以海岸观景和城市慢骑为核心的轻量级活动，适合休闲骑行与团队出游。"
+#    activityItinerary: "D1 青岛集合和车辆调试；D2 沿海岸线完成骑行打卡；D3 八大关自由骑游后解散。"
+#    advancedOptions:
+#      referenceDuration: "2天1晚"
+#      activityTags: ["海景路线", "城市骑行", "休闲活动"]
+#      totalMileage: 78
+#      maxAltitude: 220
+#      elevationGain: 460
+#      defaultMeetingPoint: "青岛五四广场地铁站A口"
+#      sceneryTags: ["海岸线", "沙滩", "城市天际线"]
+#      suitableMonths: ["3月", "4月", "5月", "9月"]
+#      riskLevel: "低"
+#
+#  - activityName: "西湖茶山环线体验骑"
+#    activityType: "骑行"
+#    province: "浙江省"
+#    city: "杭州市"
+#    album: 杭州西湖
+#    activityDescription: "结合茶园山路与西湖周边景观的精品骑行活动，适合摄影和轻运动爱好者。"
+#    activityItinerary: "D1 杭州集合并环湖热身；D2 茶山主线路骑行与午间补给；D3 打卡梅家坞后返程。"
+#    advancedOptions:
+#      referenceDuration: "3天2晚"
+#      activityTags: ["茶山路线", "摄影活动", "轻挑战"]
+#      totalMileage: 96
+#      maxAltitude: 510
+#      elevationGain: 920
+#      defaultMeetingPoint: "杭州东站西广场"
+#      sceneryTags: ["茶园", "湖景", "山路"]
+#      suitableMonths: ["3月", "4月", "10月", "11月"]
+#      riskLevel: "低"
+#
+#  - activityName: "黄山云谷爬坡骑行训练营"
+#    activityType: "骑行"
+#    province: "安徽省"
+#    city: "黄山市"
+#    album: 杭州西湖
+#    activityDescription: "以连续爬坡训练和山地耐力提升为目标的活动，适合有训练需求的进阶骑友。"
+#    activityItinerary: "D1 黄山集合与训练说明；D2 云谷段爬坡训练；D3 短途恢复骑行后解散。"
+#    advancedOptions:
+#      referenceDuration: "3天2晚"
+#      activityTags: ["训练营", "爬坡强化", "进阶骑行"]
+#      totalMileage: 118
+#      maxAltitude: 1320
+#      elevationGain: 2100
+#      defaultMeetingPoint: "黄山北站出站口"
+#      sceneryTags: ["群山", "云海", "森林"]
+#      suitableMonths: ["4月", "5月", "9月", "10月"]
+#      riskLevel: "中"
+#
+#  - activityName: "环洱海轻奢风景骑行"
+#    activityType: "骑行"
+#    province: "云南省"
+#    city: "大理市"
+#    album: 云南洱海
+#    activityDescription: "围绕洱海设计的风景型骑行活动，以轻松节奏、拍照打卡和沿途补给体验为主。"
+#    activityItinerary: "D1 大理古城集合；D2 环洱海主线路骑行；D3 喜洲古镇休闲骑游与返程。"
+#    advancedOptions:
+#      referenceDuration: "3天2晚"
+#      activityTags: ["环湖骑行", "轻奢路线", "风景活动"]
+#      totalMileage: 128
+#      maxAltitude: 2050
+#      elevationGain: 780
+#      defaultMeetingPoint: "大理古城南门"
+#      sceneryTags: ["湖泊", "雪山", "田野"]
+#      suitableMonths: ["2月", "3月", "4月", "11月"]
+#      riskLevel: "低"
+#
+#  - activityName: "长白山林海越野骑行体验"
+#    activityType: "骑行"
+#    province: "吉林省"
+#    city: "白山市"
+#    album: 长白山
+#    activityDescription: "以森林公路和起伏地形为特色的越野骑行活动，强调自然体验与耐力挑战。"
+#    activityItinerary: "D1 白山集合和安全培训；D2 林海主线路骑行；D3 短线收尾与活动结束。"
+#    advancedOptions:
+#      referenceDuration: "3天2晚"
+#      activityTags: ["越野骑行", "森林路线", "自然探索"]
+#      totalMileage: 110
+#      maxAltitude: 1460
+#      elevationGain: 1540
+#      defaultMeetingPoint: "白山站广场"
+#      sceneryTags: ["森林", "山谷", "溪流"]
+#      suitableMonths: ["6月", "7月", "8月", "9月"]
+#      riskLevel: "中"
+#
+#  - activityName: "漓江田园风光骑游计划"
+#    activityType: "骑行"
+#    province: "广西壮族自治区"
+#    city: "桂林市"
+#    activityDescription: "串联喀斯特地貌与田园乡村的观景骑游活动，路线节奏舒适，适合团队体验。"
+#    activityItinerary: "D1 桂林集合与活动介绍；D2 漓江沿线骑行打卡；D3 阳朔短途骑游后解散。"
+#    advancedOptions:
+#      referenceDuration: "3天2晚"
+#      activityTags: ["田园骑游", "喀斯特风光", "休闲路线"]
+#      totalMileage: 88
+#      maxAltitude: 380
+#      elevationGain: 690
+#      defaultMeetingPoint: "桂林站站前广场"
+#      sceneryTags: ["山水", "田园", "江景"]
+#      suitableMonths: ["3月", "4月", "10月", "11月"]
+#      riskLevel: "低"
+#
+#  - activityName: "鼓浪屿滨海慢骑嘉年华"
+#    activityType: "骑行"
+#    province: "福建省"
+#    city: "厦门市"
+#    activityDescription: "融合海滨慢骑、城市街景和社交互动的轻量活动，适合新手与休闲用户参与。"
+#    activityItinerary: "D1 厦门集合和破冰交流；D2 环岛路滨海骑行；D3 自由活动与返程。"
+#    advancedOptions:
+#      referenceDuration: "2天1晚"
+#      activityTags: ["滨海慢骑", "城市活动", "新手友好"]
+#      totalMileage: 62
+#      maxAltitude: 150
+#      elevationGain: 320
+#      defaultMeetingPoint: "厦门会展中心地铁站"
+#      sceneryTags: ["海景", "椰林", "城市街景"]
+#      suitableMonths: ["3月", "4月", "11月", "12月"]
+#      riskLevel: "低"
+#
+#  - activityName: "祁连草原高原骑行挑战"
+#    activityType: "骑行"
+#    province: "青海省"
+#    city: "海北藏族自治州"
+#    activityDescription: "在高海拔草原公路开展的挑战型骑行活动，适合具备较强体能和高原适应能力的骑友。"
+#    activityItinerary: "D1 海北集合适应海拔；D2 完成草原长距离骑行；D3 恢复骑行与返程。"
+#    advancedOptions:
+#      referenceDuration: "3天2晚"
+#      activityTags: ["高原骑行", "长距离", "挑战活动"]
+#      totalMileage: 156
+#      maxAltitude: 3560
+#      elevationGain: 1320
+#      defaultMeetingPoint: "海晏县汽车站"
+#      sceneryTags: ["草原", "雪山", "高原湖泊"]
+#      suitableMonths: ["6月", "7月", "8月", "9月"]
+#      riskLevel: "高"
+#
+#  - activityName: "天山脚下环湖骑行营"
+#    activityType: "骑行"
+#    province: "新疆维吾尔自治区"
+#    city: "乌鲁木齐市"
+#    activityDescription: "依托天山与湖区景观设计的中长途骑行活动，兼具风景观赏与耐力训练价值。"
+#    activityItinerary: "D1 乌鲁木齐集合出发；D2 环湖主线路骑行并设置补给；D3 营地收尾活动后返程。"
+#    advancedOptions:
+#      referenceDuration: "3天2晚"
+#      activityTags: ["环湖路线", "高原风景", "耐力训练"]
+#      totalMileage: 134
+#      maxAltitude: 2480
+#      elevationGain: 1260
+#      defaultMeetingPoint: "乌鲁木齐高铁站北广场"
+#      sceneryTags: ["雪山", "湖泊", "草场"]
+#      suitableMonths: ["5月", "6月", "9月", "10月"]
+#      riskLevel: "中"

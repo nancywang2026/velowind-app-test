@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import html
+from pathlib import Path
 import re
 import time
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
+import yaml
 
 from velowind_appium.actions import (
     swipe_vertical,
@@ -59,16 +61,25 @@ SELECT_FIELD_KEYWORDS = {
     "contact": ["联系方式", "联系人", "手机号", "微信"],
 }
 PLACEHOLDER_PATTERN = re.compile(r"(请输入|选择|填写|上传).+")
+ACTIVITY_TESTDATA_FILE = Path(__file__).resolve().parents[2] / "tests" / "activity" / "testdata" / "publish_activity.yaml"
+
+
+@dataclass(frozen=True)
+class ActivityItineraryItem:
+    title: str
+    subtitle: str
+    body: str
 
 
 @dataclass(frozen=True)
 class ActivityDraft:
     title: str
     description: str
-    itinerary: str
+    itinerary: list[ActivityItineraryItem]
     activity_type: str
     province: str
     city: str
+    album: str | None
     contact_name: str
     contact_phone: str
     location: str
@@ -76,22 +87,32 @@ class ActivityDraft:
     fee: str
 
 
-def build_activity_draft() -> ActivityDraft:
-    now = datetime.now()
-    stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+def build_activity_draft(*, testdata_path: Path | None = None) -> ActivityDraft:
+    return _build_activity_draft_from_case(_load_activity_cases(testdata_path=testdata_path)[0])
+
+
+def _load_activity_cases(*, testdata_path: Path | None = None) -> list[dict]:
+    source_path = testdata_path or ACTIVITY_TESTDATA_FILE
+    data = yaml.safe_load(source_path.read_text(encoding="utf-8")) or {}
+    activities = data.get("activities", [])
+    if not isinstance(activities, list) or not activities:
+        raise AssertionError(f"Invalid or empty activity publish testdata: {source_path}")
+    return [item for item in activities if isinstance(item, dict)]
+
+
+def _build_activity_draft_from_case(case: dict) -> ActivityDraft:
+    advanced = case.get("advancedOptions", {}) if isinstance(case.get("advancedOptions"), dict) else {}
     return ActivityDraft(
-        title="杭州西湖徒步",
-        description=f"自动化测试活动描述，创建时间：{stamp}。用于验证发布活动流程可提交审核。",
-        itinerary=(
-            f"09:00 集合签到；10:00 热身出发；12:00 补给休息；15:00 返回解散。"
-            f" 自动化填写时间：{stamp}"
-        ),
-        activity_type="骑行",
-        province="浙江省",
-        city="杭州",
+        title=str(case.get("activityName", "")).strip(),
+        description=str(case.get("activityDescription", "")).strip(),
+        itinerary=_normalize_itinerary(case.get("activityItinerary", "")),
+        activity_type=str(case.get("activityType", "")).strip(),
+        province=str(case.get("province", "")).strip(),
+        city=str(case.get("city", "")).strip(),
+        album=str(case.get("album", "")).strip() or None,
         contact_name="自动化测试",
         contact_phone="13800138000",
-        location="自动化测试集合点",
+        location=str(advanced.get("defaultMeetingPoint", "")).strip(),
         max_participants="20",
         fee="0",
     )
@@ -155,7 +176,7 @@ def open_activity_publisher(
 def fill_activity_form(driver: WebDriver, draft: ActivityDraft, timeout: int = 60) -> None:
     wait_for_activity_form(driver, timeout=timeout)
 
-    _upload_activity_image(driver)
+    _upload_activity_image(driver, draft)
     _fill_title(driver, draft.title)
     _select_activity_type(driver, draft.activity_type)
     _select_province(driver, draft.province)
@@ -271,8 +292,9 @@ def _fill_title(driver: WebDriver, title: str) -> None:
 
 def _fill_description(driver: WebDriver, description: str) -> None:
     if _open_editor(driver, "点击补充活动亮点、行程和适合人群"):
-        _fill_editor_body(driver, description)
+        _fill_editor_entry(driver, "活动概览", description)
         _close_editor(driver)
+        _assert_editor_saved(driver, "点击补充活动亮点、行程和适合人群", "activity description")
         return
     for keyword in DESCRIPTION_LABEL_KEYWORDS:
         if _fill_input_near_label(driver, keyword, description, prefer_text_view=True):
@@ -280,10 +302,16 @@ def _fill_description(driver: WebDriver, description: str) -> None:
     raise AssertionError("Unable to open or fill the activity description editor")
 
 
-def _fill_itinerary(driver: WebDriver, itinerary: str) -> None:
+def _fill_itinerary(driver: WebDriver, itinerary: list[ActivityItineraryItem]) -> None:
     if _open_editor(driver, "点击补充活动行程安排"):
-        _fill_editor_body(driver, itinerary)
+        for index, item in enumerate(itinerary):
+            if index > 0:
+                _dismiss_editor_keyboard(driver)
+                if not _add_itinerary_segment(driver):
+                    raise AssertionError(f"Unable to add activity itinerary segment at index {index}")
+            _fill_itinerary_editor_item(driver, index, item)
         _close_editor(driver)
+        _assert_editor_saved(driver, "点击补充活动行程安排", "activity itinerary")
         return
     raise AssertionError("Unable to open or fill the activity itinerary editor")
 
@@ -291,6 +319,7 @@ def _fill_itinerary(driver: WebDriver, itinerary: str) -> None:
 def _fill_city(driver: WebDriver, city: str) -> None:
     for keyword in ["城市名称", "例如：杭州"]:
         if _fill_input_near_label(driver, keyword, city):
+            _hide_keyboard(driver)
             return
     for xpath in [
         '//XCUIElementTypeTextField[contains(@value, "例如：")]',
@@ -298,6 +327,7 @@ def _fill_city(driver: WebDriver, city: str) -> None:
     ]:
         try:
             _replace_text(driver.find_element(AppiumBy.XPATH, xpath), city)
+            _hide_keyboard(driver)
             return
         except (NoSuchElementException, WebDriverException):
             continue
@@ -315,55 +345,75 @@ def _select_province(driver: WebDriver, province: str) -> None:
     _choose_specific_overlay_option(driver, _province_option_texts(province))
 
 
-def _upload_activity_image(driver: WebDriver) -> None:
+def _upload_activity_image(driver: WebDriver, draft: ActivityDraft) -> None:
     if not _tap_image_picker(driver):
         return
 
-    _choose_photo_library_source(driver)
+    if not _choose_photo_library_source(driver):
+        raise AssertionError("Unable to choose phone photo library as the image source")
 
     for text in ["允许访问所有照片", "允许", "好"]:
         tap_text_if_present(driver, text, timeout=2)
 
-    if _choose_local_photo(driver):
+    if not _photo_library_visible(driver, timeout=5):
+        _tap_activity_photo_library_sheet_option(driver)
+        for text in ["允许访问所有照片", "允许", "好"]:
+            tap_text_if_present(driver, text, timeout=2)
+
+    if not _photo_library_visible(driver, timeout=5):
+        raise AssertionError(
+            "Photo library did not open after choosing phone album. "
+            "Verify photo permissions and that the system picker is visible."
+        )
+
+    if _choose_local_photo(driver, album_name=draft.album):
         return
 
     if _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and _choose_local_photo(
-        driver
+        driver,
+        album_name=draft.album,
     ):
         return
     raise AssertionError("Unable to upload an activity image from the local photo library")
 
 
 def _choose_photo_library_source(driver: WebDriver) -> bool:
-    if tap_text_if_present(driver, "从手机相册选择", timeout=1):
+    from velowind_appium.modules.message_detail import _tap_photo_source_option
+
+    source_texts = ["从手机相册选择", "手机相册", "从相册选择", "相册"]
+    if _tap_photo_source_option(driver, source_texts):
         return True
+    for text in source_texts:
+        if tap_text_if_present(driver, text, timeout=1):
+            return True
+    return _tap_activity_photo_library_sheet_option(driver)
+
+
+def _choose_local_photo(driver: WebDriver, *, album_name: str | None = None) -> bool:
+    from velowind_appium.modules.message_detail import _choose_local_photo as _choose_note_local_photo
+
+    return bool(_choose_note_local_photo(driver, album_name=album_name))
+
+
+def _photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
+    from velowind_appium.modules.message_detail import _photo_library_visible as _note_photo_library_visible
+
+    return bool(_note_photo_library_visible(driver, timeout=timeout))
+
+
+def _tap_activity_photo_library_sheet_option(driver: WebDriver) -> bool:
     try:
         size = driver.get_window_size()
         driver.execute_script(
             "mobile: tap",
             {
                 "x": size["width"] * 0.5,
-                "y": size["height"] * 0.87,
+                "y": size["height"] * 0.90,
             },
         )
         return True
     except WebDriverException:
         return False
-
-
-def _choose_local_photo(driver: WebDriver) -> bool:
-    for xpath in [
-        "(//XCUIElementTypeCell)[1]",
-        "(//XCUIElementTypeImage)[1]",
-    ]:
-        try:
-            driver.find_element(AppiumBy.XPATH, xpath).click()
-            tap_text_if_present(driver, "完成", timeout=2)
-            tap_text_if_present(driver, "确定", timeout=2)
-            return
-        except (NoSuchElementException, WebDriverException):
-            continue
-    return False
 
 
 def _fill_known_text_fields(driver: WebDriver, draft: ActivityDraft) -> None:
@@ -407,11 +457,7 @@ def _resolve_picker_fields(driver: WebDriver, timeout: int = 60) -> None:
 
 def _required_field_markers_resolved(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
-    unresolved = [
-        placeholder
-        for placeholder in _find_unresolved_placeholders(page_source)
-        if placeholder not in {"点击补充活动亮点、行程和适合人群", "点击补充活动行程安排"}
-    ]
+    unresolved = _find_unresolved_placeholders(page_source)
     if not unresolved:
         return True
     return not any(
@@ -514,6 +560,26 @@ def _hide_keyboard(driver: WebDriver) -> None:
             return
         except WebDriverException:
             continue
+    _dismiss_keyboard_with_safe_tap(driver)
+
+
+def _dismiss_keyboard_with_safe_tap(driver: WebDriver) -> None:
+    for text in ["完成", "收起键盘", "隐藏", "确定"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            time.sleep(0.2)
+            return
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": size["width"] * 0.9,
+                "y": size["height"] * 0.18,
+            },
+        )
+        time.sleep(0.2)
+    except WebDriverException:
+        pass
 
 
 def _field_has_user_value(element) -> bool:
@@ -601,16 +667,188 @@ def _fill_editor_body(driver: WebDriver, body: str) -> None:
             continue
 
 
-def _close_editor(driver: WebDriver) -> None:
-    _hide_keyboard(driver)
+def _fill_editor_entry(driver: WebDriver, title: str, body: str) -> None:
+    _fill_editor_title(driver, title)
+    _fill_editor_body(driver, body)
+
+
+def _fill_editor_title(driver: WebDriver, title: str) -> None:
+    for xpath in [
+        '//XCUIElementTypeTextField[1]',
+        '//XCUIElementTypeTextField[@placeholderValue="活动概览"]',
+        '//XCUIElementTypeTextField[@placeholderValue="活动行程"]',
+    ]:
+        try:
+            _replace_text(driver.find_element(AppiumBy.XPATH, xpath), title)
+            return
+        except (NoSuchElementException, WebDriverException):
+            continue
+
+
+def _fill_itinerary_editor_item(driver: WebDriver, index: int, item: ActivityItineraryItem) -> None:
+    _fill_indexed_editor_text_field(driver, "标题", item.title, index)
+    _dismiss_editor_keyboard(driver)
+    _fill_indexed_editor_text_field(driver, "副标题", item.subtitle, index)
+    _dismiss_editor_keyboard(driver)
+    _fill_indexed_editor_text_view(driver, item.body, index)
+    _dismiss_editor_keyboard(driver)
+
+
+def _fill_indexed_editor_text_field(driver: WebDriver, placeholder: str, value: str, index: int) -> None:
+    field = _find_indexed_editor_text_field(driver, placeholder, index)
+    _replace_text(field, value)
+
+
+def _fill_indexed_editor_text_view(driver: WebDriver, value: str, index: int) -> None:
+    field = _find_indexed_editor_text_view(driver, index)
+    _replace_text(field, value)
+
+
+def _find_indexed_editor_text_field(driver: WebDriver, placeholder: str, index: int):
+    xpath = (
+        f'//XCUIElementTypeTextField[@placeholderValue="{placeholder}" '
+        f'or @value="{placeholder}" or @name="{placeholder}" or @label="{placeholder}"]'
+    )
+    return _find_indexed_visible_editor_element(driver, xpath, index, f"activity itinerary {placeholder}")
+
+
+def _find_indexed_editor_text_view(driver: WebDriver, index: int):
+    return _find_indexed_visible_editor_element(driver, "//XCUIElementTypeTextView", index, "activity itinerary body")
+
+
+def _find_indexed_visible_editor_element(driver: WebDriver, xpath: str, index: int, field_name: str):
+    for _ in range(5):
+        try:
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+        except WebDriverException:
+            elements = []
+        visible_elements = sorted(
+            [element for element in elements if _element_is_visible(element)],
+            key=lambda element: (element.rect.get("y", 0), element.rect.get("x", 0)),
+        )
+        if len(visible_elements) > index:
+            return visible_elements[index]
+        swipe_vertical(driver, direction="up")
+        time.sleep(0.2)
+    raise AssertionError(f"Unable to find {field_name} at index {index}")
+
+
+def _element_is_visible(element) -> bool:
     try:
-        driver.back()
-        time.sleep(0.5)
+        if not element.is_displayed():
+            return False
     except WebDriverException:
         pass
-    if tap_text_if_present(driver, "完成", timeout=1):
-        _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4)
-        return
+    rect = getattr(element, "rect", {}) or {}
+    return (rect.get("width", 0) or 0) > 0 and (rect.get("height", 0) or 0) > 0
+
+
+def _add_itinerary_segment(driver: WebDriver) -> bool:
+    before_count = _count_itinerary_editor_sections(_safe_page_source(driver))
+    for _ in range(4):
+        button = _find_add_itinerary_segment_button(driver)
+        if button is None:
+            swipe_vertical(driver, direction="up")
+            time.sleep(0.2)
+            continue
+        _tap_element_center(driver, button)
+        if _wait_until(lambda: _count_itinerary_editor_sections(_safe_page_source(driver)) > before_count, timeout=4):
+            return True
+    return False
+
+
+def _find_add_itinerary_segment_button(driver: WebDriver):
+    try:
+        buttons = driver.find_elements(AppiumBy.XPATH, '//XCUIElementTypeOther[@width="30" and @height="30"]')
+    except WebDriverException:
+        return None
+    visible_buttons = sorted(
+        [button for button in buttons if _element_is_visible(button)],
+        key=lambda button: (button.rect.get("y", 0), button.rect.get("x", 0)),
+    )
+    return visible_buttons[-1] if visible_buttons else None
+
+
+def _count_itinerary_editor_sections(page_source: str) -> int:
+    if not page_source:
+        return 0
+    return len(
+        re.findall(
+            r'<XCUIElementTypeTextField[^>]*visible="true"[^>]*placeholderValue="标题"',
+            page_source,
+        )
+    )
+
+
+def _normalize_itinerary(raw_itinerary) -> list[ActivityItineraryItem]:
+    if isinstance(raw_itinerary, dict):
+        item = _normalize_itinerary_item(raw_itinerary, 1)
+        return [item] if item is not None else []
+
+    if isinstance(raw_itinerary, list):
+        items = [
+            _normalize_itinerary_item(item, index)
+            for index, item in enumerate(raw_itinerary, start=1)
+        ]
+        return [item for item in items if item is not None]
+
+    text = str(raw_itinerary or "").strip()
+    if not text:
+        return []
+
+    parts = [segment.strip() for segment in re.split(r"[；;\n]+", text) if segment.strip()]
+    items = [
+        _normalize_itinerary_item(segment, index)
+        for index, segment in enumerate(parts, start=1)
+    ]
+    return [item for item in items if item is not None]
+
+
+def _normalize_itinerary_item(raw_item, index: int) -> ActivityItineraryItem | None:
+    if isinstance(raw_item, dict):
+        title = str(raw_item.get("title", "")).strip()
+        subtitle = str(raw_item.get("subtitle", "")).strip()
+        body = str(
+            raw_item.get("body")
+            or raw_item.get("content")
+            or raw_item.get("description")
+            or ""
+        ).strip()
+        if not any([title, subtitle, body]):
+            return None
+        fallback_title = title or f"Day{index}"
+        return ActivityItineraryItem(title=fallback_title, subtitle=subtitle, body=body)
+
+    text = str(raw_item or "").strip()
+    if not text:
+        return None
+
+    match = re.match(r"^(D\d+|Day\d+)\s+(.*)$", text, flags=re.IGNORECASE)
+    if match:
+        return ActivityItineraryItem(
+            title=match.group(1),
+            subtitle="",
+            body=match.group(2).strip(),
+        )
+    return ActivityItineraryItem(title=f"Day{index}", subtitle="", body=text)
+
+
+def _close_editor(driver: WebDriver) -> None:
+    _dismiss_editor_keyboard(driver)
+    _tap_editor_title(driver)
+    time.sleep(0.2)
+    if _tap_editor_bottom_done(driver):
+        if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
+            return
+    _dismiss_editor_keyboard(driver)
+    _tap_editor_title(driver)
+    time.sleep(0.2)
+    if _tap_editor_bottom_done(driver):
+        if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
+            return
+    if _tap_editor_done_slot(driver):
+        if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
+            return
     for xpath in [
         "//XCUIElementTypeOther[@x='72' and @y='85' and @width='20' and @height='20']",
         "(//XCUIElementTypeStaticText[@name='编辑活动说明' or @label='编辑活动说明']/preceding::XCUIElementTypeOther[@visible='true'])[last()]",
@@ -623,12 +861,125 @@ def _close_editor(driver: WebDriver) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
     try:
+        driver.back()
+        if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
+            return
+        time.sleep(0.5)
+    except WebDriverException:
+        pass
+    try:
         driver.execute_script("mobile: tap", {"x": 82, "y": 95})
         if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
             return
     except WebDriverException:
         pass
     raise AssertionError("Unable to close the activity editor and return to the publish form")
+
+
+def _dismiss_editor_keyboard(driver: WebDriver) -> None:
+    _hide_keyboard(driver)
+    _tap_outside_editor(driver)
+    time.sleep(0.2)
+
+
+def _tap_outside_editor(driver: WebDriver) -> bool:
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(size["width"] * 0.9),
+                "y": int(size["height"] * 0.18),
+            },
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        try:
+            driver.execute_script("mobile: tap", {"x": 361, "y": 157})
+            return True
+        except WebDriverException:
+            return False
+
+
+def _tap_editor_title(driver: WebDriver) -> bool:
+    try:
+        driver.execute_script("mobile: tap", _editor_title_payload(driver))
+        return True
+    except WebDriverException:
+        return False
+
+
+def _editor_title_payload(driver: WebDriver) -> dict[str, int]:
+    try:
+        size = driver.get_window_size()
+        return {
+            "x": int(size["width"] * 0.5),
+            "y": int(size["height"] * 0.11),
+        }
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return {"x": 201, "y": 95}
+
+
+def _tap_editor_bottom_done(driver: WebDriver) -> bool:
+    if tap_text_if_present(driver, "完成", timeout=1):
+        return True
+    for xpath in [
+        '(//*[@name="完成" or @label="完成" or @value="完成"])[last()]',
+        '//XCUIElementTypeOther[@name="完成" or @label="完成"]',
+    ]:
+        try:
+            rect = driver.find_element(AppiumBy.XPATH, xpath).rect
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": int(rect["x"] + rect["width"] / 2),
+                    "y": int(rect["y"] + rect["height"] / 2),
+                },
+            )
+            return True
+        except (NoSuchElementException, WebDriverException, KeyError, TypeError):
+            continue
+    try:
+        driver.execute_script("mobile: tap", _editor_bottom_done_payload(driver))
+        return True
+    except WebDriverException:
+        return False
+
+
+def _editor_bottom_done_payload(driver: WebDriver) -> dict[str, int]:
+    try:
+        size = driver.get_window_size()
+        return {
+            "x": int(size["width"] * 0.56),
+            "y": int(size["height"] * 0.94),
+        }
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return {"x": 225, "y": 821}
+
+
+def _assert_editor_saved(driver: WebDriver, placeholder: str, field_name: str) -> None:
+    page_source = _safe_page_source(driver)
+    if placeholder in page_source:
+        raise AssertionError(f"The {field_name} placeholder is still visible after closing the editor")
+
+
+def _tap_editor_done_slot(driver: WebDriver) -> bool:
+    try:
+        driver.execute_script("mobile: tap", _editor_done_payload(driver))
+        return True
+    except WebDriverException:
+        return False
+
+
+def _editor_done_payload(driver: WebDriver) -> dict[str, int]:
+    try:
+        size = driver.get_window_size()
+        return {
+            "x": int(size["width"] * 0.92),
+            "y": int(size["height"] * 0.11),
+        }
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return {"x": 370, "y": 95}
 
 
 def _editor_page_visible(page_source: str) -> bool:
