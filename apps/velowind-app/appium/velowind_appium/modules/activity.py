@@ -136,7 +136,7 @@ def publish_activity(
 ) -> str:
     open_activity_publisher(driver, ios_config=ios_config, timeout=timeout)
     fill_activity_form(driver, draft, timeout=timeout)
-    return submit_activity_for_review(driver, timeout=timeout)
+    return submit_activity_for_review(driver, expected_title=draft.title, timeout=timeout)
 
 
 def open_activity_publisher(
@@ -190,7 +190,7 @@ def fill_activity_form(driver: WebDriver, draft: ActivityDraft, timeout: int = 6
         raise AssertionError("The activity form still shows unresolved required placeholders after filling")
 
 
-def submit_activity_for_review(driver: WebDriver, timeout: int = 30) -> str:
+def submit_activity_for_review(driver: WebDriver, expected_title: str | None = None, timeout: int = 30) -> str:
     if not _tap_submit(driver):
         raise AssertionError("Unable to find the submit-for-review action on the activity form")
 
@@ -203,7 +203,7 @@ def submit_activity_for_review(driver: WebDriver, timeout: int = 30) -> str:
             time.sleep(0.2)
             continue
 
-        success_signal = activity_publish_success_signal(page_source)
+        success_signal = activity_publish_success_signal(page_source, expected_title=expected_title)
         if success_signal:
             return success_signal
 
@@ -220,11 +220,13 @@ def activity_form_is_visible(page_source: str) -> bool:
     return any(token in joined for token in FORM_READY_TEXTS)
 
 
-def activity_publish_success_signal(page_source: str) -> str | None:
+def activity_publish_success_signal(page_source: str, expected_title: str | None = None) -> str | None:
     texts = _extract_strings(page_source)
     for token in SUCCESS_TEXTS:
         if token in texts or token in page_source:
             return token
+    if expected_title and expected_title in page_source and "我的活动" in page_source:
+        return "我的活动列表"
     if "审核" in page_source and "成功" in page_source:
         return "审核成功提示"
     return None

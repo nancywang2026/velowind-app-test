@@ -29,6 +29,6 @@ def test_user_can_publish_activity_for_review(driver, ios_config, step):
     )
 
     assert success_signal, "Expected a success signal after submitting the activity for review"
-    assert any(token in success_signal for token in ["成功", "审核", "待审核"]), (
+    assert any(token in success_signal for token in ["成功", "审核", "待审核", "我的活动"]), (
         f"Expected the publish flow to end in a success/review state, got: {success_signal}"
     )

@@ -66,6 +66,17 @@ def test_activity_publish_success_signal_detects_review_success():
     assert activity_publish_success_signal(page_source) == "提交成功"
 
 
+def test_activity_publish_success_signal_accepts_my_activity_page_with_expected_title():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="我的活动" label="我的活动" value="我的活动" />
+      <XCUIElementTypeStaticText name="太行山峡谷耐力骑行挑战" label="太行山峡谷耐力骑行挑战" value="太行山峡谷耐力骑行挑战" />
+    </AppiumAUT>
+    """
+
+    assert activity_publish_success_signal(page_source, expected_title="太行山峡谷耐力骑行挑战") == "我的活动列表"
+
+
 def test_open_activity_publisher_retries_when_publish_entry_opens_login(monkeypatch):
     state = {"page": "home"}
     login_calls = []
