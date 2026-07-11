@@ -52,7 +52,15 @@ def attach_file_if_present(path: Path | None, *, name: str | None = None, attach
 
 
 def attach_text(name: str, body: str) -> None:
-    allure.attach.body(body, name=name, attachment_type=allure.attachment_type.TEXT)
+    attach = getattr(allure, "attach", None)
+    if attach is None:
+        return
+    attach_body = getattr(attach, "body", None)
+    if callable(attach_body):
+        attach_body(body, name=name, attachment_type=allure.attachment_type.TEXT)
+        return
+    if callable(attach):
+        attach(body, name=name, attachment_type=allure.attachment_type.TEXT)
 
 
 def generate_and_open_allure_report(
