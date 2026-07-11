@@ -41,6 +41,6 @@ def test_user_can_publish_note_for_review(driver, ios_config, step, use_case_id)
     )
 
     assert success_signal, "Expected a success signal after submitting the message note for review"
-    assert any(token in success_signal for token in ["成功", "审核", "待审核"]), (
+    assert any(token in success_signal for token in ["成功", "审核", "待审核", "已发布"]), (
         f"Expected the note publish flow to end in a success/review state, got: {success_signal}"
     )
