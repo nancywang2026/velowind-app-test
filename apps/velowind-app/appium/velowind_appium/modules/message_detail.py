@@ -19,6 +19,7 @@ from velowind_appium.actions import (
 )
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
+import velowind_appium.modules.photo_picker as photo_picker
 
 
 DETAIL_READY_IDS = [
@@ -72,7 +73,7 @@ NOTE_FORM_READY_IDS = [
     "note-submit-button",
 ]
 NOTE_FORM_READY_TEXTS = ["发布笔记", "标题", "正文", "话题", "标记地点", "允许评论"]
-NOTE_SUCCESS_TEXTS = ["发布成功", "提交成功", "审核中", "待审核", "提交审核成功"]
+NOTE_SUCCESS_TEXTS = ["发布成功", "提交成功", "审核中", "待审核", "提交审核成功", "已发布"]
 NOTE_SUCCESS_IDS = [
     "note-publish-success",
     "message-publish-success",
@@ -535,24 +536,10 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
     if not _tap_note_image_plus(driver):
         raise AssertionError("Unable to find the note image plus button")
 
-    if not _choose_photo_library_source(driver):
-        raise AssertionError("Unable to choose phone photo library as the image source")
-
-    for text in ["允许访问所有照片", "允许", "好"]:
-        tap_text_if_present(driver, text, timeout=2)
-
-    if not _photo_library_visible(driver, timeout=5):
-        raise AssertionError(
-            "Photo library did not open after choosing phone album. "
-            "If this is a simulator, verify Photos permission and seed at least one image."
-        )
-
-    if _choose_local_photo(driver, album_name=draft.album):
-        return
-
-    if _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and _choose_local_photo(
+    if photo_picker.choose_photo_from_library(
         driver,
         album_name=draft.album,
+        retry_sheet_option=_tap_note_photo_library_sheet_option,
     ):
         return
 
@@ -560,6 +547,21 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
         "Photo library opened but no selectable photo was found. "
         "If this is a simulator, seed at least one image into Photos."
     )
+
+
+def _tap_note_photo_library_sheet_option(driver: WebDriver) -> bool:
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": size["width"] * 0.5,
+                "y": size["height"] * 0.90,
+            },
+        )
+        return True
+    except WebDriverException:
+        return False
 
 
 def _clear_existing_note_images(driver: WebDriver, max_images: int = 9) -> None:

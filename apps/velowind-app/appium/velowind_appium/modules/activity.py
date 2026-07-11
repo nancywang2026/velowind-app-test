@@ -20,6 +20,7 @@ from velowind_appium.actions import (
 )
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
+import velowind_appium.modules.photo_picker as photo_picker
 
 
 PUBLISH_ENTRY_IDS = [
@@ -351,56 +352,25 @@ def _upload_activity_image(driver: WebDriver, draft: ActivityDraft) -> None:
     if not _tap_image_picker(driver):
         return
 
-    if not _choose_photo_library_source(driver):
-        raise AssertionError("Unable to choose phone photo library as the image source")
-
-    for text in ["允许访问所有照片", "允许", "好"]:
-        tap_text_if_present(driver, text, timeout=2)
-
-    if not _photo_library_visible(driver, timeout=5):
-        _tap_activity_photo_library_sheet_option(driver)
-        for text in ["允许访问所有照片", "允许", "好"]:
-            tap_text_if_present(driver, text, timeout=2)
-
-    if not _photo_library_visible(driver, timeout=5):
-        raise AssertionError(
-            "Photo library did not open after choosing phone album. "
-            "Verify photo permissions and that the system picker is visible."
-        )
-
-    if _choose_local_photo(driver, album_name=draft.album):
-        return
-
-    if _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and _choose_local_photo(
+    if photo_picker.choose_photo_from_library(
         driver,
         album_name=draft.album,
+        retry_sheet_option=_tap_activity_photo_library_sheet_option,
     ):
         return
     raise AssertionError("Unable to upload an activity image from the local photo library")
 
 
 def _choose_photo_library_source(driver: WebDriver) -> bool:
-    from velowind_appium.modules.message_detail import _tap_photo_source_option
-
-    source_texts = ["从手机相册选择", "手机相册", "从相册选择", "相册"]
-    if _tap_photo_source_option(driver, source_texts):
-        return True
-    for text in source_texts:
-        if tap_text_if_present(driver, text, timeout=1):
-            return True
-    return _tap_activity_photo_library_sheet_option(driver)
+    return photo_picker.choose_photo_library_source(driver)
 
 
 def _choose_local_photo(driver: WebDriver, *, album_name: str | None = None) -> bool:
-    from velowind_appium.modules.message_detail import _choose_local_photo as _choose_note_local_photo
-
-    return bool(_choose_note_local_photo(driver, album_name=album_name))
+    return bool(photo_picker.choose_local_photo(driver, album_name=album_name))
 
 
 def _photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
-    from velowind_appium.modules.message_detail import _photo_library_visible as _note_photo_library_visible
-
-    return bool(_note_photo_library_visible(driver, timeout=timeout))
+    return bool(photo_picker.photo_library_visible(driver, timeout=timeout))
 
 
 def _tap_activity_photo_library_sheet_option(driver: WebDriver) -> bool:
@@ -507,7 +477,7 @@ def _fill_input_near_label(
                 _replace_text(element, value)
                 _hide_keyboard(driver)
                 return True
-            except (NoSuchElementException, WebDriverException):
+            except (NoSuchElementException, WebDriverException, AttributeError):
                 continue
     return False
 
@@ -640,7 +610,7 @@ def _open_editor(driver: WebDriver, entry_text: str) -> bool:
         )
         rect = element.rect
         driver.execute_script("mobile: tap", {"x": 201, "y": rect["y"] + rect["height"] / 2})
-    except (NoSuchElementException, WebDriverException):
+    except (NoSuchElementException, WebDriverException, AttributeError):
         return False
 
     return _wait_until(lambda: _editor_opened(_safe_page_source(driver), baseline, entry_text), timeout=4)
@@ -1093,13 +1063,24 @@ def _choose_specific_overlay_option(driver: WebDriver, texts: str | list[str]) -
                 _tap_element_center(driver, driver.find_element(AppiumBy.XPATH, xpath))
                 _confirm_overlay_selection(driver)
                 return True
-            except (NoSuchElementException, WebDriverException):
+            except (NoSuchElementException, WebDriverException, AttributeError):
                 continue
 
     for text in target_texts:
         if _set_first_picker_wheel_value(driver, text):
             _confirm_overlay_selection(driver)
             return True
+
+    for _ in range(3):
+        try:
+            swipe_vertical(driver, direction="up")
+        except WebDriverException:
+            pass
+        time.sleep(0.3)
+        for text in target_texts:
+            if tap_text_if_present(driver, text, timeout=2):
+                _confirm_overlay_selection(driver)
+                return True
 
     return False
 
@@ -1108,7 +1089,7 @@ def _set_first_picker_wheel_value(driver: WebDriver, text: str) -> bool:
     try:
         _first_picker_wheel(driver).send_keys(text)
         return True
-    except (NoSuchElementException, WebDriverException):
+    except (NoSuchElementException, WebDriverException, AttributeError):
         return False
 
 

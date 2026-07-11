@@ -477,15 +477,18 @@ def test_upload_activity_image_uses_album_from_draft(monkeypatch):
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
     monkeypatch.setattr(activity, "_tap_image_picker", lambda driver: True)
-    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=2: calls.append(("tap", text)) or False)
-    monkeypatch.setattr(activity, "_choose_photo_library_source", lambda driver: calls.append(("choose-source", None)) or True)
-    monkeypatch.setattr(activity, "_photo_library_visible", lambda driver, timeout=5: True)
-    monkeypatch.setattr(activity, "_choose_local_photo", lambda driver, album_name=None: calls.append(("choose-photo", album_name)) or True)
+    monkeypatch.setattr(
+        activity.photo_picker,
+        "choose_photo_from_library",
+        lambda driver, album_name=None, retry_sheet_option=None: calls.append(
+            ("choose-photo", album_name, retry_sheet_option is activity._tap_activity_photo_library_sheet_option)
+        )
+        or True,
+    )
 
     activity._upload_activity_image(object(), draft)
 
-    assert ("choose-source", None) in calls
-    assert calls[-1] == ("choose-photo", "太行山")
+    assert calls == [("choose-photo", "太行山", True)]
 
 
 def test_upload_activity_image_waits_for_photo_library_before_choosing_album(monkeypatch):
@@ -493,27 +496,27 @@ def test_upload_activity_image_waits_for_photo_library_before_choosing_album(mon
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
     monkeypatch.setattr(activity, "_tap_image_picker", lambda driver: True)
-    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=2: False)
-    monkeypatch.setattr(activity, "_choose_photo_library_source", lambda driver: True)
-    monkeypatch.setattr(activity, "_photo_library_visible", lambda driver, timeout=5: calls.append(("wait-library", timeout)) or True)
-    monkeypatch.setattr(activity, "_choose_local_photo", lambda driver, album_name=None: calls.append(("choose-photo", album_name)) or True)
+    monkeypatch.setattr(
+        activity.photo_picker,
+        "choose_photo_from_library",
+        lambda driver, album_name=None, retry_sheet_option=None: calls.append(("choose-photo", album_name)) or True,
+    )
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == [("wait-library", 5), ("wait-library", 5), ("choose-photo", "太行山")]
+    assert calls == [("choose-photo", "太行山")]
 
 
 def test_upload_activity_image_requires_phone_photo_library_source(monkeypatch):
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
     monkeypatch.setattr(activity, "_tap_image_picker", lambda driver: True)
-    monkeypatch.setattr(activity, "_choose_photo_library_source", lambda driver: False)
-    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=2: False)
+    monkeypatch.setattr(activity.photo_picker, "choose_photo_from_library", lambda driver, album_name=None, retry_sheet_option=None: False)
 
     try:
         activity._upload_activity_image(object(), draft)
     except AssertionError as exc:
-        assert str(exc) == "Unable to choose phone photo library as the image source"
+        assert str(exc) == "Unable to upload an activity image from the local photo library"
         return
 
     raise AssertionError("Expected _upload_activity_image to fail when photo source selection does not open")
@@ -522,19 +525,17 @@ def test_upload_activity_image_requires_phone_photo_library_source(monkeypatch):
 def test_upload_activity_image_retries_activity_action_sheet_option_when_library_does_not_open(monkeypatch):
     calls = []
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
-    visibility_checks = iter([False, True])
 
     monkeypatch.setattr(activity, "_tap_image_picker", lambda driver: True)
-    monkeypatch.setattr(activity, "_choose_photo_library_source", lambda driver: True)
-    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=2: False)
-    monkeypatch.setattr(activity, "_photo_library_visible", lambda driver, timeout=5: next(visibility_checks))
     monkeypatch.setattr(
-        activity,
-        "_tap_activity_photo_library_sheet_option",
-        lambda driver: calls.append("retry-sheet-option") or True,
+        activity.photo_picker,
+        "choose_photo_from_library",
+        lambda driver, album_name=None, retry_sheet_option=None: (
+            calls.append(("retry", retry_sheet_option is activity._tap_activity_photo_library_sheet_option, album_name))
+            or True
+        ),
     )
-    monkeypatch.setattr(activity, "_choose_local_photo", lambda driver, album_name=None: calls.append(("choose-photo", album_name)) or True)
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == ["retry-sheet-option", ("choose-photo", "太行山")]
+    assert calls == [("retry", True, "太行山")]

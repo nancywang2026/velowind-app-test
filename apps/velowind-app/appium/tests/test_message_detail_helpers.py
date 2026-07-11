@@ -119,6 +119,18 @@ def test_message_note_publish_success_signal_detects_review_state():
     assert message_note_publish_success_signal(page_source) == "提交成功"
 
 
+def test_message_note_publish_success_signal_detects_published_detail_state():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="长白山真的有种让人瞬间安静下来的魔力" />
+      <XCUIElementTypeStaticText name="已发布" />
+      <XCUIElementTypeStaticText name="共 0 条评论" />
+    </AppiumAUT>
+    """
+
+    assert message_note_publish_success_signal(page_source) == "已发布"
+
+
 def test_message_note_publish_error_signal_detects_backend_failure():
     page_source = """
     <AppiumAUT>
@@ -350,16 +362,34 @@ def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch)
     draft = build_changbaishan_note_draft()
     monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: None)
     monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: True)
-    monkeypatch.setattr(message_detail, "_choose_photo_library_source", lambda driver: True)
-    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: False)
-    monkeypatch.setattr(message_detail, "_photo_library_visible", lambda driver, timeout=5: False, raising=False)
+    monkeypatch.setattr(message_detail.photo_picker, "choose_photo_from_library", lambda driver, album_name=None, retry_sheet_option=None: False)
 
     try:
         message_detail._upload_note_image(object(), draft)
     except AssertionError as error:
-        assert "Photo library did not open" in str(error)
+        assert "Photo library opened but no selectable photo was found" in str(error)
     else:
         raise AssertionError("Expected upload to fail when the photo library does not open")
+
+
+def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
+    calls = []
+    draft = build_changbaishan_note_draft()
+
+    monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
+    monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: calls.append("tap-plus") or True)
+    monkeypatch.setattr(
+        message_detail.photo_picker,
+        "choose_photo_from_library",
+        lambda driver, album_name=None, retry_sheet_option=None: calls.append(
+            ("choose-photo", album_name, retry_sheet_option is message_detail._tap_note_photo_library_sheet_option)
+        )
+        or True,
+    )
+
+    message_detail._upload_note_image(object(), draft)
+
+    assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", True)]
 
 
 def test_photo_source_option_taps_row_center_from_text_rect():
