@@ -73,6 +73,11 @@ simulator:
   udid: SIM-001
   device_name: iPhone 17 Pro
   platform_version: "26.5"
+  xcode_org_id: TEAM12345
+  xcode_signing_id: Apple Development
+  updated_wda_bundle_id: com.example.WebDriverAgentRunner
+  allow_provisioning_device_registration: true
+  show_xcode_log: true
 """.strip(),
         encoding="utf-8",
     )
@@ -87,6 +92,11 @@ simulator:
     assert config.udid == "SIM-001"
     assert config.device_name == "iPhone 17 Pro"
     assert config.platform_version == "26.5"
+    assert config.xcode_org_id == "TEAM12345"
+    assert config.xcode_signing_id == "Apple Development"
+    assert config.updated_wda_bundle_id == "com.example.WebDriverAgentRunner"
+    assert config.allow_provisioning_device_registration is True
+    assert config.show_xcode_log is True
     assert config.login_username == "13381509990"
     assert config.login_password == "12345678"
     assert config.no_reset is False
@@ -171,6 +181,24 @@ def test_build_ios_capabilities_includes_optional_wda_signing(monkeypatch):
     assert capabilities["appium:updatedWDABundleId"] == "com.example.WebDriverAgentRunner"
     assert capabilities["appium:showXcodeLog"] is True
     assert capabilities["appium:allowProvisioningDeviceRegistration"] is True
+
+
+def test_build_ios_capabilities_includes_singleton_test_manager_override(monkeypatch):
+    monkeypatch.setenv("VW_IOS_UDID", "device-001")
+    monkeypatch.setenv("VW_IOS_SHOULD_USE_SINGLETON_TEST_MANAGER", "false")
+
+    capabilities = build_ios_capabilities(load_ios_config())
+
+    assert capabilities["appium:shouldUseSingletonTestManager"] is False
+
+
+def test_build_ios_capabilities_includes_use_preinstalled_wda_override(monkeypatch):
+    monkeypatch.setenv("VW_IOS_UDID", "device-001")
+    monkeypatch.setenv("VW_IOS_USE_PREINSTALLED_WDA", "true")
+
+    capabilities = build_ios_capabilities(load_ios_config())
+
+    assert capabilities["appium:usePreinstalledWDA"] is True
 
 
 def test_load_ios_config_auto_detects_online_device(monkeypatch):

@@ -15,3 +15,8 @@ device:
   udid: "00008150-0006799C2693401C"
   device_name: "Zhigang的iPhone"
   platform_version: "26.2.1"
+  xcode_org_id: "K2VHBX5KLX"
+  xcode_signing_id: "Apple Development"
+  updated_wda_bundle_id: "com.velowind.rider.WebDriverAgentRunner"
+  allow_provisioning_device_registration: true
+  show_xcode_log: true

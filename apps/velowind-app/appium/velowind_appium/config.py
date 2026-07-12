@@ -29,9 +29,11 @@ class IosAppiumConfig:
     show_xcode_log: bool
     allow_provisioning_device_registration: bool
     use_new_wda: bool
+    use_preinstalled_wda: Optional[bool]
     no_reset: bool
     wait_for_idle_timeout: float
     reduce_motion: bool
+    should_use_singleton_test_manager: Optional[bool]
     login_username: Optional[str]
     login_password: Optional[str]
 
@@ -58,6 +60,13 @@ def _env_text(name: str) -> Optional[str]:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _env_optional_bool(name: str) -> Optional[bool]:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return None
+    return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _read_yaml_config() -> Dict[str, object]:
@@ -141,18 +150,37 @@ def load_ios_config() -> IosAppiumConfig:
         artifact_dir=Path(os.environ.get("VW_APPIUM_ARTIFACT_DIR", str(DEFAULT_ARTIFACT_DIR))).expanduser(),
         platform_version=platform_version,
         device_name=device_name,
-        xcode_org_id=_env_text("VW_IOS_XCODE_ORG_ID"),
-        xcode_signing_id=_env_text("VW_IOS_XCODE_SIGNING_ID"),
-        updated_wda_bundle_id=_env_text("VW_IOS_UPDATED_WDA_BUNDLE_ID"),
-        show_xcode_log=_env_bool("VW_IOS_SHOW_XCODE_LOG", False),
+        xcode_org_id=_env_text("VW_IOS_XCODE_ORG_ID") or _yaml_text(yaml_config, target, "xcode_org_id"),
+        xcode_signing_id=_env_text("VW_IOS_XCODE_SIGNING_ID") or _yaml_text(yaml_config, target, "xcode_signing_id"),
+        updated_wda_bundle_id=_env_text("VW_IOS_UPDATED_WDA_BUNDLE_ID")
+        or _yaml_text(yaml_config, target, "updated_wda_bundle_id"),
+        show_xcode_log=_env_bool("VW_IOS_SHOW_XCODE_LOG", _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "show_xcode_log", False)),
         allow_provisioning_device_registration=_env_bool(
             "VW_IOS_ALLOW_PROVISIONING_DEVICE_REGISTRATION",
-            False,
+            _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "allow_provisioning_device_registration", False),
         ),
-        use_new_wda=_env_bool("VW_IOS_USE_NEW_WDA", False),
+        use_new_wda=_env_bool("VW_IOS_USE_NEW_WDA", _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "use_new_wda", False)),
+        use_preinstalled_wda=_env_optional_bool("VW_IOS_USE_PREINSTALLED_WDA")
+        if _env_optional_bool("VW_IOS_USE_PREINSTALLED_WDA") is not None
+        else (
+            _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "use_preinstalled_wda", False)
+            if _yaml_text(yaml_config, target, "use_preinstalled_wda") is not None or (
+                isinstance(yaml_config.get(target), dict) and "use_preinstalled_wda" in yaml_config.get(target, {})
+            )
+            else None
+        ),
         no_reset=_env_bool("VW_IOS_NO_RESET", _yaml_bool(yaml_config, "no_reset", True)),
         wait_for_idle_timeout=_env_float("VW_IOS_WAIT_FOR_IDLE_TIMEOUT", 1.0),
         reduce_motion=_env_bool("VW_IOS_REDUCE_MOTION", True),
+        should_use_singleton_test_manager=_env_optional_bool("VW_IOS_SHOULD_USE_SINGLETON_TEST_MANAGER")
+        if _env_optional_bool("VW_IOS_SHOULD_USE_SINGLETON_TEST_MANAGER") is not None
+        else (
+            _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "should_use_singleton_test_manager", False)
+            if _yaml_text(yaml_config, target, "should_use_singleton_test_manager") is not None or (
+                isinstance(yaml_config.get(target), dict) and "should_use_singleton_test_manager" in yaml_config.get(target, {})
+            )
+            else None
+        ),
         login_username=_env_text("VW_LOGIN_USERNAME") or _yaml_text(yaml_config, "login", "username"),
         login_password=_env_text("VW_LOGIN_PASSWORD") or _yaml_text(yaml_config, "login", "password"),
     )
@@ -178,6 +206,8 @@ def build_ios_capabilities(config: IosAppiumConfig) -> Dict[str, object]:
         "appium:waitForIdleTimeout": config.wait_for_idle_timeout,
         "appium:reduceMotion": config.reduce_motion,
     }
+    if config.use_preinstalled_wda is not None:
+        capabilities["appium:usePreinstalledWDA"] = config.use_preinstalled_wda
 
     if config.app_path:
         capabilities["appium:app"] = config.app_path
@@ -198,5 +228,7 @@ def build_ios_capabilities(config: IosAppiumConfig) -> Dict[str, object]:
         capabilities["appium:showXcodeLog"] = True
     if config.allow_provisioning_device_registration:
         capabilities["appium:allowProvisioningDeviceRegistration"] = True
+    if config.should_use_singleton_test_manager is not None:
+        capabilities["appium:shouldUseSingletonTestManager"] = config.should_use_singleton_test_manager
 
     return capabilities

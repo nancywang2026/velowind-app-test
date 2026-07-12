@@ -8,7 +8,14 @@ def test_choose_photo_from_library_retries_sheet_option_before_selecting_album(m
     monkeypatch.setattr(photo_picker, "choose_photo_library_source", lambda driver: calls.append("choose-source") or True)
     monkeypatch.setattr(photo_picker, "dismiss_photo_permission_alerts", lambda driver: calls.append("dismiss-alerts"))
     monkeypatch.setattr(photo_picker, "photo_library_visible", lambda driver, timeout=5: calls.append(("visible", timeout)) or next(visibility_checks))
-    monkeypatch.setattr(photo_picker, "choose_local_photo", lambda driver, album_name=None: calls.append(("choose-photo", album_name)) or True)
+    monkeypatch.setattr(
+        photo_picker,
+        "choose_local_photo",
+        lambda driver, album_name=None, select_all_from_album=True: calls.append(
+            ("choose-photo", album_name, select_all_from_album)
+        )
+        or True,
+    )
     monkeypatch.setattr(photo_picker, "_choose_first_option", lambda driver, preferred_texts: False)
 
     assert photo_picker.choose_photo_from_library(
@@ -24,7 +31,7 @@ def test_choose_photo_from_library_retries_sheet_option_before_selecting_album(m
         "retry-sheet",
         "dismiss-alerts",
         ("visible", 5),
-        ("choose-photo", "长白山"),
+        ("choose-photo", "长白山", True),
     ]
 
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import html
+import os
 from pathlib import Path
 import re
 import time
@@ -63,6 +65,7 @@ SELECT_FIELD_KEYWORDS = {
 }
 PLACEHOLDER_PATTERN = re.compile(r"(请输入|选择|填写|上传).+")
 ACTIVITY_TESTDATA_FILE = Path(__file__).resolve().parents[2] / "tests" / "activity" / "testdata" / "publish_activity.yaml"
+FAST_OPTIONAL_TAP_TIMEOUT = 0.5
 
 
 @dataclass(frozen=True)
@@ -135,9 +138,12 @@ def publish_activity(
     ios_config: IosAppiumConfig | None = None,
     timeout: int = 60,
 ) -> str:
-    open_activity_publisher(driver, ios_config=ios_config, timeout=timeout)
-    fill_activity_form(driver, draft, timeout=timeout)
-    return submit_activity_for_review(driver, expected_title=draft.title, timeout=timeout)
+    with _activity_profile("open-publisher"):
+        open_activity_publisher(driver, ios_config=ios_config, timeout=timeout)
+    with _activity_profile("fill-form"):
+        fill_activity_form(driver, draft, timeout=timeout)
+    with _activity_profile("submit-for-review"):
+        return submit_activity_for_review(driver, expected_title=draft.title, timeout=timeout)
 
 
 def open_activity_publisher(
@@ -177,15 +183,24 @@ def open_activity_publisher(
 def fill_activity_form(driver: WebDriver, draft: ActivityDraft, timeout: int = 60) -> None:
     wait_for_activity_form(driver, timeout=timeout)
 
-    _upload_activity_image(driver, draft)
-    _fill_title(driver, draft.title)
-    _select_activity_type(driver, draft.activity_type)
-    _select_province(driver, draft.province)
-    _fill_city(driver, draft.city)
-    _fill_description(driver, draft.description)
-    _fill_itinerary(driver, draft.itinerary)
-    _fill_known_text_fields(driver, draft)
-    _resolve_picker_fields(driver, timeout=timeout)
+    with _activity_profile("upload-image"):
+        _upload_activity_image(driver, draft)
+    with _activity_profile("fill-title"):
+        _fill_title(driver, draft.title)
+    with _activity_profile("select-activity-type"):
+        _select_activity_type(driver, draft.activity_type)
+    with _activity_profile("select-province"):
+        _select_province(driver, draft.province)
+    with _activity_profile("fill-city"):
+        _fill_city(driver, draft.city)
+    with _activity_profile("fill-description"):
+        _fill_description(driver, draft.description)
+    with _activity_profile("fill-itinerary"):
+        _fill_itinerary(driver, draft.itinerary)
+    with _activity_profile("fill-known-text-fields"):
+        _fill_known_text_fields(driver, draft)
+    with _activity_profile("resolve-picker-fields"):
+        _resolve_picker_fields(driver, timeout=timeout)
 
     if not _required_field_markers_resolved(driver):
         raise AssertionError("The activity form still shows unresolved required placeholders after filling")
@@ -234,11 +249,13 @@ def activity_publish_success_signal(page_source: str, expected_title: str | None
 
 
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
+    if _tap_plus_button_by_coordinate(driver):
+        return True
     for accessibility_id in PUBLISH_ENTRY_IDS:
-        if tap_if_present(driver, accessibility_id, timeout=2):
+        if tap_if_present(driver, accessibility_id, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
     for text in PUBLISH_ENTRY_TEXTS:
-        if tap_text_if_present(driver, text, timeout=2):
+        if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
     for xpath in [
         '//*[@name="发布" or @label="发布" or @value="发布"]',
@@ -251,8 +268,6 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
             return True
         except (NoSuchElementException, WebDriverException):
             continue
-    if _tap_plus_button_by_coordinate(driver):
-        return True
     return False
 
 
@@ -266,10 +281,10 @@ def _publish_sheet_visible(driver):
 
 def _tap_activity_type_if_present(driver: WebDriver) -> bool:
     for accessibility_id in ACTIVITY_TYPE_IDS:
-        if tap_if_present(driver, accessibility_id, timeout=2):
+        if tap_if_present(driver, accessibility_id, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
     for text in ACTIVITY_TYPE_TEXTS:
-        if tap_text_if_present(driver, text, timeout=2):
+        if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
     for xpath in [
         '//*[@name="活动" or @label="活动" or @value="活动"]',
@@ -294,9 +309,13 @@ def _fill_title(driver: WebDriver, title: str) -> None:
 
 
 def _fill_description(driver: WebDriver, description: str) -> None:
-    if _open_editor(driver, "点击补充活动亮点、行程和适合人群"):
-        _fill_editor_entry(driver, "活动概览", description)
-        _close_editor(driver)
+    with _activity_profile("description-open-editor"):
+        opened = _open_editor(driver, "点击补充活动亮点、行程和适合人群")
+    if opened:
+        with _activity_profile("description-fill-editor"):
+            _fill_editor_entry(driver, "活动概览", description)
+        with _activity_profile("description-close-editor"):
+            _close_editor(driver)
         _assert_editor_saved(driver, "点击补充活动亮点、行程和适合人群", "activity description")
         return
     for keyword in DESCRIPTION_LABEL_KEYWORDS:
@@ -306,14 +325,21 @@ def _fill_description(driver: WebDriver, description: str) -> None:
 
 
 def _fill_itinerary(driver: WebDriver, itinerary: list[ActivityItineraryItem]) -> None:
-    if _open_editor(driver, "点击补充活动行程安排"):
+    with _activity_profile("itinerary-open-editor"):
+        opened = _open_editor(driver, "点击补充活动行程安排")
+    if opened:
         for index, item in enumerate(itinerary):
             if index > 0:
-                _dismiss_editor_keyboard(driver)
-                if not _add_itinerary_segment(driver):
+                with _activity_profile(f"itinerary-{index}-dismiss-before-add"):
+                    _dismiss_editor_keyboard_fast(driver)
+                with _activity_profile(f"itinerary-{index}-add-segment"):
+                    added = _add_itinerary_segment(driver)
+                if not added:
                     raise AssertionError(f"Unable to add activity itinerary segment at index {index}")
-            _fill_itinerary_editor_item(driver, index, item)
-        _close_editor(driver)
+            with _activity_profile(f"itinerary-{index}-fill-item"):
+                _fill_itinerary_editor_item(driver, index, item)
+        with _activity_profile("itinerary-close-editor"):
+            _close_editor(driver)
         _assert_editor_saved(driver, "点击补充活动行程安排", "activity itinerary")
         return
     raise AssertionError("Unable to open or fill the activity itinerary editor")
@@ -355,6 +381,7 @@ def _upload_activity_image(driver: WebDriver, draft: ActivityDraft) -> None:
     if photo_picker.choose_photo_from_library(
         driver,
         album_name=draft.album,
+        select_all_from_album=False,
         retry_sheet_option=_tap_activity_photo_library_sheet_option,
     ):
         return
@@ -393,7 +420,6 @@ def _fill_known_text_fields(driver: WebDriver, draft: ActivityDraft) -> None:
         (SELECT_FIELD_KEYWORDS["contact"], draft.contact_name),
         (["手机号", "联系电话", "联系方式"], draft.contact_phone),
         (SELECT_FIELD_KEYWORDS["location"], draft.location),
-        (["城市名称"], draft.city),
         (SELECT_FIELD_KEYWORDS["count"], draft.max_participants),
         (SELECT_FIELD_KEYWORDS["fee"], draft.fee),
     ]
@@ -457,6 +483,10 @@ def _fill_input_near_label(
     prefer_text_view: bool = False,
     overwrite_existing: bool = True,
 ) -> bool:
+    page_source = _safe_page_source(driver)
+    if keyword not in page_source:
+        return False
+
     element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"]
     if prefer_text_view:
         element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"]
@@ -658,12 +688,18 @@ def _fill_editor_title(driver: WebDriver, title: str) -> None:
 
 
 def _fill_itinerary_editor_item(driver: WebDriver, index: int, item: ActivityItineraryItem) -> None:
-    _fill_indexed_editor_text_field(driver, "标题", item.title, index)
-    _dismiss_editor_keyboard(driver)
-    _fill_indexed_editor_text_field(driver, "副标题", item.subtitle, index)
-    _dismiss_editor_keyboard(driver)
-    _fill_indexed_editor_text_view(driver, item.body, index)
-    _dismiss_editor_keyboard(driver)
+    with _activity_profile(f"itinerary-{index}-fill-title"):
+        _fill_indexed_editor_text_field(driver, "标题", item.title, index)
+    with _activity_profile(f"itinerary-{index}-dismiss-after-title"):
+        _dismiss_editor_keyboard_fast(driver)
+    with _activity_profile(f"itinerary-{index}-fill-subtitle"):
+        _fill_indexed_editor_text_field(driver, "副标题", item.subtitle, index)
+    with _activity_profile(f"itinerary-{index}-dismiss-after-subtitle"):
+        _dismiss_editor_keyboard_fast(driver)
+    with _activity_profile(f"itinerary-{index}-fill-body"):
+        _fill_indexed_editor_text_view(driver, item.body, index)
+    with _activity_profile(f"itinerary-{index}-dismiss-after-body"):
+        _dismiss_editor_keyboard_fast(driver)
 
 
 def _fill_indexed_editor_text_field(driver: WebDriver, placeholder: str, value: str, index: int) -> None:
@@ -854,6 +890,13 @@ def _dismiss_editor_keyboard(driver: WebDriver) -> None:
     time.sleep(0.2)
 
 
+def _dismiss_editor_keyboard_fast(driver: WebDriver) -> None:
+    if _tap_outside_editor(driver):
+        time.sleep(0.2)
+        return
+    _dismiss_editor_keyboard(driver)
+
+
 def _tap_outside_editor(driver: WebDriver) -> bool:
     try:
         size = driver.get_window_size()
@@ -959,6 +1002,11 @@ def _editor_page_visible(page_source: str) -> bool:
 
 
 def _tap_image_picker(driver: WebDriver) -> bool:
+    try:
+        driver.execute_script("mobile: tap", {"x": 60, "y": 206})
+        return True
+    except WebDriverException:
+        pass
     for xpath in [
         "//XCUIElementTypeOther[@x='13' and @y='161' and @width='94' and @height='94']",
         "//XCUIElementTypeOther[@x='13' and @y='161' and @width='90' and @height='90']",
@@ -970,22 +1018,12 @@ def _tap_image_picker(driver: WebDriver) -> bool:
             return True
         except (NoSuchElementException, WebDriverException):
             continue
-    try:
-        driver.execute_script("mobile: tap", {"x": 60, "y": 206})
-        return True
-    except WebDriverException:
-        return False
+    return False
 
 
 def _tap_form_field(driver: WebDriver, text: str, fallback_point: tuple[int, int] | None = None) -> bool:
-    if tap_text_if_present(driver, text, timeout=2):
+    if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
         return True
-    xpath = f'//*[@name="{text}" or @label="{text}" or @value="{text}"]'
-    try:
-        _tap_element_center(driver, driver.find_element(AppiumBy.XPATH, xpath))
-        return True
-    except (NoSuchElementException, WebDriverException):
-        pass
 
     if fallback_point is not None:
         try:
@@ -997,14 +1035,9 @@ def _tap_form_field(driver: WebDriver, text: str, fallback_point: tuple[int, int
 
 
 def _tap_placeholder(driver: WebDriver, placeholder: str) -> bool:
-    if tap_text_if_present(driver, placeholder, timeout=2):
+    if tap_text_if_present(driver, placeholder, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
         return True
-    xpath = f'//*[@name="{placeholder}" or @label="{placeholder}" or @value="{placeholder}"]'
-    try:
-        _tap_element_center(driver, driver.find_element(AppiumBy.XPATH, xpath))
-        return True
-    except (NoSuchElementException, WebDriverException):
-        return False
+    return False
 
 
 def _tap_element_center(driver: WebDriver, element) -> None:
@@ -1050,13 +1083,12 @@ def _choose_specific_overlay_option(driver: WebDriver, texts: str | list[str]) -
     target_texts = [texts] if isinstance(texts, str) else texts
 
     for text in target_texts:
-        if tap_text_if_present(driver, text, timeout=2):
+        if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             _confirm_overlay_selection(driver)
             return True
 
     for text in target_texts:
         for xpath in [
-            f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
             f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
         ]:
             try:
@@ -1078,7 +1110,7 @@ def _choose_specific_overlay_option(driver: WebDriver, texts: str | list[str]) -
             pass
         time.sleep(0.3)
         for text in target_texts:
-            if tap_text_if_present(driver, text, timeout=2):
+            if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
                 _confirm_overlay_selection(driver)
                 return True
 
@@ -1101,7 +1133,7 @@ def _confirm_overlay_selection(driver: WebDriver) -> None:
 
 def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
     for text in preferred_texts:
-        if tap_text_if_present(driver, text, timeout=2):
+        if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
 
     for xpath in [
@@ -1121,10 +1153,10 @@ def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
 
 def _tap_submit(driver: WebDriver) -> bool:
     for accessibility_id in ["submit-audit-button", "activity-submit-button", "publish-submit-button"]:
-        if tap_if_present(driver, accessibility_id, timeout=2):
+        if tap_if_present(driver, accessibility_id, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
     for text in ["提交审核", "提交", "发布"]:
-        if tap_text_if_present(driver, text, timeout=2):
+        if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
     return False
 
@@ -1147,6 +1179,19 @@ def _wait_until(predicate, timeout: int) -> bool:
             return True
         time.sleep(0.2)
     return False
+
+
+def _activity_profile_enabled() -> bool:
+    return os.getenv("VW_ACTIVITY_PROFILE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@contextmanager
+def _activity_profile(label: str):
+    started_at = time.monotonic()
+    yield
+    if _activity_profile_enabled():
+        elapsed = time.monotonic() - started_at
+        print(f"[activity-profile] {label}: {elapsed:.2f}s", flush=True)
 
 
 def _extract_strings(page_source: str) -> list[str]:

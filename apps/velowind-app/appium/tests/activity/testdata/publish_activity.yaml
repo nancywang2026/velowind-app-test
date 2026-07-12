@@ -11,10 +11,7 @@ activities:
         body: "完成签到、路线说明与安全须知确认。"
       - title: "Day2 主线骑行"
         subtitle: "峡谷耐力挑战"
-        body: "完成主线路骑行并设置2个补给点。"
-      - title: "Day3 返程收尾"
-        subtitle: "自由骑行返程"
-        body: "自由骑行返程，完成活动复盘后解散。"
+        body: "完成主线路骑行并设置补给点。"
     advancedOptions:
       referenceDuration: "2天1晚"
       activityTags: ["耐力骑行", "山地路线", "周末活动"]
