@@ -371,6 +371,31 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 - 整体发布活动真机从 `0:10:13` 进一步降到 `0:08:43`，再缩短 `1:30`。
 - 相比最初记录的 `0:14:55`，总共缩短 `6:12`。
 
+继续分析后发现，`fill-description` 的主要耗时并不在输入，而在编辑器关闭前的收键盘。此前 `description-close-editor` 约为 `38s`，原因与活动行程一致：关闭编辑器前仍默认走了慢的通用收键盘路径。
+
+已完成改动：
+
+- `_close_editor()` 前两次收键盘改为优先 `_dismiss_editor_keyboard_fast()`。
+- 仍保留原有慢路径回退和后续关闭兜底，不改变失败时的保护逻辑。
+
+调整后 profile 结果：
+
+```text
+[activity-profile] description-open-editor: 10.48s
+[activity-profile] description-fill-editor: 36.52s
+[activity-profile] description-close-editor: 12.98s
+[activity-profile] fill-description: 63.56s
+[activity-profile] fill-itinerary: 119.38s
+1 passed, 1 warning in 498.27s (0:08:18)
+```
+
+新增效果：
+
+- `description-close-editor` 从约 `38s` 降到 `12.98s`，减少约 `25s`。
+- `fill-description` 从约 `88.74s` 降到 `63.56s`，减少约 `25s`。
+- 整体发布活动真机从 `0:08:43` 进一步降到 `0:08:18`，再缩短 `25s`。
+- 相比最初记录的 `0:14:55`，总共缩短 `6:37`。
+
 ### 发布笔记
 
 当前状态：本轮活动优化后已复跑通过。
@@ -392,7 +417,7 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 本轮复跑结果：
 
 ```text
-1 passed, 1 warning in 490.06s (0:08:10)
+1 passed, 1 warning in 487.28s (0:08:07)
 ```
 
 结论：
@@ -403,8 +428,8 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 
 ## 下一步计划
 
-1. 优先继续优化 `fill-description()`，它现在与 `upload-image()` 一起成为剩余最大热点。
-2. 检查 `description-close-editor` 是否也可以安全复用快速收键盘，避免当前约 `38s` 的关闭成本。
+1. 优先继续优化 `upload-image()`，它现在是活动主链路里最大的单点热点，约 `93s`。
+2. 其次分析 `fill-known-text-fields()`，当前仍有约 `63s`，看是否还能减少无效定位或重复输入。
 3. 若继续优化图片阶段，优先看进入相册后的 album 导航与确认按钮等待，而不是重新调整首页发布入口。
 4. 保持 2 段行程数据，除非产品校验规则变化；单段行程已被真机证明无法稳定保存。
 5. 每次活动侧优化后都复跑发布活动和发布笔记长白山真机用例，保证共享 `photo_picker` 两条主流程都通过。
