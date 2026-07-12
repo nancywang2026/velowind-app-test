@@ -441,17 +441,21 @@ def _tap_activity_photo_library_sheet_option(driver: WebDriver) -> bool:
 
 
 def _fill_known_text_fields(driver: WebDriver, draft: ActivityDraft) -> None:
+    page_source = _safe_page_source(driver)
     candidate_values = [
-        (SELECT_FIELD_KEYWORDS["contact"], draft.contact_name),
-        (["手机号", "联系电话", "联系方式"], draft.contact_phone),
-        (SELECT_FIELD_KEYWORDS["location"], draft.location),
-        (SELECT_FIELD_KEYWORDS["count"], draft.max_participants),
-        (SELECT_FIELD_KEYWORDS["fee"], draft.fee),
+        ("contact-name", SELECT_FIELD_KEYWORDS["contact"], draft.contact_name),
+        ("contact-phone", ["手机号", "联系电话", "联系方式"], draft.contact_phone),
+        ("location", SELECT_FIELD_KEYWORDS["location"], draft.location),
+        ("max-participants", SELECT_FIELD_KEYWORDS["count"], draft.max_participants),
+        ("fee", SELECT_FIELD_KEYWORDS["fee"], draft.fee),
     ]
-    for keywords, value in candidate_values:
-        for keyword in keywords:
-            if _fill_input_near_label(driver, keyword, value):
-                break
+    for label, keywords, value in candidate_values:
+        with _activity_profile(f"known-field-{label}"):
+            if not any(keyword in page_source for keyword in keywords):
+                continue
+            for keyword in keywords:
+                if _fill_input_near_label(driver, keyword, value, page_source=page_source):
+                    break
 
 
 def _resolve_picker_fields(driver: WebDriver, timeout: int = 60) -> None:
@@ -507,8 +511,10 @@ def _fill_input_near_label(
     *,
     prefer_text_view: bool = False,
     overwrite_existing: bool = True,
+    page_source: str | None = None,
 ) -> bool:
-    page_source = _safe_page_source(driver)
+    if page_source is None:
+        page_source = _safe_page_source(driver)
     if keyword not in page_source:
         return False
 

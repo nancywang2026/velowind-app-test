@@ -479,6 +479,43 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 - 整体发布活动从 `0:08:04` 进一步降到 `0:07:51`。
 - 相比最初记录的 `0:14:55`，总共缩短 `7:04`。
 
+继续拆解 `fill-known-text-fields` 后发现，这段耗时主要来自重复拉取 `page_source` 和对当前页面不存在的字段做多轮 XPath 探测：
+
+```text
+[activity-profile] known-field-contact-name: 13.99s
+[activity-profile] known-field-contact-phone: 10.49s
+[activity-profile] known-field-location: 17.41s
+[activity-profile] known-field-max-participants: 10.44s
+[activity-profile] known-field-fee: 10.44s
+[activity-profile] fill-known-text-fields: 62.76s
+1 passed, 1 warning in 469.62s (0:07:49)
+```
+
+已完成改动：
+
+- `_fill_known_text_fields()` 只读取一次当前 `page_source`。
+- 每组字段先做关键词预筛；如果该组关键词完全不在当前页面，整组跳过。
+- `_fill_input_near_label()` 支持传入已读取的 `page_source`，避免每个关键词重复读取页面源码。
+
+调整后 profile 结果：
+
+```text
+[activity-profile] known-field-contact-name: 0.00s
+[activity-profile] known-field-contact-phone: 0.00s
+[activity-profile] known-field-location: 0.00s
+[activity-profile] known-field-max-participants: 0.00s
+[activity-profile] known-field-fee: 0.00s
+[activity-profile] fill-known-text-fields: 3.53s
+[activity-profile] fill-form: 330.25s
+1 passed, 1 warning in 412.91s (0:06:52)
+```
+
+新增效果：
+
+- `fill-known-text-fields` 从 `62.76s` 降到 `3.53s`，减少约 `59s`。
+- 整体发布活动从 `0:07:51` 进一步降到 `0:06:52`。
+- 相比最初记录的 `0:14:55`，总共缩短 `8:03`。
+
 ### 发布笔记
 
 当前状态：本轮活动优化后已复跑通过。
@@ -500,7 +537,7 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 本轮复跑结果：
 
 ```text
-1 passed, 1 warning in 466.92s (0:07:46)
+1 passed, 1 warning in 468.29s (0:07:48)
 ```
 
 结论：
@@ -516,7 +553,7 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
    - `choose-source`，约 `15s`
    - `open-photo-album`，约 `14.5s`
    - `confirm-system-selection`，约 `23.9s`
-2. 其次分析 `fill-known-text-fields()`，当前仍有约 `63s`，看是否还能减少无效定位或重复输入。
+2. `fill-known-text-fields()` 已从约 `63s` 降到 `3.5s`，后续不再作为优先优化点。
 3. 首页发布入口和发布专用首页准备路径已经有明显收益，后续不应再优先投入这里，除非产品页面结构再次变化。
 4. 保持 2 段行程数据，除非产品校验规则变化；单段行程已被真机证明无法稳定保存。
 5. 每次活动侧优化后都复跑发布活动和发布笔记长白山真机用例，保证共享 `photo_picker` 两条主流程都通过。
