@@ -396,6 +396,89 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 - 整体发布活动真机从 `0:08:43` 进一步降到 `0:08:18`，再缩短 `25s`。
 - 相比最初记录的 `0:14:55`，总共缩短 `6:37`。
 
+继续针对“进入 App 后点击底部 `+` 发布”这段做了更激进的优化：
+
+- 点击首页发布按钮后，优先直接坐标点击“活动”类型。
+- 不再先等待发布类型 sheet 的文本信号，再决定是否点击活动类型。
+- 如果没有直接进入活动表单，仍回退到原来的 id/text 兜底逻辑。
+
+调整后 profile 结果：
+
+```text
+[activity-profile] open-publisher: 21.04s
+1 passed, 1 warning in 496.44s (0:08:16)
+```
+
+效果：
+
+- `open-publisher` 从 `24.28s` 降到 `21.04s`，减少约 `3s`。
+- 整体发布活动从 `0:08:18` 进一步降到 `0:08:16`。
+
+随后继续对图片链路做分阶段埋点，确认 `upload-image` 的主要热点为：
+
+```text
+[photo-picker-profile] choose-source: 15.04s
+[photo-picker-profile] dismiss-alerts-initial: 7.38s
+[photo-picker-profile] wait-library-visible-initial: 7.31s
+[photo-picker-profile] open-photo-album: 14.64s
+[photo-picker-profile] tap-photo-grid-candidate: 11.37s
+[photo-picker-profile] confirm-system-selection: 27.66s
+[photo-picker-profile] choose-local-photo-primary: 53.68s
+[activity-profile] upload-image: 86.16s
+1 passed, 1 warning in 487.63s (0:08:07)
+```
+
+基于这份细分 profile，已完成两类优化：
+
+1. `choose_local_photo()` 增加更细粒度埋点，明确相册切换、缩略图点击、完成确认的各自耗时。
+2. `confirm_system_photo_picker_selection()` 改成更主动的快路径：
+   - 不再每轮先依赖 `page_source` 判断是否可点完成。
+   - 直接尝试点击 `Add/完成`。
+   - 点击成功后立即等待 picker 退出。
+
+调整后 profile 结果：
+
+```text
+[photo-picker-profile] choose-source: 15.12s
+[photo-picker-profile] dismiss-alerts-initial: 7.54s
+[photo-picker-profile] wait-library-visible-initial: 7.33s
+[photo-picker-profile] open-photo-album: 14.53s
+[photo-picker-profile] tap-photo-grid-candidate: 11.16s
+[photo-picker-profile] confirm-system-selection: 23.89s
+[photo-picker-profile] choose-local-photo-primary: 49.58s
+[activity-profile] upload-image: 82.21s
+1 passed, 1 warning in 484.99s (0:08:04)
+```
+
+效果：
+
+- `confirm-system-selection` 从 `27.66s` 降到 `23.89s`，减少约 `4s`。
+- `upload-image` 从 `86.16s` 降到 `82.21s`，减少约 `4s`。
+- 整体发布活动从 `0:08:07` 进一步降到 `0:08:04`。
+
+最后又将发布活动/发布笔记两条主链路的“准备首页”改成发布专用快速路径：
+
+- 新增 `ensure_logged_in_for_publish_entry()`。
+- 不再强依赖首页 feed 完整 ready。
+- 只要确认不在登录页、也不在发布页/详情页阻塞场景，就直接准备点击底部 `+`。
+- 登录后如果已经回到可发布首页，不再额外做一次首页恢复。
+
+调整后最新真机结果：
+
+```text
+[activity-profile] open-publisher: 20.82s
+[activity-profile] upload-image: 81.84s
+[activity-profile] fill-form: 387.99s
+1 passed, 1 warning in 471.06s (0:07:51)
+```
+
+本轮累计效果：
+
+- `open-publisher` 从 `21.20s` 降到 `20.82s`。
+- `upload-image` 从 `82.21s` 进一步降到 `81.84s`。
+- 整体发布活动从 `0:08:04` 进一步降到 `0:07:51`。
+- 相比最初记录的 `0:14:55`，总共缩短 `7:04`。
+
 ### 发布笔记
 
 当前状态：本轮活动优化后已复跑通过。
@@ -417,7 +500,7 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 本轮复跑结果：
 
 ```text
-1 passed, 1 warning in 487.28s (0:08:07)
+1 passed, 1 warning in 466.92s (0:07:46)
 ```
 
 结论：
@@ -425,11 +508,15 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 - 活动侧短等待、发布入口坐标优先、2 段行程数据调整没有破坏发布笔记长白山流程。
 - 共享 `photo_picker` 默认“指定相册后全选”的行为仍可支持发布笔记真机用例通过。
 - 活动侧新增的“指定相册后单选首图”策略没有影响笔记主链路。
+- 发布专用首页准备 helper 也没有破坏发布笔记长白山真机流程。
 
 ## 下一步计划
 
-1. 优先继续优化 `upload-image()`，它现在是活动主链路里最大的单点热点，约 `93s`。
+1. 继续优化 `upload-image()`，当前剩余最大的图片热点是：
+   - `choose-source`，约 `15s`
+   - `open-photo-album`，约 `14.5s`
+   - `confirm-system-selection`，约 `23.9s`
 2. 其次分析 `fill-known-text-fields()`，当前仍有约 `63s`，看是否还能减少无效定位或重复输入。
-3. 若继续优化图片阶段，优先看进入相册后的 album 导航与确认按钮等待，而不是重新调整首页发布入口。
+3. 首页发布入口和发布专用首页准备路径已经有明显收益，后续不应再优先投入这里，除非产品页面结构再次变化。
 4. 保持 2 段行程数据，除非产品校验规则变化；单段行程已被真机证明无法稳定保存。
 5. 每次活动侧优化后都复跑发布活动和发布笔记长白山真机用例，保证共享 `photo_picker` 两条主流程都通过。
