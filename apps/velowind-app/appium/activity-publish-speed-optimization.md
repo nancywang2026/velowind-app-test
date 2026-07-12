@@ -588,3 +588,45 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 4. 首页发布入口和发布专用首页准备路径已经有明显收益，后续不应再优先投入这里，除非产品页面结构再次变化。
 5. 保持 2 段行程数据，除非产品校验规则变化；单段行程已被真机证明无法稳定保存。
 6. 每次活动侧优化后都复跑发布活动和发布笔记长白山真机用例，保证共享 `photo_picker` 两条主流程都通过。
+
+## 发布笔记联动优化
+
+用户观察到两个笔记发布体验问题：
+
+- 进入 App 后，等待较久才点击底部 `+`。
+- 选择“笔记”后，添加图片前等待较久。
+
+已完成改动：
+
+- `publish_message_note()` 增加默认关闭的 `VW_ACTIVITY_PROFILE=1` 分段 profile。
+- `open_message_note_publisher()` 的底部发布入口优先走坐标点击，再走 id/text/XPath 兜底。
+- `_tap_note_image_plus()` 优先坐标点击图片占位区域，再走 id/text/XPath 兜底。
+- `_clear_existing_note_images()` 增加页面源码预筛；只有出现 `删除/移除/已选择` 等旧图迹象时，才扫描删除按钮。
+
+首次拆解结果：
+
+```text
+[note-profile] open-publisher: 13.61s
+[note-profile] upload-clear-existing-images: 17.43s
+[note-profile] upload-tap-image-plus: 2.65s
+[note-profile] upload-choose-photo-library: 92.76s
+[note-profile] upload-image: 112.84s
+1 passed, 1 warning in 419.13s (0:06:59)
+```
+
+优化后结果：
+
+```text
+[note-profile] open-publisher: 13.75s
+[note-profile] upload-clear-existing-images: 2.67s
+[note-profile] upload-tap-image-plus: 2.65s
+[note-profile] upload-choose-photo-library: 93.37s
+[note-profile] upload-image: 98.69s
+1 passed, 1 warning in 403.81s (0:06:43)
+```
+
+效果：
+
+- `upload-clear-existing-images` 从 `17.43s` 降到 `2.67s`，减少约 `15s`。
+- 发布笔记长白山从 `0:06:59` 降到 `0:06:43`。
+- 选择笔记后、添加图片前的等待主要来自“扫描旧图片删除按钮”，当前已通过预筛明显降低。

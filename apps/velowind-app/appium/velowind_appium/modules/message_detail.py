@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import html
+import os
 from pathlib import Path
 import re
 import time
@@ -212,9 +214,12 @@ def publish_message_note(
     ios_config: IosAppiumConfig | None = None,
     timeout: int = 60,
 ) -> str:
-    open_message_note_publisher(driver, ios_config=ios_config, timeout=timeout)
-    fill_message_note_form(driver, draft, timeout=timeout)
-    return submit_message_note(driver, timeout=timeout)
+    with _note_profile("open-publisher"):
+        open_message_note_publisher(driver, ios_config=ios_config, timeout=timeout)
+    with _note_profile("fill-form"):
+        fill_message_note_form(driver, draft, timeout=timeout)
+    with _note_profile("submit-note"):
+        return submit_message_note(driver, timeout=timeout)
 
 
 def open_message_note_publisher(
@@ -255,13 +260,19 @@ def open_message_note_publisher(
 def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: int = 60) -> None:
     wait_for_message_note_form(driver, timeout=timeout)
 
-    _upload_note_image(driver, draft)
-    _fill_note_title(driver, draft.title)
-    _fill_note_body(driver, draft.body)
-    _append_note_topics_to_body(driver, draft.topics)
+    with _note_profile("upload-image"):
+        _upload_note_image(driver, draft)
+    with _note_profile("fill-title"):
+        _fill_note_title(driver, draft.title)
+    with _note_profile("fill-body"):
+        _fill_note_body(driver, draft.body)
+    with _note_profile("append-topics"):
+        _append_note_topics_to_body(driver, draft.topics)
     if draft.location:
-        _fill_note_location(driver, draft.location)
-    _set_allow_comments(driver, draft.allow_comments)
+        with _note_profile("fill-location"):
+            _fill_note_location(driver, draft.location)
+    with _note_profile("set-allow-comments"):
+        _set_allow_comments(driver, draft.allow_comments)
 
 
 def submit_message_note(driver: WebDriver, timeout: int = 30) -> str:
@@ -431,6 +442,8 @@ def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
 
 
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
+    if _tap_publish_entry_by_coordinate(driver):
+        return True
     for accessibility_id in PUBLISH_ENTRY_IDS:
         if _tap_accessibility_id_now(driver, accessibility_id):
             return True
@@ -451,6 +464,15 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
         driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.5), "y": int(rect["height"] * 0.93)})
         return True
     except WebDriverException:
+        return False
+
+
+def _tap_publish_entry_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.5), "y": int(rect["height"] * 0.93)})
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
         return False
 
 
@@ -532,15 +554,20 @@ def _fill_note_body(driver: WebDriver, body: str) -> None:
 
 
 def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
-    _clear_existing_note_images(driver)
-    if not _tap_note_image_plus(driver):
+    with _note_profile("upload-clear-existing-images"):
+        _clear_existing_note_images(driver)
+    with _note_profile("upload-tap-image-plus"):
+        image_plus_tapped = _tap_note_image_plus(driver)
+    if not image_plus_tapped:
         raise AssertionError("Unable to find the note image plus button")
 
-    if photo_picker.choose_photo_from_library(
-        driver,
-        album_name=draft.album,
-        retry_sheet_option=_tap_note_photo_library_sheet_option,
-    ):
+    with _note_profile("upload-choose-photo-library"):
+        photo_chosen = photo_picker.choose_photo_from_library(
+            driver,
+            album_name=draft.album,
+            retry_sheet_option=_tap_note_photo_library_sheet_option,
+        )
+    if photo_chosen:
         return
 
     raise AssertionError(
@@ -565,7 +592,10 @@ def _tap_note_photo_library_sheet_option(driver: WebDriver) -> bool:
 
 
 def _clear_existing_note_images(driver: WebDriver, max_images: int = 9) -> None:
-    if not message_note_form_is_visible(_safe_page_source(driver)):
+    page_source = _safe_page_source(driver)
+    if not message_note_form_is_visible(page_source):
+        return
+    if not _note_selected_images_hint(page_source):
         return
     for _ in range(max_images):
         remove_buttons = _find_note_image_remove_buttons(driver)
@@ -576,6 +606,10 @@ def _clear_existing_note_images(driver: WebDriver, max_images: int = 9) -> None:
             return
         if not _wait_until(lambda: len(_find_note_image_remove_buttons(driver)) < before_count, timeout=2):
             return
+
+
+def _note_selected_images_hint(page_source: str) -> bool:
+    return any(text in page_source for text in ["删除图片", "移除图片", "删除", "移除", "已选择"])
 
 
 def _find_note_image_remove_buttons(driver: WebDriver) -> list:
@@ -639,6 +673,8 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
 
 
 def _tap_note_image_plus(driver: WebDriver) -> bool:
+    if _tap_note_image_plus_by_coordinate(driver):
+        return True
     for accessibility_id in [
         "note-image-add",
         "note-photo-add",
@@ -662,6 +698,14 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
             return True
         except (NoSuchElementException, WebDriverException):
             continue
+    try:
+        driver.execute_script("mobile: tap", {"x": 60, "y": 206})
+        return True
+    except WebDriverException:
+        return False
+
+
+def _tap_note_image_plus_by_coordinate(driver: WebDriver) -> bool:
     try:
         driver.execute_script("mobile: tap", {"x": 60, "y": 206})
         return True
@@ -1576,6 +1620,19 @@ def _safe_page_source(driver: WebDriver) -> str:
         return driver.page_source
     except (AttributeError, WebDriverException):
         return ""
+
+
+def _note_profile_enabled() -> bool:
+    return os.getenv("VW_ACTIVITY_PROFILE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@contextmanager
+def _note_profile(label: str):
+    started_at = time.monotonic()
+    yield
+    if _note_profile_enabled():
+        elapsed = time.monotonic() - started_at
+        print(f"[note-profile] {label}: {elapsed:.2f}s", flush=True)
 
 
 def _tap_candidate(driver: WebDriver, accessibility_ids: list[str], texts: list[str]) -> bool:
