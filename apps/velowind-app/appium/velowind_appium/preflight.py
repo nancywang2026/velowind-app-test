@@ -1,6 +1,7 @@
-from pathlib import Path
 import os
+from pathlib import Path
 import subprocess
+from typing import Optional
 
 from .config import auto_detect_online_ios_udid, load_ios_config
 
@@ -25,6 +26,78 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw_value is None:
         return default
     return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def is_wda_startup_error(message: str) -> bool:
+    normalized = (message or "").strip()
+    return "Unable to launch WebDriverAgent" in normalized or "xcodebuild failed with code 65" in normalized
+
+
+def _current_appium_server_log_path(config) -> Path:
+    return config.artifact_dir / "appium-server.log"
+
+
+def _recommended_real_device_command(config) -> str:
+    values = {
+        "VW_IOS_TARGET": config.target or "device",
+        "VW_IOS_UDID": config.udid or "<device-udid>",
+        "VW_IOS_PLATFORM_VERSION": config.platform_version or "<ios-version>",
+        "VW_IOS_DEVICE_NAME": config.device_name or "<device-name>",
+        "VW_IOS_XCODE_ORG_ID": config.xcode_org_id or "K2VHBX5KLX",
+        "VW_IOS_XCODE_SIGNING_ID": config.xcode_signing_id or "Apple Development",
+        "VW_IOS_UPDATED_WDA_BUNDLE_ID": config.updated_wda_bundle_id or "com.velowind.rider.WebDriverAgentRunner",
+        "VW_IOS_ALLOW_PROVISIONING_DEVICE_REGISTRATION": "true",
+        "VW_IOS_SHOW_XCODE_LOG": "true",
+        "VW_IOS_SKIP_WDA_PREFLIGHT": "false",
+    }
+    return " \\\n".join(f"{key}={value}" for key, value in values.items())
+
+
+def format_wda_startup_error(config, original_error: Exception, diagnostic_path: Optional[Path] = None) -> str:
+    lines = [
+        "Real-device Appium startup failed before the test body ran.",
+        f"Original error: {original_error}",
+        "",
+        "What we know:",
+        f"- Device UDID: {config.udid or '<missing>'}",
+        f"- Appium server: {config.server_url}",
+        f"- WDA team id: {config.xcode_org_id or '<missing>'}",
+        f"- WDA signing id: {config.xcode_signing_id or 'Apple Development'}",
+        f"- WDA bundle id: {config.updated_wda_bundle_id or '<missing>'}",
+        "",
+        "Recommended checks:",
+        "1. Unlock the iPhone, keep it on the home screen, and confirm Developer Mode is still enabled.",
+        "2. Run the WDA preflight command below to verify build/signing.",
+        "3. If preflight passes but pytest still fails, restart the Appium server and rerun the test.",
+        f"4. Inspect the Appium server log at: {_current_appium_server_log_path(config)}",
+    ]
+    if diagnostic_path is not None:
+        lines.append(f"5. Review the generated startup diagnostic at: {diagnostic_path}")
+    if not config.xcode_org_id or not config.updated_wda_bundle_id:
+        lines.extend(
+            [
+                "",
+                "Missing required WDA signing configuration for reliable real-device runs:",
+                "- VW_IOS_XCODE_ORG_ID",
+                "- VW_IOS_UPDATED_WDA_BUNDLE_ID",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Preflight command:",
+            _recommended_real_device_command(config),
+            "PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.preflight",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_wda_startup_diagnostic(config, original_error: Exception) -> Path:
+    diagnostic_path = config.artifact_dir / "wda-startup-diagnostic.txt"
+    config.artifact_dir.mkdir(parents=True, exist_ok=True)
+    diagnostic_path.write_text(format_wda_startup_error(config, original_error), encoding="utf-8")
+    return diagnostic_path
 
 
 def _run_wda_build_preflight(config) -> int:

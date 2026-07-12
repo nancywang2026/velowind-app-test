@@ -17,6 +17,7 @@ def choose_photo_from_library(
     driver: WebDriver,
     *,
     album_name: str | None = None,
+    select_all_from_album: bool = True,
     retry_sheet_option: RetrySheetOption | None = None,
 ) -> bool:
     if not choose_photo_library_source(driver):
@@ -31,12 +32,13 @@ def choose_photo_from_library(
     if not photo_library_visible(driver, timeout=5):
         return False
 
-    if choose_local_photo(driver, album_name=album_name):
+    if choose_local_photo(driver, album_name=album_name, select_all_from_album=select_all_from_album):
         return True
 
     return _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and choose_local_photo(
         driver,
         album_name=album_name,
+        select_all_from_album=select_all_from_album,
     )
 
 
@@ -75,12 +77,21 @@ def photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
     return False
 
 
-def choose_local_photo(driver: WebDriver, *, picture_index: int = 1, album_name: str | None = None) -> bool:
+def choose_local_photo(
+    driver: WebDriver,
+    *,
+    picture_index: int = 1,
+    album_name: str | None = None,
+    select_all_from_album: bool = True,
+) -> bool:
     normalized_index = max(1, picture_index)
     if album_name and not open_photo_album(driver, album_name):
         return False
     if album_name:
-        if not select_all_album_photos(driver):
+        if select_all_from_album:
+            if not select_all_album_photos(driver):
+                return False
+        elif not tap_photo_grid_candidate(driver, normalized_index):
             return False
         return confirm_system_photo_picker_selection(driver)
 

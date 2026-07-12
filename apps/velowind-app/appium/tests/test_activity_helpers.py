@@ -33,12 +33,7 @@ def test_build_activity_draft_reads_first_yaml_case():
         ActivityItineraryItem(
             title="Day2 主线骑行",
             subtitle="峡谷耐力挑战",
-            body="完成主线路骑行并设置2个补给点。",
-        ),
-        ActivityItineraryItem(
-            title="Day3 返程收尾",
-            subtitle="自由骑行返程",
-            body="自由骑行返程，完成活动复盘后解散。",
+            body="完成主线路骑行并设置补给点。",
         ),
     ]
 
@@ -267,7 +262,7 @@ def test_fill_itinerary_fills_each_segment_and_taps_add_between_items(monkeypatc
 
     monkeypatch.setattr(activity, "_open_editor", lambda driver, entry_text: True)
     monkeypatch.setattr(activity, "_fill_itinerary_editor_item", lambda driver, index, item: events.append(("fill-item", index, item)))
-    monkeypatch.setattr(activity, "_dismiss_editor_keyboard", lambda driver: events.append("dismiss-keyboard"))
+    monkeypatch.setattr(activity, "_dismiss_editor_keyboard_fast", lambda driver: events.append("dismiss-keyboard"))
     monkeypatch.setattr(activity, "_add_itinerary_segment", lambda driver: events.append("add-segment") or True)
     monkeypatch.setattr(activity, "_close_editor", lambda driver: events.append("close"))
     monkeypatch.setattr(activity, "_assert_editor_saved", lambda driver, placeholder, field_name: None)
@@ -306,7 +301,7 @@ def test_fill_itinerary_editor_item_targets_title_subtitle_and_body(monkeypatch)
         "_fill_indexed_editor_text_view",
         lambda driver, value, index: events.append(("body", value, index)),
     )
-    monkeypatch.setattr(activity, "_dismiss_editor_keyboard", lambda driver: events.append("dismiss-keyboard"))
+    monkeypatch.setattr(activity, "_dismiss_editor_keyboard_fast", lambda driver: events.append("dismiss-keyboard"))
 
     activity._fill_itinerary_editor_item(
         object(),
@@ -480,15 +475,15 @@ def test_upload_activity_image_uses_album_from_draft(monkeypatch):
     monkeypatch.setattr(
         activity.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, retry_sheet_option=None: calls.append(
-            ("choose-photo", album_name, retry_sheet_option is activity._tap_activity_photo_library_sheet_option)
+        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: calls.append(
+            ("choose-photo", album_name, select_all_from_album, retry_sheet_option is activity._tap_activity_photo_library_sheet_option)
         )
         or True,
     )
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == [("choose-photo", "太行山", True)]
+    assert calls == [("choose-photo", "太行山", False, True)]
 
 
 def test_upload_activity_image_waits_for_photo_library_before_choosing_album(monkeypatch):
@@ -499,19 +494,26 @@ def test_upload_activity_image_waits_for_photo_library_before_choosing_album(mon
     monkeypatch.setattr(
         activity.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, retry_sheet_option=None: calls.append(("choose-photo", album_name)) or True,
+        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: calls.append(
+            ("choose-photo", album_name, select_all_from_album)
+        )
+        or True,
     )
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == [("choose-photo", "太行山")]
+    assert calls == [("choose-photo", "太行山", False)]
 
 
 def test_upload_activity_image_requires_phone_photo_library_source(monkeypatch):
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
     monkeypatch.setattr(activity, "_tap_image_picker", lambda driver: True)
-    monkeypatch.setattr(activity.photo_picker, "choose_photo_from_library", lambda driver, album_name=None, retry_sheet_option=None: False)
+    monkeypatch.setattr(
+        activity.photo_picker,
+        "choose_photo_from_library",
+        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: False,
+    )
 
     try:
         activity._upload_activity_image(object(), draft)
@@ -530,12 +532,14 @@ def test_upload_activity_image_retries_activity_action_sheet_option_when_library
     monkeypatch.setattr(
         activity.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, retry_sheet_option=None: (
-            calls.append(("retry", retry_sheet_option is activity._tap_activity_photo_library_sheet_option, album_name))
+        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: (
+            calls.append(
+                ("retry", retry_sheet_option is activity._tap_activity_photo_library_sheet_option, album_name, select_all_from_album)
+            )
             or True
         ),
     )
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == [("retry", True, "太行山")]
+    assert calls == [("retry", True, "太行山", False)]
