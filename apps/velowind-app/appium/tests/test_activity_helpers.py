@@ -376,7 +376,6 @@ def test_close_editor_dismisses_keyboard_like_note_before_bottom_done(monkeypatc
         "发布活动 提交审核",
     ])
 
-    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
     monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(sources))
     monkeypatch.setattr(activity, "_editor_page_visible", lambda page_source: "编辑活动说明" in page_source)
@@ -392,7 +391,6 @@ def test_close_editor_dismisses_keyboard_like_note_before_bottom_done(monkeypatc
     activity._close_editor(FakeDriver())
 
     assert events == [
-        "hide-keyboard",
         ("execute", "mobile: tap", {"x": 361, "y": 157}),
         ("execute", "mobile: tap", {"x": 201, "y": 95}),
         ("tap-text", "完成"),
@@ -402,7 +400,6 @@ def test_close_editor_dismisses_keyboard_like_note_before_bottom_done(monkeypatc
 def test_close_editor_requires_editor_to_actually_close_after_tapping_done(monkeypatch):
     events = []
 
-    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
     monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "编辑活动说明 完成")
     monkeypatch.setattr(activity, "_editor_page_visible", lambda page_source: True)
@@ -426,7 +423,7 @@ def test_close_editor_requires_editor_to_actually_close_after_tapping_done(monke
     else:
         raise AssertionError("Expected _close_editor to fail when the editor remains visible after tapping done")
 
-    assert events[:2] == ["hide-keyboard", ("execute", "mobile: tap", {"x": 361, "y": 157})]
+    assert events[:1] == [("execute", "mobile: tap", {"x": 361, "y": 157})]
     assert ("tap-text", "完成") in events
     assert ("execute", "mobile: tap", {"x": 82, "y": 95}) in events
 
@@ -435,7 +432,6 @@ def test_close_editor_uses_bottom_done_before_keyboard_fallback(monkeypatch):
     events = []
     state = {"closed": False}
 
-    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
     monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(
         activity,
@@ -461,7 +457,6 @@ def test_close_editor_uses_bottom_done_before_keyboard_fallback(monkeypatch):
     activity._close_editor(FakeDriver())
 
     assert "back" not in events
-    assert "hide-keyboard" in events
     assert ("execute", "mobile: tap", {"x": 361, "y": 157}) in events
     assert ("execute", "mobile: tap", {"x": 201, "y": 95}) in events
     assert ("execute", "mobile: tap", {"x": 225, "y": 821}) in events

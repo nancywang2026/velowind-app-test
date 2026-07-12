@@ -842,13 +842,13 @@ def _normalize_itinerary_item(raw_item, index: int) -> ActivityItineraryItem | N
 
 
 def _close_editor(driver: WebDriver) -> None:
-    _dismiss_editor_keyboard(driver)
+    _dismiss_editor_keyboard_fast(driver)
     _tap_editor_title(driver)
     time.sleep(0.2)
     if _tap_editor_bottom_done(driver):
         if _wait_until(lambda: not _editor_page_visible(_safe_page_source(driver)), timeout=4):
             return
-    _dismiss_editor_keyboard(driver)
+    _dismiss_editor_keyboard_fast(driver)
     _tap_editor_title(driver)
     time.sleep(0.2)
     if _tap_editor_bottom_done(driver):
