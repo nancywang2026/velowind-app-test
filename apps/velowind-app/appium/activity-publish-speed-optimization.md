@@ -516,6 +516,35 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 - 整体发布活动从 `0:07:51` 进一步降到 `0:06:52`。
 - 相比最初记录的 `0:14:55`，总共缩短 `8:03`。
 
+继续回到 `upload-image`，针对 `choose-source`、权限弹窗探测和完成按钮做轻量定位优化：
+
+- `choose_photo_library_source()` 优先使用 iOS predicate 精确匹配相册入口文案，减少 XPath 查找。
+- `dismiss_photo_permission_alerts()` 先读取一次 `page_source`，没有权限弹窗文案时直接跳过，不再固定探测多个按钮。
+- `_tap_photo_picker_done_button()` 优先使用 accessibility id `Add` 和 iOS predicate 匹配 `完成/添加`，最后才走 XPath 兜底。
+
+调整后 profile 结果：
+
+```text
+[photo-picker-profile] choose-source: 3.05s
+[photo-picker-profile] dismiss-alerts-initial: 4.54s
+[photo-picker-profile] wait-library-visible-initial: 7.45s
+[photo-picker-profile] open-photo-album: 14.62s
+[photo-picker-profile] tap-photo-grid-candidate: 11.23s
+[photo-picker-profile] confirm-system-selection: 20.48s
+[photo-picker-profile] choose-local-photo-primary: 46.33s
+[activity-profile] upload-image: 64.01s
+[activity-profile] fill-form: 311.34s
+1 passed, 1 warning in 392.89s (0:06:32)
+```
+
+新增效果：
+
+- `choose-source` 从约 `15s` 降到 `3.05s`，减少约 `12s`。
+- `confirm-system-selection` 从约 `23.9s` 降到 `20.48s`，减少约 `3.4s`。
+- `upload-image` 从 `81.81s` 降到 `64.01s`，减少约 `18s`。
+- 整体发布活动从 `0:06:52` 进一步降到 `0:06:32`。
+- 相比最初记录的 `0:14:55`，总共缩短 `8:23`。
+
 ### 发布笔记
 
 当前状态：本轮活动优化后已复跑通过。
@@ -537,7 +566,7 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 本轮复跑结果：
 
 ```text
-1 passed, 1 warning in 468.29s (0:07:48)
+1 passed, 1 warning in 449.67s (0:07:29)
 ```
 
 结论：
@@ -546,14 +575,16 @@ PYTHONPATH=apps/velowind-app/appium python3 -m pytest \
 - 共享 `photo_picker` 默认“指定相册后全选”的行为仍可支持发布笔记真机用例通过。
 - 活动侧新增的“指定相册后单选首图”策略没有影响笔记主链路。
 - 发布专用首页准备 helper 也没有破坏发布笔记长白山真机流程。
+- 相册入口和完成按钮的 predicate 快路径没有破坏发布笔记长白山真机流程。
 
 ## 下一步计划
 
 1. 继续优化 `upload-image()`，当前剩余最大的图片热点是：
-   - `choose-source`，约 `15s`
-   - `open-photo-album`，约 `14.5s`
-   - `confirm-system-selection`，约 `23.9s`
-2. `fill-known-text-fields()` 已从约 `63s` 降到 `3.5s`，后续不再作为优先优化点。
-3. 首页发布入口和发布专用首页准备路径已经有明显收益，后续不应再优先投入这里，除非产品页面结构再次变化。
-4. 保持 2 段行程数据，除非产品校验规则变化；单段行程已被真机证明无法稳定保存。
-5. 每次活动侧优化后都复跑发布活动和发布笔记长白山真机用例，保证共享 `photo_picker` 两条主流程都通过。
+   - `open-photo-album`，约 `14.6s`
+   - `tap-photo-grid-candidate`，约 `11.2s`
+   - `confirm-system-selection`，约 `20.5s`
+2. 可继续评估 `open-photo-album()` 是否能减少相册标题 XPath 检查，或针对固定相册位置增加更轻的坐标/谓词路径。
+3. `fill-known-text-fields()` 已从约 `63s` 降到 `3.5s`，后续不再作为优先优化点。
+4. 首页发布入口和发布专用首页准备路径已经有明显收益，后续不应再优先投入这里，除非产品页面结构再次变化。
+5. 保持 2 段行程数据，除非产品校验规则变化；单段行程已被真机证明无法稳定保存。
+6. 每次活动侧优化后都复跑发布活动和发布笔记长白山真机用例，保证共享 `photo_picker` 两条主流程都通过。

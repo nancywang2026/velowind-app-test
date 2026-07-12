@@ -72,16 +72,22 @@ def choose_photo_from_library(
 
 
 def dismiss_photo_permission_alerts(driver: WebDriver) -> None:
-    for text in ["允许访问所有照片", "允许", "好"]:
-        tap_text_if_present(driver, text, timeout=2)
+    page_source = _safe_page_source(driver)
+    alert_texts = ["允许访问所有照片", "允许", "好"]
+    if page_source and not any(text in page_source for text in alert_texts):
+        return
+    for text in alert_texts:
+        tap_text_if_present(driver, text, timeout=0.5)
 
 
 def choose_photo_library_source(driver: WebDriver) -> bool:
     source_texts = ["从手机相册选择", "手机相册", "从相册选择", "相册"]
+    if _tap_texts_by_predicate(driver, source_texts):
+        return True
     if _tap_photo_source_option(driver, source_texts):
         return True
     for text in source_texts:
-        if tap_text_if_present(driver, text, timeout=1):
+        if tap_text_if_present(driver, text, timeout=0.5):
             return True
     return _tap_photo_library_sheet_option(driver)
 
@@ -506,6 +512,17 @@ def _tap_text_or_contains(driver: WebDriver, text: str) -> bool:
     return False
 
 
+def _tap_texts_by_predicate(driver: WebDriver, texts: list[str]) -> bool:
+    escaped_texts = [text.replace("\\", "\\\\").replace('"', '\\"') for text in texts]
+    quoted = ", ".join(f'"{text}"' for text in escaped_texts)
+    predicate = f"name IN {{{quoted}}} OR label IN {{{quoted}}} OR value IN {{{quoted}}}"
+    try:
+        driver.find_element(AppiumBy.IOS_PREDICATE, predicate).click()
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
+
+
 def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
     try:
         driver.find_element(AppiumBy.ACCESSIBILITY_ID, accessibility_id).click()
@@ -515,6 +532,11 @@ def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
 
 
 def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
+    if _tap_accessibility_id_now(driver, "Add"):
+        return True
+    if _tap_texts_by_predicate(driver, ["完成", "添加"]):
+        return True
+
     for xpath in [
         '//*[@name="Add" and @enabled="true" and @visible="true"]',
         '//*[@label="完成" and @enabled="true" and @visible="true"]',
@@ -532,8 +554,6 @@ def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
         except (NoSuchElementException, WebDriverException):
             continue
 
-    if _tap_accessibility_id_now(driver, "Add"):
-        return True
     for text in ["完成", "添加"]:
         if _tap_text_or_contains(driver, text):
             return True

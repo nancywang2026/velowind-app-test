@@ -89,6 +89,8 @@ def test_tap_photo_picker_done_button_taps_visible_enabled_add_center():
 
     class FakeDriver:
         def find_element(self, by, value):
+            if value in {"Add", 'name IN {"完成", "添加"} OR label IN {"完成", "添加"} OR value IN {"完成", "添加"}'}:
+                raise photo_picker.NoSuchElementException()
             assert value == '//*[@name="Add" and @enabled="true" and @visible="true"]'
             return FakeElement()
 
