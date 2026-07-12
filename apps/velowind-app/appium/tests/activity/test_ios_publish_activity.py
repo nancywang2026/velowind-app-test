@@ -2,7 +2,7 @@ import pytest
 
 from velowind_appium.modules import build_activity_draft, publish_activity
 from velowind_appium.reporting import attach_text
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_for_publish_entry
 
 
 @pytest.mark.full
@@ -10,7 +10,7 @@ def test_user_can_publish_activity_for_review(driver, ios_config, step):
     draft = build_activity_draft()
 
     dismiss_common_system_alerts(driver, step)
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_logged_in_for_publish_entry(driver, ios_config))
     success_signal = step(
         "publish-activity-for-review",
         lambda: publish_activity(driver, draft, ios_config=ios_config, timeout=90),

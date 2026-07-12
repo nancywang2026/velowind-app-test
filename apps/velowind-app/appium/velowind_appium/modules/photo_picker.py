@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import os
 import time
 from typing import Callable
 
@@ -18,28 +20,55 @@ def choose_photo_from_library(
     *,
     album_name: str | None = None,
     select_all_from_album: bool = True,
+    prefer_retry_sheet_option_first: bool = False,
     retry_sheet_option: RetrySheetOption | None = None,
 ) -> bool:
-    if not choose_photo_library_source(driver):
+    visible = False
+    if prefer_retry_sheet_option_first and retry_sheet_option is not None:
+        with _photo_picker_profile("retry-sheet-option-initial"):
+            retry_sheet_option(driver)
+        with _photo_picker_profile("dismiss-alerts-initial"):
+            dismiss_photo_permission_alerts(driver)
+        with _photo_picker_profile("wait-library-visible-initial"):
+            visible = photo_library_visible(driver, timeout=3)
+
+    if not visible:
+        with _photo_picker_profile("choose-source"):
+            source_chosen = choose_photo_library_source(driver)
+        if not source_chosen:
+            return False
+
+        with _photo_picker_profile("dismiss-alerts-initial"):
+            dismiss_photo_permission_alerts(driver)
+
+        with _photo_picker_profile("wait-library-visible-initial"):
+            visible = photo_library_visible(driver, timeout=5)
+        if not visible and retry_sheet_option is not None:
+            with _photo_picker_profile("retry-sheet-option"):
+                retry_sheet_option(driver)
+            with _photo_picker_profile("dismiss-alerts-retry"):
+                dismiss_photo_permission_alerts(driver)
+            with _photo_picker_profile("wait-library-visible-retry"):
+                visible = photo_library_visible(driver, timeout=5)
+
+    if not visible:
         return False
 
-    dismiss_photo_permission_alerts(driver)
-
-    if not photo_library_visible(driver, timeout=5) and retry_sheet_option is not None:
-        retry_sheet_option(driver)
-        dismiss_photo_permission_alerts(driver)
-
-    if not photo_library_visible(driver, timeout=5):
-        return False
-
-    if choose_local_photo(driver, album_name=album_name, select_all_from_album=select_all_from_album):
+    with _photo_picker_profile("choose-local-photo-primary"):
+        primary_chosen = choose_local_photo(driver, album_name=album_name, select_all_from_album=select_all_from_album)
+    if primary_chosen:
         return True
 
-    return _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"]) and choose_local_photo(
-        driver,
-        album_name=album_name,
-        select_all_from_album=select_all_from_album,
-    )
+    with _photo_picker_profile("choose-first-option-fallback"):
+        fallback_opened = _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"])
+    if not fallback_opened:
+        return False
+    with _photo_picker_profile("choose-local-photo-fallback"):
+        return choose_local_photo(
+            driver,
+            album_name=album_name,
+            select_all_from_album=select_all_from_album,
+        )
 
 
 def dismiss_photo_permission_alerts(driver: WebDriver) -> None:
@@ -85,20 +114,32 @@ def choose_local_photo(
     select_all_from_album: bool = True,
 ) -> bool:
     normalized_index = max(1, picture_index)
-    if album_name and not open_photo_album(driver, album_name):
-        return False
+    if album_name:
+        with _photo_picker_profile("open-photo-album"):
+            album_opened = open_photo_album(driver, album_name)
+        if not album_opened:
+            return False
     if album_name:
         if select_all_from_album:
-            if not select_all_album_photos(driver):
+            with _photo_picker_profile("select-all-album-photos"):
+                all_selected = select_all_album_photos(driver)
+            if not all_selected:
                 return False
-        elif not tap_photo_grid_candidate(driver, normalized_index):
-            return False
-        return confirm_system_photo_picker_selection(driver)
-
-    if tap_photo_grid_candidate(driver, normalized_index):
-        if confirm_note_image_cropper(driver):
-            return True
-        return confirm_system_photo_picker_selection(driver)
+        else:
+            with _photo_picker_profile("tap-photo-grid-candidate"):
+                candidate_tapped = tap_photo_grid_candidate(driver, normalized_index)
+            if not candidate_tapped:
+                return False
+        with _photo_picker_profile("confirm-system-selection"):
+            return confirm_system_photo_picker_selection(driver)
+    with _photo_picker_profile("tap-photo-grid-candidate"):
+        candidate_tapped = tap_photo_grid_candidate(driver, normalized_index)
+    if candidate_tapped:
+        with _photo_picker_profile("confirm-note-cropper"):
+            if confirm_note_image_cropper(driver):
+                return True
+        with _photo_picker_profile("confirm-system-selection"):
+            return confirm_system_photo_picker_selection(driver)
     return False
 
 
@@ -115,8 +156,7 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
         return False
     for _ in range(4):
         if _tap_named_element_center(driver, album_name):
-            time.sleep(0.5)
-            if photo_album_title(driver) == album_name:
+            if _wait_until(lambda: photo_album_title(driver) == album_name, timeout=2):
                 return True
         try:
             swipe_vertical(driver, direction="up")
@@ -313,13 +353,11 @@ def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
 def confirm_system_photo_picker_selection(driver: WebDriver, timeout: int = 10) -> bool:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        page_source = _safe_page_source(driver)
-        if any(text in page_source for text in ["选择最多", "1张照片", "照片"]):
-            if _tap_photo_picker_done_button(driver) and _wait_until(
-                lambda: _photo_picker_transition_completed(driver),
-                timeout=3,
-            ):
-                return True
+        if _tap_photo_picker_done_button(driver) and _wait_until(
+            lambda: _photo_picker_transition_completed(driver),
+            timeout=2,
+        ):
+            return True
         time.sleep(0.2)
     return False
 
@@ -558,3 +596,16 @@ def _safe_page_source(driver: WebDriver) -> str:
         return driver.page_source
     except WebDriverException:
         return ""
+
+
+def _photo_picker_profile_enabled() -> bool:
+    return os.getenv("VW_ACTIVITY_PROFILE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@contextmanager
+def _photo_picker_profile(label: str):
+    started_at = time.monotonic()
+    yield
+    if _photo_picker_profile_enabled():
+        elapsed = time.monotonic() - started_at
+        print(f"[photo-picker-profile] {label}: {elapsed:.2f}s", flush=True)

@@ -171,9 +171,17 @@ def open_activity_publisher(
                 return
 
         if _tap_publish_entry_if_present(driver):
-            time.sleep(1)
+            _tap_activity_type_by_coordinate(driver)
+            if _wait_until(lambda: activity_form_is_visible(_safe_page_source(driver)), timeout=2):
+                return
+            if _wait_until(lambda: _publish_sheet_visible(driver)(), timeout=1):
+                if _tap_activity_type_if_present(driver) and _wait_until(
+                    lambda: activity_form_is_visible(_safe_page_source(driver)),
+                    timeout=8,
+                ):
+                    return
             _tap_activity_type_if_present(driver)
-            if _wait_until(lambda: activity_form_is_visible(_safe_page_source(driver)), timeout=10):
+            if _wait_until(lambda: activity_form_is_visible(_safe_page_source(driver)), timeout=8):
                 return
         time.sleep(0.5)
 
@@ -280,6 +288,8 @@ def _publish_sheet_visible(driver):
 
 
 def _tap_activity_type_if_present(driver: WebDriver) -> bool:
+    if _tap_activity_type_by_coordinate(driver):
+        return True
     for accessibility_id in ACTIVITY_TYPE_IDS:
         if tap_if_present(driver, accessibility_id, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
@@ -296,6 +306,21 @@ def _tap_activity_type_if_present(driver: WebDriver) -> bool:
         except (NoSuchElementException, WebDriverException):
             continue
     return False
+
+
+def _tap_activity_type_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(rect["width"] * 0.28),
+                "y": int(rect["height"] * 0.84),
+            },
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
 
 
 def _fill_title(driver: WebDriver, title: str) -> None:

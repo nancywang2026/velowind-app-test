@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from appium.webdriver.webdriver import WebDriver
 
 from velowind_appium.actions import safe_back, tap_accessibility_id_or_text_if_present, tap_text_if_present
@@ -108,6 +110,65 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
     return bool(_prepare())
 
 
+def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:
+    dismiss_common_system_alerts(driver)
+    tap_text_if_present(driver, "同意并继续", timeout=2)
+    tap_text_if_present(driver, "同意", timeout=1)
+
+    def _tap_home_fast() -> bool:
+        if _tap_home_tab_by_coordinate(driver):
+            return True
+        return tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=3)
+
+    def _wait_publish_ready(timeout: int = 8) -> bool:
+        end_at = time.monotonic() + timeout
+        while time.monotonic() < end_at:
+            page_source = _safe_page_source(driver)
+            if login_required_from_page_source(page_source):
+                return True
+            if _publish_entry_ready(driver):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def _recover() -> bool:
+        for _ in range(2):
+            if _publish_entry_ready(driver):
+                return True
+            _tap_home_fast()
+            if _wait_publish_ready():
+                return _publish_entry_ready(driver)
+            safe_back(driver)
+        _tap_home_fast()
+        _wait_publish_ready()
+        return _publish_entry_ready(driver)
+
+    def _prepare() -> bool:
+        if _publish_entry_ready(driver):
+            return False
+
+        page_source = _safe_page_source(driver)
+        if login_required_from_page_source(page_source):
+            logged_in = ensure_logged_in_if_needed(driver, ios_config)
+            _recover()
+            return bool(logged_in)
+
+        if not _home_or_login_visible(driver):
+            _wait_publish_ready()
+
+        if login_required_from_page_source(_safe_page_source(driver)):
+            logged_in = ensure_logged_in_if_needed(driver, ios_config)
+            _recover()
+            return bool(logged_in)
+
+        _recover()
+        return False
+
+    if step is not None:
+        return bool(step("prepare-publish-entry-session", _prepare))
+    return bool(_prepare())
+
+
 def _home_or_login_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
@@ -122,6 +183,28 @@ def _home_visible(driver: WebDriver) -> bool:
     return all(text in page_source for text in ["首页", "活动", "消息", "我的"]) or any(
         text in page_source for text in ["全国", "推荐", "骑行", "徒步"]
     )
+
+
+def _publish_entry_ready(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+        return False
+    return all(text in page_source for text in ["首页", "活动", "消息", "我的"])
+
+
+def _tap_home_tab_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(rect["width"] * 0.12),
+                "y": int(rect["height"] * 0.93),
+            },
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _safe_page_source(driver: WebDriver) -> str:

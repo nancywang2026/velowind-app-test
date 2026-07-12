@@ -105,31 +105,35 @@ def test_open_activity_publisher_retries_when_publish_entry_opens_login(monkeypa
     assert len(login_calls) == 1
 
 
-def test_open_activity_publisher_does_not_tap_activity_type_before_publish_sheet(monkeypatch):
+def test_open_activity_publisher_aggressively_taps_activity_type_after_publish_entry(monkeypatch):
     events = []
+    state = {"page": "home"}
 
-    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "home")
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
     monkeypatch.setattr(activity, "login_required_from_page_source", lambda page: False)
-    monkeypatch.setattr(activity, "activity_form_is_visible", lambda page: False)
+    monkeypatch.setattr(activity, "activity_form_is_visible", lambda page: page == "form")
     monkeypatch.setattr(activity, "_publish_sheet_visible", lambda driver: (lambda: False))
+    monkeypatch.setattr(
+        activity,
+        "_tap_activity_type_by_coordinate",
+        lambda driver: events.append("tap-activity-type-by-coordinate") or state.update(page="form") or True,
+    )
     monkeypatch.setattr(activity, "_tap_activity_type_if_present", lambda driver: events.append("tap-activity-type") or True)
-    monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: False)
+    monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: condition())
 
     def fake_tap_publish_entry(driver):
         events.append("tap-publish-entry")
-        raise AssertionError("stop-after-publish-entry")
+        state["page"] = "sheet-hidden"
+        return True
 
     monkeypatch.setattr(activity, "_tap_publish_entry_if_present", fake_tap_publish_entry)
     monotonic_values = iter([0, 1, 2, 3, 4, 5])
     monkeypatch.setattr(activity.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
 
-    try:
-        open_activity_publisher(object(), ios_config=object(), timeout=5)
-    except AssertionError as exc:
-        assert str(exc) == "stop-after-publish-entry"
+    open_activity_publisher(object(), ios_config=object(), timeout=5)
 
-    assert events == ["tap-publish-entry"]
+    assert events == ["tap-publish-entry", "tap-activity-type-by-coordinate"]
 
 
 def test_open_activity_publisher_taps_activity_type_after_publish_entry_without_sheet_signal(monkeypatch):
@@ -146,6 +150,10 @@ def test_open_activity_publisher_taps_activity_type_after_publish_entry_without_
         state["page"] = "sheet-hidden"
         return True
 
+    def fake_tap_activity_type_by_coordinate(driver):
+        events.append("tap-activity-type-by-coordinate")
+        return False
+
     def fake_tap_activity_type(driver):
         events.append("tap-activity-type")
         if state["page"] == "sheet-hidden":
@@ -154,6 +162,7 @@ def test_open_activity_publisher_taps_activity_type_after_publish_entry_without_
         return False
 
     monkeypatch.setattr(activity, "_tap_publish_entry_if_present", fake_tap_publish_entry)
+    monkeypatch.setattr(activity, "_tap_activity_type_by_coordinate", fake_tap_activity_type_by_coordinate)
     monkeypatch.setattr(activity, "_tap_activity_type_if_present", fake_tap_activity_type)
     monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: condition())
     monotonic_values = iter([0, 1, 2, 3, 4, 5])
@@ -162,7 +171,7 @@ def test_open_activity_publisher_taps_activity_type_after_publish_entry_without_
 
     open_activity_publisher(object(), ios_config=object(), timeout=5)
 
-    assert events == ["tap-publish-entry", "tap-activity-type"]
+    assert events == ["tap-publish-entry", "tap-activity-type-by-coordinate", "tap-activity-type"]
 
 
 def test_publish_sheet_visible_ignores_bottom_activity_tab(monkeypatch):
@@ -470,8 +479,13 @@ def test_upload_activity_image_uses_album_from_draft(monkeypatch):
     monkeypatch.setattr(
         activity.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: calls.append(
-            ("choose-photo", album_name, select_all_from_album, retry_sheet_option is activity._tap_activity_photo_library_sheet_option)
+        lambda driver, album_name=None, select_all_from_album=True, prefer_retry_sheet_option_first=False, retry_sheet_option=None: calls.append(
+            (
+                "choose-photo",
+                album_name,
+                select_all_from_album,
+                retry_sheet_option is activity._tap_activity_photo_library_sheet_option,
+            )
         )
         or True,
     )
@@ -489,7 +503,7 @@ def test_upload_activity_image_waits_for_photo_library_before_choosing_album(mon
     monkeypatch.setattr(
         activity.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: calls.append(
+        lambda driver, album_name=None, select_all_from_album=True, prefer_retry_sheet_option_first=False, retry_sheet_option=None: calls.append(
             ("choose-photo", album_name, select_all_from_album)
         )
         or True,
@@ -507,7 +521,7 @@ def test_upload_activity_image_requires_phone_photo_library_source(monkeypatch):
     monkeypatch.setattr(
         activity.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: False,
+        lambda driver, album_name=None, select_all_from_album=True, prefer_retry_sheet_option_first=False, retry_sheet_option=None: False,
     )
 
     try:
@@ -527,9 +541,14 @@ def test_upload_activity_image_retries_activity_action_sheet_option_when_library
     monkeypatch.setattr(
         activity.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, select_all_from_album=True, retry_sheet_option=None: (
+        lambda driver, album_name=None, select_all_from_album=True, prefer_retry_sheet_option_first=False, retry_sheet_option=None: (
             calls.append(
-                ("retry", retry_sheet_option is activity._tap_activity_photo_library_sheet_option, album_name, select_all_from_album)
+                (
+                    "retry",
+                    retry_sheet_option is activity._tap_activity_photo_library_sheet_option,
+                    album_name,
+                    select_all_from_album,
+                )
             )
             or True
         ),

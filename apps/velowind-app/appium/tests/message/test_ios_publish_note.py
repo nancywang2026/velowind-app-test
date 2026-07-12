@@ -7,7 +7,7 @@ from velowind_appium.modules import (
     publish_message_note,
 )
 from velowind_appium.reporting import attach_text
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_for_publish_entry
 
 
 TESTDATA_PATH = Path(__file__).resolve().parent / "testdata" / "publish_notes.yaml"
@@ -19,7 +19,7 @@ def test_user_can_publish_note_for_review(driver, ios_config, step, use_case_id)
     draft = load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH)
 
     dismiss_common_system_alerts(driver, step)
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_logged_in_for_publish_entry(driver, ios_config))
     success_signal = step(
         f"publish-note-for-review-{use_case_id}",
         lambda: publish_message_note(driver, draft, ios_config=ios_config, timeout=90),

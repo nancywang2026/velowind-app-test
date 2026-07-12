@@ -1,5 +1,6 @@
 import conftest
 from velowind_appium import session
+import itertools
 
 
 def test_prepare_logged_in_session_delegates_to_me_tab_login(monkeypatch):
@@ -163,3 +164,35 @@ def test_ensure_logged_in_from_me_then_home_can_login_when_me_tab_is_not_tappabl
 
     assert session.ensure_logged_in_from_me_then_home(object(), object()) is True
     assert "login" in events
+
+
+def test_ensure_logged_in_for_publish_entry_returns_immediately_when_publish_entry_ready(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: events.append("dismiss-alerts"))
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_publish_entry_ready", lambda driver: True)
+
+    assert session.ensure_logged_in_for_publish_entry(object(), object()) is False
+    assert events == ["dismiss-alerts"]
+
+
+def test_ensure_logged_in_for_publish_entry_logs_in_and_recovers(monkeypatch):
+    events = []
+    state = {"page": "login"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: events.append("dismiss-alerts"))
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page: page == "login")
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: True)
+    monkeypatch.setattr(session, "_publish_entry_ready", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "ensure_logged_in_if_needed", lambda driver, config: events.append("login") or state.update(page="home") or True)
+    monkeypatch.setattr(session, "_tap_home_tab_by_coordinate", lambda driver: events.append("tap-home-fast") or True)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("back"))
+    monkeypatch.setattr(session.time, "monotonic", itertools.count().__next__)
+    monkeypatch.setattr(session.time, "sleep", lambda seconds: None)
+
+    assert session.ensure_logged_in_for_publish_entry(object(), object()) is True
+    assert "login" in events
+    assert "tap-home-fast" not in events
