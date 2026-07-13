@@ -70,14 +70,14 @@ def capture_page(driver, ios_config, request):
 def step(capture_page):
     counter = {"value": 0}
 
-    def _step(label: str, action=None):
+    def _step(label: str, action=None, capture: bool = False):
         counter["value"] += 1
         step_label = f"{counter['value']:02d}-{label}"
         with allure.step(step_label):
             try:
                 return action() if action is not None else None
             finally:
-                if should_capture_each_step():
+                if capture or should_capture_each_step():
                     capture_page(step_label)
 
     return _step
@@ -87,12 +87,20 @@ def step(capture_page):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    if report.when != "call" or report.passed:
+    if report.when != "call":
         return
 
     app_driver = item.funcargs.get("driver")
     ios_config = item.funcargs.get("ios_config")
-    if app_driver is not None and ios_config is not None:
+    if app_driver is None or ios_config is None:
+        return
+
+    if report.passed:
+        with allure.step("final-page"):
+            capture_and_attach_page(app_driver, ios_config.artifact_dir, label=f"{item.name}-final-page")
+        return
+
+    if not report.passed:
         capture_and_attach_debug_artifacts(app_driver, ios_config.artifact_dir, label=item.name)
 
 
