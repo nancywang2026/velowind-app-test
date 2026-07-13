@@ -34,10 +34,12 @@ def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
         if step is None:
             tap_text_if_present(driver, text, timeout=OPTIONAL_ALERT_TIMEOUT_SECONDS)
         else:
-            step(
-                f"dismiss-alert-{text}",
-                lambda text=text: tap_text_if_present(driver, text, timeout=OPTIONAL_ALERT_TIMEOUT_SECONDS),
-            )
+            matched = tap_text_if_present(driver, text, timeout=OPTIONAL_ALERT_TIMEOUT_SECONDS)
+            if matched:
+                step(
+                    f"dismiss-alert-{text}",
+                    lambda matched=matched: matched,
+                )
 
 
 def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumConfig) -> bool:

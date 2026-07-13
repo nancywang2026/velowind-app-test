@@ -1,6 +1,8 @@
 import conftest
+import pytest
 from velowind_appium import session
 import itertools
+from pathlib import Path
 
 
 def test_prepare_logged_in_session_delegates_to_me_tab_login(monkeypatch):
@@ -63,6 +65,80 @@ def test_dismiss_common_system_alerts_uses_short_optional_probes(monkeypatch):
     session.dismiss_common_system_alerts(object())
 
     assert calls == [(text, 0.2) for text in session.COMMON_ALERT_TEXTS]
+
+
+def test_dismiss_common_system_alerts_skips_step_when_alert_is_not_found(monkeypatch):
+    step_calls = []
+
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+
+    session.dismiss_common_system_alerts(
+        object(),
+        step=lambda label, action: step_calls.append(label) or action(),
+    )
+
+    assert step_calls == []
+
+
+def test_dismiss_common_system_alerts_records_step_only_for_matched_alert(monkeypatch):
+    step_calls = []
+
+    monkeypatch.setattr(
+        session,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: text == "好",
+    )
+
+    session.dismiss_common_system_alerts(
+        object(),
+        step=lambda label, action: step_calls.append(label) or action(),
+    )
+
+    assert step_calls == ["dismiss-alert-好"]
+
+
+def test_pytest_runtest_makereport_captures_final_page_for_passed_test(monkeypatch):
+    captured = []
+
+    class DummyOutcome:
+        @staticmethod
+        def get_result():
+            class Report:
+                when = "call"
+                passed = True
+
+            return Report()
+
+    class DummyItem:
+        funcargs = {
+            "driver": object(),
+            "ios_config": type("Config", (), {"artifact_dir": Path(".tmp/appium-ios")})(),
+        }
+        name = "test_demo"
+
+    class StepContext:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(conftest.allure, "step", lambda title: captured.append(("step", title)) or StepContext())
+    monkeypatch.setattr(
+        conftest,
+        "capture_and_attach_page",
+        lambda driver, artifact_dir, label: captured.append(("capture", label, artifact_dir)),
+    )
+
+    hook = conftest.pytest_runtest_makereport(DummyItem(), None)
+    next(hook)
+    with pytest.raises(StopIteration):
+        hook.send(DummyOutcome())
+
+    assert captured == [
+        ("step", "final-page"),
+        ("capture", "test_demo-final-page", Path(".tmp/appium-ios")),
+    ]
 
 
 def test_home_visible_rejects_publish_form_overlay():
