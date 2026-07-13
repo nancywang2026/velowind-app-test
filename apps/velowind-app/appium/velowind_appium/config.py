@@ -26,6 +26,7 @@ class IosAppiumConfig:
     xcode_org_id: Optional[str]
     xcode_signing_id: Optional[str]
     updated_wda_bundle_id: Optional[str]
+    web_driver_agent_url: Optional[str]
     show_xcode_log: bool
     allow_provisioning_device_registration: bool
     use_new_wda: bool
@@ -154,6 +155,7 @@ def load_ios_config() -> IosAppiumConfig:
         xcode_signing_id=_env_text("VW_IOS_XCODE_SIGNING_ID") or _yaml_text(yaml_config, target, "xcode_signing_id"),
         updated_wda_bundle_id=_env_text("VW_IOS_UPDATED_WDA_BUNDLE_ID")
         or _yaml_text(yaml_config, target, "updated_wda_bundle_id"),
+        web_driver_agent_url=_env_text("VW_IOS_WDA_URL") or _yaml_text(yaml_config, target, "web_driver_agent_url"),
         show_xcode_log=_env_bool("VW_IOS_SHOW_XCODE_LOG", _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "show_xcode_log", False)),
         allow_provisioning_device_registration=_env_bool(
             "VW_IOS_ALLOW_PROVISIONING_DEVICE_REGISTRATION",
@@ -224,6 +226,8 @@ def build_ios_capabilities(config: IosAppiumConfig) -> Dict[str, object]:
         capabilities["appium:xcodeSigningId"] = config.xcode_signing_id
     if config.updated_wda_bundle_id:
         capabilities["appium:updatedWDABundleId"] = config.updated_wda_bundle_id
+    if config.web_driver_agent_url:
+        capabilities["appium:webDriverAgentUrl"] = config.web_driver_agent_url
     if config.show_xcode_log:
         capabilities["appium:showXcodeLog"] = True
     if config.allow_provisioning_device_registration:

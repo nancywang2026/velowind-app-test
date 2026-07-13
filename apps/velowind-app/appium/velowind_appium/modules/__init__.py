@@ -20,7 +20,17 @@ from .draft_flow import (
     save_note_draft,
     wait_for_save_draft_dialog,
 )
-from .home_feed import open_first_home_message, wait_for_home_feed
+from .home_feed import (
+    browse_note_feed,
+    note_feed_all_results_match_type,
+    note_feed_contains_type_results,
+    note_feed_type_result_texts,
+    open_first_home_message,
+    select_note_type,
+    switch_note_type_navigation,
+    wait_for_home_feed,
+    wait_for_note_type_results,
+)
 from .note_card_picker import tap_first_note_card
 from .message_detail import (
     browse_note_detail,
@@ -56,6 +66,7 @@ __all__ = [
     "activity_form_is_visible",
     "activity_publish_success_signal",
     "browse_note_detail",
+    "browse_note_feed",
     "build_activity_draft",
     "build_changbaishan_note_draft",
     "choose_save_draft",
@@ -71,6 +82,9 @@ __all__ = [
     "message_detail_is_visible",
     "message_note_form_is_visible",
     "message_note_publish_success_signal",
+    "note_feed_all_results_match_type",
+    "note_feed_contains_type_results",
+    "note_feed_type_result_texts",
     "open_first_note_search_result",
     "open_activity_publisher",
     "open_first_home_message",
@@ -85,7 +99,9 @@ __all__ = [
     "save_draft_dialog_is_visible",
     "save_note_draft",
     "search_notes",
+    "select_note_type",
     "share_note_to_moments",
+    "switch_note_type_navigation",
     "submit_message_comment",
     "submit_activity_for_review",
     "submit_message_note",
@@ -94,5 +110,6 @@ __all__ = [
     "wait_for_activity_form",
     "wait_for_home_feed",
     "wait_for_message_note_form",
+    "wait_for_note_type_results",
     "wait_for_save_draft_dialog",
 ]
