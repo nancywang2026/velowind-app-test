@@ -22,6 +22,7 @@ from velowind_appium.actions import (
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
 import velowind_appium.modules.photo_picker as photo_picker
+from velowind_appium.modules.note_card_picker import tap_first_note_card
 
 
 DETAIL_READY_IDS = [
@@ -80,6 +81,24 @@ NOTE_SUCCESS_IDS = [
     "note-publish-success",
     "message-publish-success",
     "publish-success-page",
+]
+NOTE_SEARCH_ENTRY_IDS = [
+    "home-search",
+    "home-search-button",
+    "search-entry",
+    "note-search-entry",
+]
+NOTE_SEARCH_TEXTS = ["搜索", "搜索笔记", "搜索内容"]
+NOTE_SEARCH_INPUT_XPATHS = [
+    "//XCUIElementTypeSearchField",
+    '//XCUIElementTypeTextField[contains(@value, "请输入内容")]',
+    '//XCUIElementTypeTextField[contains(@value, "搜索")]',
+    '//XCUIElementTypeTextField',
+]
+NOTE_SEARCH_RESULT_IDS = [
+    "search-result-note-0",
+    "note-search-result-0",
+    "post-search-result-0",
 ]
 NOTE_ERROR_TEXTS = ["服务开小差了，请稍后重试", "服务器内部错误", "发布失败", "提交失败"]
 TITLE_FIELD_KEYWORDS = ["标题", "请输入标题"]
@@ -423,6 +442,33 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
     return read_message_detail_snapshot(driver, timeout=timeout)
 
 
+def open_note_search(driver: WebDriver, timeout: int = 10) -> None:
+    if _note_search_visible(_safe_page_source(driver)):
+        return
+    if not _tap_note_search_entry(driver):
+        raise AssertionError("Unable to find the note search entry")
+    if not _wait_until(lambda: _note_search_visible(_safe_page_source(driver)), timeout=timeout):
+        raise AssertionError("Note search page did not appear after tapping the search entry")
+
+
+def search_notes(driver: WebDriver, keyword: str, timeout: int = 10) -> None:
+    search_input = _find_note_search_input(driver, timeout=timeout)
+    _replace_text(search_input, keyword)
+    if not (_tap_note_search_submit_by_coordinate(driver) or _tap_texts_now(driver, ["搜索", "Search"]) or _tap_keyboard_search(driver)):
+        _hide_keyboard(driver)
+    if not _wait_until(lambda: _note_search_results_visible(_safe_page_source(driver), keyword), timeout=timeout):
+        raise AssertionError(f"Note search results did not appear for keyword: {keyword}")
+
+
+def open_first_note_search_result(driver: WebDriver, timeout: int = 20) -> None:
+    if message_detail_is_visible(driver):
+        return
+    if not _tap_first_note_search_result(driver):
+        raise AssertionError("Unable to tap the first note search result")
+    if not _wait_until(lambda: message_detail_is_visible(driver), timeout=timeout):
+        raise AssertionError("First note search result did not open the detail page")
+
+
 def like_note(driver: WebDriver, timeout: int = 15) -> tuple[list[str], list[str]]:
     return _toggle_bottom_action_and_wait_for_change(driver, action_index=0, timeout=timeout)
 
@@ -471,6 +517,298 @@ def _tap_publish_entry_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
         driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.5), "y": int(rect["height"] * 0.93)})
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
+def _tap_note_search_entry(driver: WebDriver) -> bool:
+    if _tap_note_search_entry_by_coordinate(driver) and _wait_until(
+        lambda: _note_search_visible(_safe_page_source(driver)),
+        timeout=1,
+    ):
+        return True
+    for accessibility_id in NOTE_SEARCH_ENTRY_IDS:
+        if _tap_accessibility_id_now(driver, accessibility_id):
+            return True
+    if _tap_texts_now(driver, NOTE_SEARCH_TEXTS):
+        return True
+    for text in NOTE_SEARCH_TEXTS:
+        for xpath in [
+            f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
+            f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+        ]:
+            try:
+                driver.find_element(AppiumBy.XPATH, xpath).click()
+                return True
+            except (NoSuchElementException, WebDriverException):
+                continue
+    return False
+
+
+def _tap_note_search_entry_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(rect["width"] * 0.90),
+                "y": int(rect["height"] * 0.11),
+            },
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
+def _note_search_visible(page_source: str) -> bool:
+    if "搜索" not in page_source:
+        return False
+    return any(token in page_source for token in ["请输入内容", "取消", "综合", "笔记", "用户", "Search"])
+
+
+def _find_note_search_input(driver: WebDriver, timeout: int = 10):
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        for xpath in NOTE_SEARCH_INPUT_XPATHS:
+            try:
+                return driver.find_element(AppiumBy.XPATH, xpath)
+            except (NoSuchElementException, WebDriverException):
+                continue
+        time.sleep(0.2)
+    raise AssertionError("Unable to locate the note search input")
+
+
+def _tap_keyboard_search(driver: WebDriver) -> bool:
+    for kwargs in [
+        {"key_name": "Search"},
+        {"key_name": "Return"},
+        {"strategy": "pressKey", "key_name": "Search"},
+    ]:
+        try:
+            driver.hide_keyboard(**kwargs)
+            return True
+        except WebDriverException:
+            continue
+    return False
+
+
+def _tap_note_search_submit_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(rect["width"] * 0.90),
+                "y": int(rect["height"] * 0.11),
+            },
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
+def _note_search_results_visible(page_source: str, keyword: str) -> bool:
+    if not page_source:
+        return False
+    if keyword not in page_source:
+        return False
+    if any(token in page_source for token in ["暂无", "没有找到", "无结果"]):
+        return False
+    return any(token in page_source for token in ["关注", "点赞", "评论", "浏览", "赞"])
+
+
+def _tap_first_note_search_result(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if tap_first_note_card(
+        driver,
+        page_source=page_source,
+        verify_open=lambda: message_detail_is_visible(driver),
+    ):
+        return True
+    for accessibility_id in NOTE_SEARCH_RESULT_IDS:
+        if _tap_accessibility_id_now(driver, accessibility_id):
+            return True
+    if _tap_first_visible_note_search_result(driver):
+        return True
+    if _tap_first_note_search_result_by_coordinate(driver):
+        return True
+    for xpath in [
+        "(//XCUIElementTypeCollectionView//XCUIElementTypeCell)[1]",
+        "(//XCUIElementTypeCollectionView//XCUIElementTypeButton)[1]",
+        "(//XCUIElementTypeTable//XCUIElementTypeCell)[1]",
+        "(//XCUIElementTypeTable//XCUIElementTypeButton)[1]",
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _tap_first_visible_note_search_result(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if not page_source:
+        return False
+    card_rect = _first_note_search_result_card_rect_from_source(page_source)
+    title_candidate = _first_note_search_result_title_from_source(page_source)
+    if title_candidate is not None:
+        title, _ = title_candidate
+        if _click_note_search_result_title(driver, title):
+            return True
+    title_rect = title_candidate[1] if title_candidate is not None else None
+    points: list[tuple[int, int]] = []
+    if card_rect is not None:
+        x, y, width, height = card_rect
+        points.extend(
+            [
+                (x + max(1, width // 2), y + int(height * 0.62)),
+                (x + max(1, width // 2), y + min(120, max(24, height // 3))),
+                (x + max(1, width // 2), min(y + height - 28, y + 300)),
+            ]
+        )
+    if title_rect is not None:
+        x, y, width, height = title_rect
+        points.extend(
+            [
+                (x + max(1, width // 2), y + max(1, height // 2)),
+                (x + max(1, width // 2), max(130, y - min(90, max(20, y - 130)))),
+            ]
+        )
+    return _tap_note_search_result_points(driver, _dedupe_points(points))
+
+
+def _first_note_search_result_card_rect_from_source(page_source: str) -> tuple[int, int, int, int] | None:
+    rects: list[tuple[int, int, int, int]] = []
+    for tag in re.findall(r"<XCUIElementTypeOther\b[^>]*>", page_source):
+        attrs = _xml_tag_attrs(tag)
+        text = attrs.get("name") or attrs.get("label") or attrs.get("value") or ""
+        rect = _rect_from_attrs(attrs)
+        if rect is None:
+            continue
+        x, y, width, height = rect
+        if _looks_like_note_search_result_card(text, x, y, width, height):
+            rects.append(rect)
+    return sorted(rects, key=lambda item: (item[0], item[1]))[0] if rects else None
+
+
+def _first_note_search_result_title_from_source(page_source: str) -> tuple[str, tuple[int, int, int, int]] | None:
+    candidates: list[tuple[int, int, str, tuple[int, int, int, int]]] = []
+    for tag in re.findall(r"<XCUIElementTypeStaticText\b[^>]*>", page_source):
+        attrs = _xml_tag_attrs(tag)
+        text = attrs.get("name") or attrs.get("label") or attrs.get("value") or ""
+        rect = _rect_from_attrs(attrs)
+        if rect is None:
+            continue
+        x, y, width, height = rect
+        if _looks_like_note_search_result_title(text, x, y, width, height):
+            candidates.append((y, x, text, rect))
+    if not candidates:
+        return None
+    _, _, text, rect = sorted(candidates, key=lambda item: (item[1], item[0]))[0]
+    return text, rect
+
+
+def _click_note_search_result_title(driver: WebDriver, title: str) -> bool:
+    escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    for xpath in [
+        f'//XCUIElementTypeStaticText[@name="{escaped_title}" or @label="{escaped_title}" or @value="{escaped_title}"]',
+        f'//*[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+        except (NoSuchElementException, WebDriverException):
+            continue
+        if _wait_until(lambda: message_detail_is_visible(driver), timeout=1.5):
+            return True
+    return False
+
+
+def _xml_tag_attrs(tag: str) -> dict[str, str]:
+    return {key: html.unescape(value) for key, value in re.findall(r'(\w+)="([^"]*)"', tag)}
+
+
+def _rect_from_attrs(attrs: dict[str, str]) -> tuple[int, int, int, int] | None:
+    try:
+        return (
+            int(float(attrs.get("x", "0"))),
+            int(float(attrs.get("y", "0"))),
+            int(float(attrs.get("width", "0"))),
+            int(float(attrs.get("height", "0"))),
+        )
+    except ValueError:
+        return None
+
+
+def _dedupe_points(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    deduped: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for point in points:
+        if point in seen:
+            continue
+        seen.add(point)
+        deduped.append(point)
+    return deduped
+
+
+def _looks_like_note_search_result_card(text: str, x: int, y: int, width: int, height: int) -> bool:
+    if y < 120 or width < 150 or width > 220 or height < 70:
+        return False
+    if not text or "用户" not in text:
+        return False
+    if "赞" not in text and not re.search(r"\s\d+\s*$", text):
+        return False
+    if "首页 活动 消息 我的" in text or "Vertical scroll bar" in text:
+        return False
+    if text.startswith("用户 "):
+        return False
+    return 0 <= x <= 430
+
+
+def _tap_note_search_result_points(driver: WebDriver, points: list[tuple[int, int]]) -> bool:
+    for x, y in points:
+        for script, payload in [
+            ("mobile: tap", {"x": x, "y": y}),
+            ("mobile: doubleTap", {"x": x, "y": y}),
+            ("mobile: touchAndHold", {"x": x, "y": y, "duration": 0.1}),
+        ]:
+            try:
+                driver.execute_script(script, payload)
+            except WebDriverException:
+                continue
+            if _wait_until(lambda: message_detail_is_visible(driver), timeout=1.2):
+                return True
+    return False
+
+
+def _looks_like_note_search_result_title(text: str, x: int, y: int, width: int, height: int) -> bool:
+    if y < 120 or width < 80 or height < 12:
+        return False
+    if not text or len(text) < 6:
+        return False
+    if text in GENERIC_DETAIL_TEXTS or text in {"全国", "推荐", "关注", "赞", "用户"}:
+        return False
+    if text.startswith("#") or text.startswith("用户"):
+        return False
+    if re.fullmatch(r"[0-9a-f]{16,}", text):
+        return False
+    if any(token in text for token in ["Vertical scroll bar", "首页 活动 消息 我的"]):
+        return False
+    # Search cards in the current app use two waterfall columns; keep the tap within those columns.
+    return 0 <= x <= 430
+
+
+def _tap_first_note_search_result_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(rect["width"] * 0.25),
+                "y": int(rect["height"] * 0.38),
+            },
+        )
         return True
     except (AttributeError, KeyError, TypeError, WebDriverException):
         return False
