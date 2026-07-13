@@ -84,6 +84,34 @@ pnpm appium:ios:test
 pnpm appium:ios:test:full
 ```
 
+如果希望像 `testng.xml` 一样按配置指定本次要跑的用例，可以传入 suite 文件：
+
+```bash
+pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/message-publish.yaml
+```
+
+也可以直接调用运行器：
+
+```bash
+PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.run_ios_tests --suite apps/velowind-app/appium/test-suites/smoke.yaml
+```
+
+suite 文件支持三类字段：
+
+```yaml
+tests:
+  - smoke/test_ios_feature_walkthrough.py
+  - message/test_ios_publish_note.py
+markers:
+  - smoke
+pytest_args:
+  - --maxfail=1
+```
+
+- `tests`：相对 `apps/velowind-app/appium/tests/` 的测试文件路径
+- `markers`：会拼成 `pytest -m "marker1 or marker2"`
+- `pytest_args`：补充透传给 pytest 的额外参数
+
 消息模块单独运行：
 
 ```bash
@@ -140,6 +168,12 @@ pnpm appium:ios:allure:open
 apps/velowind-app/appium/tests/
 ├── smoke/    # 首页与底部 Tab 的快速巡检
 └── message/  # 普通用户浏览消息详情、留言、图票文案切换
+```
+
+内置 suite 示例位于：
+
+```text
+apps/velowind-app/appium/test-suites/
 ```
 
 ## 常用环境变量

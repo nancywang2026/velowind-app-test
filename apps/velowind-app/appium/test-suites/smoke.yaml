@@ -1,0 +1,4 @@
+tests:
+  - smoke/test_ios_feature_walkthrough.py
+markers:
+  - smoke

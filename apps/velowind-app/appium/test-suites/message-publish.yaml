@@ -1,0 +1,5 @@
+tests:
+  - message/test_ios_publish_note.py
+  - message/test_ios_search_by_type.py
+pytest_args:
+  - --maxfail=1
