@@ -1,0 +1,5 @@
+tests:
+  - activity/test_ios_publish_activity.py
+  - activity/test_ios_activity_browse.py
+pytest_args:
+  - --maxfail=1

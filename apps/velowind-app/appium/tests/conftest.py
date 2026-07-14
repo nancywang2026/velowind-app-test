@@ -7,14 +7,13 @@ from velowind_appium.config import load_ios_config
 from velowind_appium.driver import create_ios_driver
 from velowind_appium.reporting import allure, generate_and_open_allure_report
 from velowind_appium.screenshots import capture_and_attach_debug_artifacts, capture_and_attach_page
-from velowind_appium.session import ensure_logged_in_from_me_then_home
+from velowind_appium.session import ensure_logged_in_on_home
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 ALLURE_RESULTS = REPO_ROOT / ".tmp" / "appium-ios" / "allure-results"
 ALLURE_REPORT = REPO_ROOT / ".tmp" / "appium-ios" / "allure-report"
 WALKTHROUGH_TEST_FILE = "smoke/test_ios_feature_walkthrough.py"
-_LOGGED_IN_SESSION_READY = False
 
 
 def should_capture_each_step() -> bool:
@@ -39,19 +38,21 @@ def driver(ios_config):
 
 
 def prepare_logged_in_session(driver, ios_config) -> bool:
-    return ensure_logged_in_from_me_then_home(driver, ios_config)
+    return ensure_logged_in_on_home(driver, ios_config)
 
 
 @pytest.fixture(autouse=True)
 def logged_in_session(request, ios_config):
-    global _LOGGED_IN_SESSION_READY
-
-    if _LOGGED_IN_SESSION_READY or "driver" not in request.fixturenames:
+    if "driver" not in request.fixturenames:
+        yield
         return
 
     driver = request.getfixturevalue("driver")
     prepare_logged_in_session(driver, ios_config)
-    _LOGGED_IN_SESSION_READY = True
+    try:
+        yield
+    finally:
+        prepare_logged_in_session(driver, ios_config)
 
 
 @pytest.fixture

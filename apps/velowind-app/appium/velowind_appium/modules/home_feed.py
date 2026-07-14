@@ -39,6 +39,11 @@ HOME_BLOCKING_TEXTS = [
     "post-detail-page",
     "message-detail-page",
     "article-detail-page",
+    "activity-route-detail-v3",
+    "活动详情",
+    "页面预览提示",
+    "我的活动",
+    'placeholderValue="请输入内容"',
 ]
 def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
     end_at = time.monotonic() + timeout
@@ -126,11 +131,11 @@ def note_feed_all_results_match_type(page_source: str, type_name: str) -> tuple[
 
 
 def _tap_first_message(driver: WebDriver) -> bool:
-    return tap_first_note_card(driver, verify_open=message_detail_is_visible)
+    return tap_first_note_card(driver, verify_open=lambda: message_detail_is_visible(driver))
 
 
 def _tap_first_visible_card(driver: WebDriver) -> bool:
-    return tap_first_note_card(driver, verify_open=message_detail_is_visible)
+    return tap_first_note_card(driver, verify_open=lambda: message_detail_is_visible(driver))
 
 
 def _tap_note_type(driver: WebDriver, type_name: str) -> bool:
@@ -192,7 +197,7 @@ def _looks_like_note_card_text(text: str) -> bool:
         return False
     if text.count("用户") != 1:
         return False
-    return "用户" in text and ("赞" in text or "浏览" in text)
+    return True
 
 
 def _note_card_matches_type(text: str, type_name: str) -> bool:

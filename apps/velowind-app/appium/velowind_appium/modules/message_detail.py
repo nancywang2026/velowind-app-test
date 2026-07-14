@@ -123,7 +123,7 @@ ATTRIBUTE_PATTERN = re.compile(r'(?:name|label|value)="([^"]+)"')
 VIEW_COUNT_PATTERN = re.compile(r"浏览(?:量)?\D*(\d+)")
 COMMENT_COUNT_PATTERN = re.compile(r"评论(?:数)?\D*(\d+)")
 COUNT_ONLY_PATTERN = re.compile(r"^(?:浏览|评论)\s*(\d+)$")
-BOTTOM_ACTION_PATTERN = re.compile(r"用户\s+\S+\s+(\d+)\s+(\d+)\s+(\d+)")
+BOTTOM_ACTION_PATTERN = re.compile(r"^.+\s+(\d+)\s+(\d+)\s+(\d+)$")
 CROPPER_VISIBLE_PATTERNS = [
     'name="publish-note-image-picker-cropper-viewport" enabled="true" visible="true"',
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -611,11 +611,11 @@ def _tap_note_search_submit_by_coordinate(driver: WebDriver) -> bool:
 def _note_search_results_visible(page_source: str, keyword: str) -> bool:
     if not page_source:
         return False
-    if keyword not in page_source:
-        return False
     if any(token in page_source for token in ["暂无", "没有找到", "无结果"]):
         return False
-    return any(token in page_source for token in ["关注", "点赞", "评论", "浏览", "赞"])
+    from velowind_appium.modules.home_feed import note_feed_contains_type_results
+
+    return note_feed_contains_type_results(page_source, keyword)
 
 
 def _tap_first_note_search_result(driver: WebDriver) -> bool:
@@ -1500,7 +1500,7 @@ def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
 
 
 def _find_location_result_elements(driver: WebDriver) -> list:
-    elements = []
+    positioned_elements = []
     seen: set[tuple[str, float, float, float, float]] = set()
     for xpath in [
         '//XCUIElementTypeOther[@visible="true"]',
@@ -1512,7 +1512,9 @@ def _find_location_result_elements(driver: WebDriver) -> list:
             continue
         for element in candidates:
             name = _element_name(element)
-            rect = getattr(element, "rect", {}) or {}
+            rect = _rect_snapshot(element)
+            if rect is None:
+                continue
             if not _looks_like_location_result(name, rect):
                 continue
             key = (
@@ -1525,9 +1527,9 @@ def _find_location_result_elements(driver: WebDriver) -> list:
             if key in seen:
                 continue
             seen.add(key)
-            elements.append(element)
-    elements.sort(key=lambda element: ((getattr(element, "rect", {}) or {}).get("y", 0), (getattr(element, "rect", {}) or {}).get("x", 0)))
-    return elements
+            positioned_elements.append((rect["y"], rect["x"], element))
+    positioned_elements.sort(key=lambda item: (item[0], item[1]))
+    return [element for _, _, element in positioned_elements]
 
 
 def _looks_like_location_result(name: str, rect: dict) -> bool:
@@ -1540,9 +1542,9 @@ def _looks_like_location_result(name: str, rect: dict) -> bool:
     y = float(rect.get("y", 0) or 0)
     width = float(rect.get("width", 0) or 0)
     height = float(rect.get("height", 0) or 0)
-    if width < 250 or height < 40:
+    if width < 250 or height < 40 or height > 120:
         return False
-    if x > 40 or y < 450:
+    if x > 60 or y < 160:
         return False
     return True
 

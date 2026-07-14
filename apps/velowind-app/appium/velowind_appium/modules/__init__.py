@@ -43,7 +43,7 @@ from .home_feed import (
     wait_for_home_feed,
     wait_for_note_type_results,
 )
-from .note_card_picker import tap_first_note_card
+from .note_card_picker import tap_first_note_card, tap_note_card_at_ordinal
 from .message_detail import (
     browse_note_detail,
     favorite_note,
@@ -126,6 +126,7 @@ __all__ = [
     "submit_activity_for_review",
     "submit_message_note",
     "tap_first_note_card",
+    "tap_note_card_at_ordinal",
     "toggle_ticket_text_and_assert_change",
     "wait_for_activity_form",
     "wait_for_activity_category_results",
