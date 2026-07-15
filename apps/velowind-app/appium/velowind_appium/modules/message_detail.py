@@ -1549,9 +1549,9 @@ def _looks_like_location_result(name: str, rect: dict) -> bool:
     y = float(rect.get("y", 0) or 0)
     width = float(rect.get("width", 0) or 0)
     height = float(rect.get("height", 0) or 0)
-    if width < 250 or height < 40:
+    if width < 250 or height < 40 or height > 120:
         return False
-    if x > 40 or y < 450:
+    if x > 60 or y < 160:
         return False
     return True
 
@@ -1758,7 +1758,10 @@ def _hide_keyboard(driver: WebDriver) -> None:
 
 
 def _dismiss_editor_keyboard(driver: WebDriver) -> None:
-    if tap_text_if_present(driver, "完成", timeout=1):
+    if _tap_editor_done(driver) and _wait_until(
+        lambda: not _keyboard_visible(_safe_page_source(driver)),
+        timeout=3,
+    ):
         time.sleep(0.2)
         return
     for kwargs in [
@@ -1774,6 +1777,21 @@ def _dismiss_editor_keyboard(driver: WebDriver) -> None:
         except WebDriverException:
             continue
     time.sleep(0.2)
+
+
+def _tap_editor_done(driver: WebDriver) -> bool:
+    try:
+        element = driver.find_element(
+            AppiumBy.XPATH,
+            '//XCUIElementTypeOther[@visible="true" and (@name="完成" or @label="完成" or @value="完成")]',
+        )
+    except (NoSuchElementException, WebDriverException, AttributeError):
+        return False
+    return _tap_element_center(driver, element)
+
+
+def _keyboard_visible(page_source: str) -> bool:
+    return bool(re.search(r'<XCUIElementTypeKeyboard\b[^>]*\bvisible="true"', page_source))
 
 
 def _tap_outside_editor(driver: WebDriver) -> None:

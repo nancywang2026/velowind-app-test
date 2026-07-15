@@ -874,34 +874,16 @@ def test_dismiss_editor_keyboard_prefers_done_without_coordinate_tap(monkeypatch
     monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(
         message_detail,
-        "tap_text_if_present",
-        lambda driver, text, timeout=1: events.append(("tap-text", text)) or text == "完成",
+        "_tap_editor_done",
+        lambda driver: events.append("tap-editor-done") or True,
+        raising=False,
     )
-
-    class FakeDriver:
-        def hide_keyboard(self, **kwargs):
-            events.append(("hide-keyboard", kwargs))
-
-        def get_window_size(self):
-            return {"width": 402, "height": 874}
-
-        def execute_script(self, script, payload):
-            events.append(("execute", script, payload))
-
-    message_detail._dismiss_editor_keyboard(FakeDriver())
-
-    assert events == [("tap-text", "完成")]
-
-
-def test_dismiss_editor_keyboard_uses_native_fallback_without_coordinate_tap(monkeypatch):
-    events = []
-
-    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(
         message_detail,
-        "tap_text_if_present",
-        lambda driver, text, timeout=1: events.append(("tap-text", text)) or False,
+        "_wait_until",
+        lambda predicate, timeout: events.append(("wait-keyboard-hidden", timeout)) or True,
     )
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda driver, text, timeout=1: False)
 
     class FakeDriver:
         def hide_keyboard(self, **kwargs):
@@ -916,9 +898,74 @@ def test_dismiss_editor_keyboard_uses_native_fallback_without_coordinate_tap(mon
     message_detail._dismiss_editor_keyboard(FakeDriver())
 
     assert events == [
-        ("tap-text", "完成"),
+        "tap-editor-done",
+        ("wait-keyboard-hidden", 3),
+    ]
+
+
+def test_dismiss_editor_keyboard_uses_native_fallback_without_coordinate_tap(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_editor_done",
+        lambda driver: events.append("tap-editor-done") or False,
+        raising=False,
+    )
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda driver, text, timeout=1: False)
+
+    class FakeDriver:
+        def hide_keyboard(self, **kwargs):
+            events.append(("hide-keyboard", kwargs))
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            events.append(("execute", script, payload))
+
+    message_detail._dismiss_editor_keyboard(FakeDriver())
+
+    assert events == [
+        "tap-editor-done",
         ("hide-keyboard", {}),
     ]
+
+
+def test_tap_editor_done_targets_toolbar_control_center():
+    events = []
+
+    class FakeElement:
+        rect = {"x": 341, "y": 460, "width": 48, "height": 34}
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            events.append(("find-element", by, value))
+            return FakeElement()
+
+        def execute_script(self, script, payload):
+            events.append(("execute", script, payload))
+
+    assert message_detail._tap_editor_done(FakeDriver()) is True
+    assert events == [
+        (
+            "find-element",
+            message_detail.AppiumBy.XPATH,
+            '//XCUIElementTypeOther[@visible="true" and (@name="完成" or @label="完成" or @value="完成")]',
+        ),
+        ("execute", "mobile: tap", {"x": 365.0, "y": 477.0}),
+    ]
+
+
+def test_keyboard_visible_requires_visible_keyboard_node():
+    assert message_detail._keyboard_visible(
+        '<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" enabled="true" visible="true">'
+    ) is True
+    assert message_detail._keyboard_visible(
+        '<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" enabled="true" visible="false">'
+    ) is False
+    assert message_detail._keyboard_visible('<XCUIElementTypeOther visible="true">') is False
 
 
 def test_prepare_note_location_section_rejects_visible_cropper(monkeypatch):
@@ -1052,6 +1099,46 @@ def test_choose_first_valid_location_from_picker_prefers_first_result_row(monkey
 
     assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
     assert taps == [{"x": 13, "y": 521, "width": 376, "height": 90}]
+
+
+def test_choose_first_valid_location_from_picker_accepts_real_device_result_geometry(monkeypatch):
+    taps = []
+
+    class FakeElement:
+        def __init__(self, name, rect):
+            self._name = name
+            self.rect = rect
+
+        def get_attribute(self, attribute):
+            if attribute in {"name", "label", "value"}:
+                return self._name
+            return None
+
+    result_row = FakeElement(
+        "洱海公园 云南省大理白族自治州大理市洱河南路1号",
+        {"x": 52, "y": 175, "width": 350, "height": 71},
+    )
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            return [
+                FakeElement(
+                    "洱海公园 洱海 洱海大游船 洱海国际生态城",
+                    {"x": 52, "y": 175, "width": 350, "height": 1615},
+                ),
+                result_row,
+            ]
+
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_element_center",
+        lambda driver, element: taps.append(element) or True,
+    )
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout=5: True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "done")
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert taps == [result_row]
 
 
 def test_location_picker_visible_ignores_collapsed_unselected_row():
