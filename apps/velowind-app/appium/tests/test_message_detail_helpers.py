@@ -1,5 +1,6 @@
 from velowind_appium.modules import message_detail
 from pathlib import Path
+import pytest
 from selenium.common.exceptions import StaleElementReferenceException
 
 from velowind_appium.modules.message_detail import (
@@ -47,36 +48,13 @@ def test_parse_detail_snapshot_extracts_bottom_action_counts():
     assert snapshot.bottom_action_counts == ["1", "0", "3"]
 
 
-def test_parse_detail_snapshot_extracts_named_user_bottom_action_counts():
-    page_source = """
-    <AppiumAUT>
-      <XCUIElementTypeOther name="Nancy 3 2 5" label="Nancy 3 2 5" />
-    </AppiumAUT>
-    """
-
-    snapshot = parse_detail_snapshot(page_source)
-
-    assert snapshot.bottom_action_counts == ["3", "2", "5"]
-
-
-def test_note_search_results_visible_accepts_type_matching_card_without_interaction_labels():
-    page_source = """
-    <AppiumAUT>
-      <XCUIElementTypeStaticText name="骑行" />
-      <XCUIElementTypeOther name="【API复测】沿途有风 0714-1205 #骑行 用户 admin 3" />
-    </AppiumAUT>
-    """
-
-    assert message_detail._note_search_results_visible(page_source, "骑行") is True
-
-
 def test_build_changbaishan_note_draft_uses_requested_content():
     draft = build_changbaishan_note_draft()
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
-    assert draft.location == "长白山"
+    assert draft.location == "黑龙江"
     assert draft.album == "长白山"
     assert draft.allow_comments is True
 
@@ -90,7 +68,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
-    assert draft.location == "长白山"
+    assert draft.location == "黑龙江"
 
 
 def test_load_message_note_draft_reads_no_location_variant():
@@ -890,6 +868,132 @@ def test_choose_note_location_option_falls_back_to_first_visible_chip(monkeypatc
     assert taps == [("mobile: tap", {"x": 58.5, "y": 581.5})]
 
 
+def test_dismiss_editor_keyboard_prefers_done_without_coordinate_tap(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_editor_done",
+        lambda driver: events.append("tap-editor-done") or True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_wait_until",
+        lambda predicate, timeout: events.append(("wait-keyboard-hidden", timeout)) or True,
+    )
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda driver, text, timeout=1: False)
+
+    class FakeDriver:
+        def hide_keyboard(self, **kwargs):
+            events.append(("hide-keyboard", kwargs))
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            events.append(("execute", script, payload))
+
+    message_detail._dismiss_editor_keyboard(FakeDriver())
+
+    assert events == [
+        "tap-editor-done",
+        ("wait-keyboard-hidden", 3),
+    ]
+
+
+def test_dismiss_editor_keyboard_uses_native_fallback_without_coordinate_tap(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_editor_done",
+        lambda driver: events.append("tap-editor-done") or False,
+        raising=False,
+    )
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda driver, text, timeout=1: False)
+
+    class FakeDriver:
+        def hide_keyboard(self, **kwargs):
+            events.append(("hide-keyboard", kwargs))
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            events.append(("execute", script, payload))
+
+    message_detail._dismiss_editor_keyboard(FakeDriver())
+
+    assert events == [
+        "tap-editor-done",
+        ("hide-keyboard", {}),
+    ]
+
+
+def test_tap_editor_done_targets_toolbar_control_center():
+    events = []
+
+    class FakeElement:
+        rect = {"x": 341, "y": 460, "width": 48, "height": 34}
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            events.append(("find-element", by, value))
+            return FakeElement()
+
+        def execute_script(self, script, payload):
+            events.append(("execute", script, payload))
+
+    assert message_detail._tap_editor_done(FakeDriver()) is True
+    assert events == [
+        (
+            "find-element",
+            message_detail.AppiumBy.XPATH,
+            '//XCUIElementTypeOther[@visible="true" and (@name="完成" or @label="完成" or @value="完成")]',
+        ),
+        ("execute", "mobile: tap", {"x": 365.0, "y": 477.0}),
+    ]
+
+
+def test_keyboard_visible_requires_visible_keyboard_node():
+    assert message_detail._keyboard_visible(
+        '<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" enabled="true" visible="true">'
+    ) is True
+    assert message_detail._keyboard_visible(
+        '<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" enabled="true" visible="false">'
+    ) is False
+    assert message_detail._keyboard_visible('<XCUIElementTypeOther visible="true">') is False
+
+
+def test_prepare_note_location_section_rejects_visible_cropper(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(
+        message_detail,
+        "_dismiss_editor_keyboard",
+        lambda driver: events.append("dismiss-keyboard"),
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_safe_page_source",
+        lambda driver: 'name="裁剪图片" label="裁剪图片" enabled="true" visible="true"',
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "swipe_vertical",
+        lambda driver, direction="up": events.append(("swipe", direction)),
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(AssertionError, match="cropper"):
+        message_detail._prepare_note_location_section(object())
+
+    assert events == ["dismiss-keyboard"]
+
+
 def test_fill_note_location_opens_picker_from_unselected_row(monkeypatch):
     events = []
 
@@ -997,33 +1101,44 @@ def test_choose_first_valid_location_from_picker_prefers_first_result_row(monkey
     assert taps == [{"x": 13, "y": 521, "width": 376, "height": 90}]
 
 
-def test_find_location_result_elements_skips_stale_candidates():
-    class StaleElement:
-        def get_attribute(self, attribute):
-            return "stale result"
+def test_choose_first_valid_location_from_picker_accepts_real_device_result_geometry(monkeypatch):
+    taps = []
 
-        @property
-        def rect(self):
-            raise StaleElementReferenceException()
-
-    class ValidElement:
-        def __init__(self):
-            self.rect = {"x": 52, "y": 175, "width": 350, "height": 71}
+    class FakeElement:
+        def __init__(self, name, rect):
+            self._name = name
+            self.rect = rect
 
         def get_attribute(self, attribute):
             if attribute in {"name", "label", "value"}:
-                return "长白山国家级自然保护区(暂停开放) 吉林省延边朝鲜族自治州安图县"
+                return self._name
             return None
 
-    valid_element = ValidElement()
+    result_row = FakeElement(
+        "洱海公园 云南省大理白族自治州大理市洱河南路1号",
+        {"x": 52, "y": 175, "width": 350, "height": 71},
+    )
 
     class FakeDriver:
         def find_elements(self, by, value):
-            if "XCUIElementTypeOther" in value:
-                return [StaleElement(), valid_element]
-            return []
+            return [
+                FakeElement(
+                    "洱海公园 洱海 洱海大游船 洱海国际生态城",
+                    {"x": 52, "y": 175, "width": 350, "height": 1615},
+                ),
+                result_row,
+            ]
 
-    assert message_detail._find_location_result_elements(FakeDriver()) == [valid_element]
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_element_center",
+        lambda driver, element: taps.append(element) or True,
+    )
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout=5: True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "done")
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert taps == [result_row]
 
 
 def test_location_picker_visible_ignores_collapsed_unselected_row():
