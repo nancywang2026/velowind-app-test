@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import time
 from typing import Dict, Iterable, Optional
@@ -20,6 +21,17 @@ def _ios_predicate_string(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _text_locator(driver: WebDriver, text: str) -> tuple[str, str]:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        quoted_text = json.dumps(text, ensure_ascii=False)
+        return AppiumBy.ANDROID_UIAUTOMATOR, f"new UiSelector().text({quoted_text})"
+
+    quoted_text = _ios_predicate_string(text)
+    predicate = f"name == {quoted_text} OR label == {quoted_text} OR value == {quoted_text}"
+    return AppiumBy.IOS_PREDICATE, predicate
+
+
 def page_source_contains_any(page_source: str, texts: Iterable[str]) -> Optional[str]:
     for text in texts:
         if text in page_source:
@@ -29,10 +41,9 @@ def page_source_contains_any(page_source: str, texts: Iterable[str]) -> Optional
 
 def find_visible_text_if_present(driver: WebDriver, texts: Iterable[str]) -> Optional[str]:
     for text in texts:
-        quoted_text = _ios_predicate_string(text)
-        predicate = f"name == {quoted_text} OR label == {quoted_text} OR value == {quoted_text}"
+        locator = _text_locator(driver, text)
         try:
-            driver.find_element(AppiumBy.IOS_PREDICATE, predicate)
+            driver.find_element(*locator)
             return text
         except (NoSuchElementException, WebDriverException):
             continue
@@ -133,11 +144,10 @@ def tap_accessibility_id_or_text_if_present(
 
 
 def tap_text_if_present(driver: WebDriver, text: str, timeout: int = 2) -> bool:
-    quoted_text = _ios_predicate_string(text)
-    predicate = f"name == {quoted_text} OR label == {quoted_text} OR value == {quoted_text}"
+    locator = _text_locator(driver, text)
     try:
         WebDriverWait(driver, timeout).until(
-            ec.presence_of_element_located((AppiumBy.IOS_PREDICATE, predicate))
+            ec.presence_of_element_located(locator)
         ).click()
         return True
     except (NoSuchElementException, TimeoutException, WebDriverException):

@@ -2,6 +2,8 @@
 
 这套脚本用于在 iOS 真机上通过 Appium + Python 遍历寻风集 Taro RN App 的主要功能入口。当前用例按功能模块组织：`tests/smoke/` 放快速巡检，`tests/message/` 放消息/资讯浏览流程；失败时会保存截图和页面 XML。
 
+同一套 Appium + pytest 骨架也支持 Android 本地模拟器，Android 用例和报告独立写入 `.tmp/appium-android/`。
+
 ## 环境准备
 
 ```bash
@@ -22,6 +24,85 @@ brew install allure
 appium --version
 appium driver list --installed
 ```
+
+## Android 本地模拟器
+
+安装 Android driver：
+
+```bash
+npm install -g appium
+appium driver install uiautomator2
+python3 -m pip install -r apps/velowind-app/appium/requirements.txt
+```
+
+启动一个本地模拟器并确认在线：
+
+```bash
+emulator -list-avds
+emulator -avd <AVD_NAME>
+adb devices
+```
+
+启动 Appium server：
+
+```bash
+appium --log-timestamp
+```
+
+配置 APK 或已安装 App：
+
+```bash
+export VW_ANDROID_UDID=emulator-5554
+export VW_ANDROID_APP=/absolute/path/to/velowind.apk
+export VW_ANDROID_APP_PACKAGE=com.velowind.rider
+```
+
+如果不传 `VW_ANDROID_APP`，框架会启动模拟器上已经安装的 App，此时必须提供 activity：
+
+```bash
+export VW_ANDROID_APP_PACKAGE=com.velowind.rider
+export VW_ANDROID_APP_ACTIVITY=.MainActivity
+```
+
+如果不确定 activity，可先启动 App 后查看：
+
+```bash
+adb shell monkey -p com.velowind.rider 1
+adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'
+```
+
+运行 Android 预检和 smoke：
+
+```bash
+pnpm appium:android:preflight
+pnpm appium:android:test
+```
+
+按 suite 文件运行：
+
+```bash
+pnpm appium:android:test:suite apps/velowind-app/appium/test-suites/android-smoke.yaml
+```
+
+Android 失败调试产物会写入：
+
+```text
+.tmp/appium-android/
+```
+
+Android 常用环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `VW_APPIUM_SERVER_URL` | `http://127.0.0.1:4723` | Appium server 地址 |
+| `VW_ANDROID_UDID` | 自动发现在线 emulator | Android 模拟器 UDID |
+| `VW_ANDROID_DEVICE_NAME` | `Android Emulator` | Appium deviceName |
+| `VW_ANDROID_APP` | 空 | 指向 `.apk` 文件时，Appium 会安装并启动 |
+| `VW_ANDROID_APP_PACKAGE` | `com.velowind.rider` | Android package |
+| `VW_ANDROID_APP_ACTIVITY` | 空 | 未传 APK 时必填 |
+| `VW_ANDROID_NO_RESET` | `true` | 是否保留 App 状态 |
+| `VW_ANDROID_AUTO_GRANT_PERMISSIONS` | `true` | 是否自动授予权限 |
+| `VW_APPIUM_ARTIFACT_DIR` | `.tmp/appium-android` | 截图和 XML 输出目录 |
 
 确认真机 UDID：
 

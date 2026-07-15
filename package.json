@@ -9,7 +9,14 @@
     "appium:ios:config-test": "PYTHONPATH=apps/velowind-app/appium python3 -m pytest apps/velowind-app/appium/tests/test_config.py -q",
     "appium:ios:preflight": "PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.preflight",
     "appium:ios:allure:generate": "allure generate .tmp/appium-ios/allure-results --clean -o .tmp/appium-ios/allure-report",
-    "appium:ios:allure:open": "allure open .tmp/appium-ios/allure-report"
+    "appium:ios:allure:open": "allure open .tmp/appium-ios/allure-report",
+    "appium:android:test": "pnpm appium:android:preflight && PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.run_android_tests -m android_smoke",
+    "appium:android:test:full": "pnpm appium:android:preflight && PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.run_android_tests --all",
+    "appium:android:test:suite": "pnpm appium:android:preflight && PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.run_android_tests --suite",
+    "appium:android:config-test": "PYTHONPATH=apps/velowind-app/appium python3 -m pytest apps/velowind-app/appium/tests/test_android_config.py apps/velowind-app/appium/tests/test_run_android_tests.py apps/velowind-app/appium/tests/test_android_preflight.py -q",
+    "appium:android:preflight": "PYTHONPATH=apps/velowind-app/appium python3 -m velowind_appium.android_preflight",
+    "appium:android:allure:generate": "allure generate .tmp/appium-android/allure-results --clean -o .tmp/appium-android/allure-report",
+    "appium:android:allure:open": "allure open .tmp/appium-android/allure-report"
   },
   "packageManager": "pnpm@9.0.0"
 }
