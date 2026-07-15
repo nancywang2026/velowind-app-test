@@ -1,5 +1,6 @@
 from velowind_appium.modules import message_detail
 from pathlib import Path
+import pytest
 from selenium.common.exceptions import StaleElementReferenceException
 
 from velowind_appium.modules.message_detail import (
@@ -865,6 +866,85 @@ def test_choose_note_location_option_falls_back_to_first_visible_chip(monkeypatc
     assert message_detail._choose_note_location_option(driver, "长白山") is True
 
     assert taps == [("mobile: tap", {"x": 58.5, "y": 581.5})]
+
+
+def test_dismiss_editor_keyboard_prefers_done_without_coordinate_tap(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        message_detail,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: events.append(("tap-text", text)) or text == "完成",
+    )
+
+    class FakeDriver:
+        def hide_keyboard(self, **kwargs):
+            events.append(("hide-keyboard", kwargs))
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            events.append(("execute", script, payload))
+
+    message_detail._dismiss_editor_keyboard(FakeDriver())
+
+    assert events == [("tap-text", "完成")]
+
+
+def test_dismiss_editor_keyboard_uses_native_fallback_without_coordinate_tap(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        message_detail,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: events.append(("tap-text", text)) or False,
+    )
+
+    class FakeDriver:
+        def hide_keyboard(self, **kwargs):
+            events.append(("hide-keyboard", kwargs))
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            events.append(("execute", script, payload))
+
+    message_detail._dismiss_editor_keyboard(FakeDriver())
+
+    assert events == [
+        ("tap-text", "完成"),
+        ("hide-keyboard", {}),
+    ]
+
+
+def test_prepare_note_location_section_rejects_visible_cropper(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(
+        message_detail,
+        "_dismiss_editor_keyboard",
+        lambda driver: events.append("dismiss-keyboard"),
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_safe_page_source",
+        lambda driver: 'name="裁剪图片" label="裁剪图片" enabled="true" visible="true"',
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "swipe_vertical",
+        lambda driver, direction="up": events.append(("swipe", direction)),
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(AssertionError, match="cropper"):
+        message_detail._prepare_note_location_section(object())
+
+    assert events == ["dismiss-keyboard"]
 
 
 def test_fill_note_location_opens_picker_from_unselected_row(monkeypatch):

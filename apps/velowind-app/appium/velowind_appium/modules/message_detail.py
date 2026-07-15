@@ -1418,18 +1418,27 @@ def _open_note_location_picker(driver: WebDriver) -> bool:
 
 def _prepare_note_location_section(driver: WebDriver) -> None:
     _dismiss_editor_keyboard(driver)
-    if _location_section_visible(_safe_page_source(driver)):
+    page_source = _safe_page_source(driver)
+    if _cropper_visible(page_source):
+        raise AssertionError("Unable to prepare note location while the image cropper is visible")
+    if _location_section_visible(page_source):
         return
     for _ in range(3):
         _dismiss_editor_keyboard(driver)
-        if _location_section_visible(_safe_page_source(driver)):
+        page_source = _safe_page_source(driver)
+        if _cropper_visible(page_source):
+            raise AssertionError("Unable to prepare note location while the image cropper is visible")
+        if _location_section_visible(page_source):
             return
         try:
             swipe_vertical(driver, direction="up")
         except WebDriverException:
             pass
         time.sleep(0.3)
-        if _location_section_visible(_safe_page_source(driver)):
+        page_source = _safe_page_source(driver)
+        if _cropper_visible(page_source):
+            raise AssertionError("Unable to prepare note location while the image cropper is visible")
+        if _location_section_visible(page_source):
             return
 
 
@@ -1749,8 +1758,21 @@ def _hide_keyboard(driver: WebDriver) -> None:
 
 
 def _dismiss_editor_keyboard(driver: WebDriver) -> None:
-    _hide_keyboard(driver)
-    _tap_outside_editor(driver)
+    if tap_text_if_present(driver, "完成", timeout=1):
+        time.sleep(0.2)
+        return
+    for kwargs in [
+        {},
+        {"key_name": "Done"},
+        {"key_name": "Return"},
+        {"key_name": "Next"},
+        {"strategy": "pressKey", "key_name": "Done"},
+    ]:
+        try:
+            driver.hide_keyboard(**kwargs)
+            break
+        except WebDriverException:
+            continue
     time.sleep(0.2)
 
 
