@@ -47,13 +47,36 @@ def test_parse_detail_snapshot_extracts_bottom_action_counts():
     assert snapshot.bottom_action_counts == ["1", "0", "3"]
 
 
+def test_parse_detail_snapshot_extracts_named_user_bottom_action_counts():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="Nancy 3 2 5" label="Nancy 3 2 5" />
+    </AppiumAUT>
+    """
+
+    snapshot = parse_detail_snapshot(page_source)
+
+    assert snapshot.bottom_action_counts == ["3", "2", "5"]
+
+
+def test_note_search_results_visible_accepts_type_matching_card_without_interaction_labels():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="骑行" />
+      <XCUIElementTypeOther name="【API复测】沿途有风 0714-1205 #骑行 用户 admin 3" />
+    </AppiumAUT>
+    """
+
+    assert message_detail._note_search_results_visible(page_source, "骑行") is True
+
+
 def test_build_changbaishan_note_draft_uses_requested_content():
     draft = build_changbaishan_note_draft()
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
-    assert draft.location == "黑龙江"
+    assert draft.location == "长白山"
     assert draft.album == "长白山"
     assert draft.allow_comments is True
 
@@ -67,7 +90,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
-    assert draft.location == "黑龙江"
+    assert draft.location == "长白山"
 
 
 def test_load_message_note_draft_reads_no_location_variant():
@@ -972,6 +995,35 @@ def test_choose_first_valid_location_from_picker_prefers_first_result_row(monkey
 
     assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
     assert taps == [{"x": 13, "y": 521, "width": 376, "height": 90}]
+
+
+def test_find_location_result_elements_skips_stale_candidates():
+    class StaleElement:
+        def get_attribute(self, attribute):
+            return "stale result"
+
+        @property
+        def rect(self):
+            raise StaleElementReferenceException()
+
+    class ValidElement:
+        def __init__(self):
+            self.rect = {"x": 52, "y": 175, "width": 350, "height": 71}
+
+        def get_attribute(self, attribute):
+            if attribute in {"name", "label", "value"}:
+                return "长白山国家级自然保护区(暂停开放) 吉林省延边朝鲜族自治州安图县"
+            return None
+
+    valid_element = ValidElement()
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            if "XCUIElementTypeOther" in value:
+                return [StaleElement(), valid_element]
+            return []
+
+    assert message_detail._find_location_result_elements(FakeDriver()) == [valid_element]
 
 
 def test_location_picker_visible_ignores_collapsed_unselected_row():

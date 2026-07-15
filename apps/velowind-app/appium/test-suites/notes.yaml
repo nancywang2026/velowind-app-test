@@ -2,5 +2,7 @@ tests:
   - message/test_ios_search_by_type.py
   - message/test_ios_search_note.py
   - message/test_ios_message_browse.py
+  - message/test_ios_home_note_interactions.py
+  - message/test_ios_publish_note.py
 pytest_args:
-  - --maxfail=1
+  - --maxfail=3

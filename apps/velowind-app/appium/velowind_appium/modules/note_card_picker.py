@@ -54,6 +54,28 @@ def tap_first_note_card(
     return verify_open is None
 
 
+def tap_note_card_at_ordinal(
+    driver: WebDriver,
+    *,
+    ordinal: int,
+    page_source: str | None = None,
+    verify_open: Callable[[], bool] | None = None,
+    timeout: float = 1.2,
+) -> bool:
+    if ordinal < 1:
+        raise ValueError("Note card ordinal must be at least 1")
+
+    source = page_source or _safe_page_source(driver)
+    rects = _note_card_rects_from_source(source)
+    if len(rects) < ordinal:
+        return False
+
+    for x, y in _dedupe_points(_tap_points_for_card_rect(rects[ordinal - 1])):
+        if _tap_point(driver, x, y) and _opened(verify_open, timeout):
+            return True
+    return False
+
+
 def _tap_by_accessibility_id(driver: WebDriver) -> bool:
     for accessibility_id in NOTE_CARD_IDS:
         try:
@@ -99,14 +121,7 @@ def _candidate_tap_points(page_source: str) -> list[tuple[int, int]]:
     card_rect = _first_note_card_rect_from_source(page_source)
     title_rect = _first_note_title_rect_from_source(page_source)
     if card_rect is not None:
-        x, y, width, height = card_rect
-        points.extend(
-            [
-                (x + max(1, width // 2), y + int(height * 0.62)),
-                (x + max(1, width // 2), y + min(120, max(24, height // 3))),
-                (x + max(1, width // 2), min(y + height - 28, y + 300)),
-            ]
-        )
+        points.extend(_tap_points_for_card_rect(card_rect))
     if title_rect is not None:
         x, y, width, height = title_rect
         points.extend(
@@ -118,7 +133,21 @@ def _candidate_tap_points(page_source: str) -> list[tuple[int, int]]:
     return points
 
 
+def _tap_points_for_card_rect(rect: tuple[int, int, int, int]) -> list[tuple[int, int]]:
+    x, y, width, height = rect
+    return [
+        (x + max(1, width // 2), y + int(height * 0.62)),
+        (x + max(1, width // 2), y + min(120, max(24, height // 3))),
+        (x + max(1, width // 2), min(y + height - 28, y + 300)),
+    ]
+
+
 def _first_note_card_rect_from_source(page_source: str) -> tuple[int, int, int, int] | None:
+    rects = _note_card_rects_from_source(page_source)
+    return rects[0] if rects else None
+
+
+def _note_card_rects_from_source(page_source: str) -> list[tuple[int, int, int, int]]:
     rects: list[tuple[int, int, int, int]] = []
     for tag in re.findall(r"<XCUIElementTypeOther\b[^>]*>", page_source):
         attrs = _xml_tag_attrs(tag)
@@ -129,7 +158,7 @@ def _first_note_card_rect_from_source(page_source: str) -> tuple[int, int, int, 
         x, y, width, height = rect
         if _looks_like_note_card(text, x, y, width, height):
             rects.append(rect)
-    return sorted(rects, key=lambda item: (item[0], item[1]))[0] if rects else None
+    return sorted(set(rects), key=lambda item: (item[1], item[0]))
 
 
 def _first_note_title_rect_from_source(page_source: str) -> tuple[int, int, int, int] | None:
@@ -150,8 +179,6 @@ def _looks_like_note_card(text: str, x: int, y: int, width: int, height: int) ->
     if y < 120 or width < 150 or width > 220 or height < 70:
         return False
     if not text or "用户" not in text:
-        return False
-    if "赞" not in text and not re.search(r"\s\d+\s*$", text):
         return False
     if "首页 活动 消息 我的" in text or "Vertical scroll bar" in text:
         return False

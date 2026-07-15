@@ -26,6 +26,11 @@ HOME_BLOCKING_TEXTS = [
     "post-detail-page",
     "message-detail-page",
     "article-detail-page",
+    "activity-route-detail-v3",
+    "活动详情",
+    "页面预览提示",
+    "我的活动",
+    'placeholderValue="请输入内容"',
 ]
 
 
@@ -74,7 +79,17 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         return wait_for_home_feed(driver, timeout=20)
 
     def _recover_to_home():
-        for _ in range(2):
+        for _ in range(5):
+            if _home_visible(driver):
+                return True
+            if not _home_or_login_visible(driver):
+                if _tap_top_back_by_coordinate(driver):
+                    time.sleep(0.2)
+                    if _home_visible(driver):
+                        return True
+                safe_back(driver)
+                time.sleep(0.2)
+                continue
             if _go_home():
                 try:
                     _wait_home()
@@ -107,8 +122,6 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
             step("wait-home-feed-ready", _wait_home)
         return bool(step("prepare-login-and-home", _prepare))
 
-    if not _home_or_login_visible(driver):
-        _wait_home()
     return bool(_prepare())
 
 
@@ -202,6 +215,21 @@ def _tap_home_tab_by_coordinate(driver: WebDriver) -> bool:
             {
                 "x": int(rect["width"] * 0.12),
                 "y": int(rect["height"] * 0.93),
+            },
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _tap_top_back_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(rect["width"] * 0.05),
+                "y": int(rect["height"] * 0.10),
             },
         )
         return True

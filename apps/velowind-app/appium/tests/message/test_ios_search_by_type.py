@@ -10,7 +10,8 @@ from velowind_appium.modules import (
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 
 
-NOTE_TYPE = "徒步"
+# NOTE_TYPE = "徒步"
+NOTE_TYPE = "骑行"
 
 
 @pytest.mark.full

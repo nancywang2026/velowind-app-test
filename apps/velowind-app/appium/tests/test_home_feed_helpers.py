@@ -1,6 +1,46 @@
 from velowind_appium.modules import home_feed
 
 
+def test_tap_first_message_binds_driver_to_detail_verifier(monkeypatch):
+    driver = object()
+    verified_drivers = []
+
+    monkeypatch.setattr(
+        home_feed,
+        "message_detail_is_visible",
+        lambda actual_driver: verified_drivers.append(actual_driver) or True,
+    )
+
+    def fake_tap_first_note_card(actual_driver, *, verify_open):
+        assert actual_driver is driver
+        return verify_open()
+
+    monkeypatch.setattr(home_feed, "tap_first_note_card", fake_tap_first_note_card)
+
+    assert home_feed._tap_first_message(driver) is True
+    assert verified_drivers == [driver]
+
+
+def test_tap_first_visible_card_binds_driver_to_detail_verifier(monkeypatch):
+    driver = object()
+    verified_drivers = []
+
+    monkeypatch.setattr(
+        home_feed,
+        "message_detail_is_visible",
+        lambda actual_driver: verified_drivers.append(actual_driver) or True,
+    )
+
+    def fake_tap_first_note_card(actual_driver, *, verify_open):
+        assert actual_driver is driver
+        return verify_open()
+
+    monkeypatch.setattr(home_feed, "tap_first_note_card", fake_tap_first_note_card)
+
+    assert home_feed._tap_first_visible_card(driver) is True
+    assert verified_drivers == [driver]
+
+
 def test_open_first_home_message_waits_for_detail_after_tap(monkeypatch):
     state = {"detail_visible": False}
     clock = {"now": 0.0}
@@ -59,6 +99,23 @@ def test_wait_for_home_feed_ignores_message_detail_overlay(monkeypatch):
     assert home_feed.wait_for_home_feed(object(), timeout=3) == "home-feed-text"
 
 
+def test_wait_for_home_feed_ignores_activity_detail_overlay(monkeypatch):
+    page_states = iter(
+        [
+            "首页 全国 活动详情 activity-route-detail-v3-hero-carousel 页面预览提示",
+            "post-home-feed-category-pager 首页 全国 推荐",
+        ]
+    )
+
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: next(page_states))
+    monkeypatch.setattr(home_feed, "_home_ready_id_present", lambda driver: False)
+    monotonic_values = iter([0, 1, 2, 3, 4])
+    monkeypatch.setattr(home_feed.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(home_feed.time, "sleep", lambda seconds: None)
+
+    assert home_feed.wait_for_home_feed(object(), timeout=3) == "home-feed-text"
+
+
 def test_note_feed_contains_type_results_requires_card_content():
     page_source = """
     <AppiumAUT>
@@ -71,6 +128,20 @@ def test_note_feed_contains_type_results_requires_card_content():
     assert home_feed.note_feed_contains_type_results(page_source, "徒步") is True
     assert home_feed.note_feed_type_result_texts(page_source, "徒步") == [
         "莫干山山间徒步很舒服 用户 abc 赞"
+    ]
+
+
+def test_note_feed_contains_type_results_does_not_require_interaction_text():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="骑行" />
+      <XCUIElementTypeOther name="【API复测】沿途有风 0714-1205 #骑行 用户 admin" />
+    </AppiumAUT>
+    """
+
+    assert home_feed.note_feed_contains_type_results(page_source, "骑行") is True
+    assert home_feed.note_feed_type_result_texts(page_source, "骑行") == [
+        "【API复测】沿途有风 0714-1205 #骑行 用户 admin"
     ]
 
 
