@@ -1,0 +1,6 @@
+tests:
+  - android_smoke/test_android_feature_walkthrough.py
+markers:
+  - android_smoke
+pytest_args:
+  - --maxfail=1

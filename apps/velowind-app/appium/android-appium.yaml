@@ -1,0 +1,15 @@
+target: emulator
+app_package: com.velowind.rider
+app_activity:
+no_reset: true
+auto_grant_permissions: true
+
+emulator:
+  udid:
+  device_name: Android Emulator
+  platform_version:
+  app_path:
+
+login:
+  username:
+  password:
