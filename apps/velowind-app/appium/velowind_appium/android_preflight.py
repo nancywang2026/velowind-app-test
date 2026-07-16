@@ -21,7 +21,7 @@ def discover_online_android_udids(adb_devices_output: str) -> list[str]:
         if len(parts) < 2:
             continue
         udid, state = parts[0], parts[1]
-        if udid.startswith("emulator-") and state == "device":
+        if state == "device":
             udids.append(udid)
     return udids
 
@@ -80,9 +80,9 @@ def main() -> int:
     else:
         online_udids = discover_online_android_udids(_adb_devices_output())
         if config.udid and config.udid not in online_udids:
-            errors.append(f"Configured Android emulator is not online: {config.udid}")
+            errors.append(f"Configured Android device is not online: {config.udid}")
         if not config.udid and not online_udids:
-            errors.append("No online Android emulator found. Start an emulator and verify `adb devices`.")
+            errors.append("No online Android device found. Start a device or emulator and verify `adb devices`.")
 
     if not _appium_server_is_reachable(config.server_url):
         errors.append(f"Appium server is not reachable: {config.server_url}")

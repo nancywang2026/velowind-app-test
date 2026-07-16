@@ -9,7 +9,7 @@ from velowind_appium.android_config import (
 )
 
 
-def test_discover_first_online_android_udid_skips_offline_and_non_emulator():
+def test_discover_first_online_android_udid_skips_offline_devices():
     adb_output = """
 List of devices attached
 R5CN12345	device
@@ -17,7 +17,7 @@ emulator-5554	offline
 emulator-5556	device
 """
 
-    assert discover_first_online_android_udid(adb_output) == "emulator-5556"
+    assert discover_first_online_android_udid(adb_output) == "R5CN12345"
 
 
 def test_load_android_config_uses_safe_defaults(monkeypatch):
@@ -156,7 +156,7 @@ def test_build_android_capabilities_requires_udid(monkeypatch):
     monkeypatch.delenv("VW_ANDROID_UDID", raising=False)
     monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda: None)
 
-    with pytest.raises(RuntimeError, match="No online Android emulator"):
+    with pytest.raises(RuntimeError, match="No online Android device"):
         build_android_capabilities(load_android_config())
 
 

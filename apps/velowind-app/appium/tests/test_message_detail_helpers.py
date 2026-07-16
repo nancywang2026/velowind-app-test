@@ -50,6 +50,42 @@ def test_android_note_search_submit_targets_visible_header_action():
     assert taps == [("mobile: tap", {"x": 972, "y": 216})]
 
 
+def test_android_publish_entry_coordinate_targets_bottom_center_plus_button():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1440, "height": 2560}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 720, "y": 2483})]
+
+
+def test_ios_publish_entry_coordinate_keeps_existing_center_target():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1179, "height": 2556}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 589, "y": 2377})]
+
+
 def test_find_note_search_input_supports_android_edit_text():
     expected = object()
 

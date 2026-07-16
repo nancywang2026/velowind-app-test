@@ -146,7 +146,7 @@ export VW_IOS_SHOW_XCODE_LOG=true
 appium --log-timestamp
 ```
 
-另开一个终端运行：
+另开一个终端运行：  
 
 ```bash
 python3 -m pytest apps/velowind-app/appium/tests/smoke/test_ios_feature_walkthrough.py -q

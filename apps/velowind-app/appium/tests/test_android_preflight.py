@@ -27,7 +27,7 @@ def _config(**overrides):
     return AndroidAppiumConfig(**values)
 
 
-def test_discover_online_android_udids_returns_only_online_emulators():
+def test_discover_online_android_udids_returns_only_online_devices():
     adb_output = """
 List of devices attached
 emulator-5554	device
@@ -36,7 +36,7 @@ R5CN12345	device
 emulator-5558	device
 """
 
-    assert discover_online_android_udids(adb_output) == ["emulator-5554", "emulator-5558"]
+    assert discover_online_android_udids(adb_output) == ["emulator-5554", "R5CN12345", "emulator-5558"]
 
 
 def test_validate_app_inputs_accepts_existing_apk(tmp_path):

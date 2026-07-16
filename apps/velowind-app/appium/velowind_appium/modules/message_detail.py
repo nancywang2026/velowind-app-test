@@ -535,7 +535,10 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
 def _tap_publish_entry_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
-        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.5), "y": int(rect["height"] * 0.93)})
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        platform = str(capabilities.get("platformName", "")).lower()
+        y_ratio = 0.97 if platform == "android" else 0.93
+        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.5), "y": int(rect["height"] * y_ratio)})
         return True
     except (AttributeError, KeyError, TypeError, WebDriverException):
         return False
