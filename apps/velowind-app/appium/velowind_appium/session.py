@@ -31,6 +31,7 @@ HOME_BLOCKING_TEXTS = [
     "页面预览提示",
     "我的活动",
     'placeholderValue="请输入内容"',
+    'hint="请输入内容"',
 ]
 
 
@@ -85,6 +86,12 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
             if not _home_or_login_visible(driver):
                 if _tap_top_back_by_coordinate(driver):
                     time.sleep(0.2)
+                    page_source = _safe_page_source(driver)
+                    if any(text in page_source for text in ["是否保存草稿", "不保存"]):
+                        if tap_text_if_present(driver, "不保存", timeout=0.5):
+                            time.sleep(0.2)
+                            if _home_visible(driver):
+                                return True
                     if _home_visible(driver):
                         return True
                 safe_back(driver)

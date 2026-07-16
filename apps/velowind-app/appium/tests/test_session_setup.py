@@ -5,6 +5,23 @@ import itertools
 from pathlib import Path
 
 
+def test_load_test_config_uses_android_config_when_platform_is_android(monkeypatch):
+    expected = object()
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "android")
+    monkeypatch.setattr(conftest, "load_android_config", lambda: expected)
+
+    assert conftest.load_test_config() is expected
+
+
+def test_create_test_driver_uses_android_driver_when_platform_is_android(monkeypatch):
+    config = object()
+    expected = object()
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "android")
+    monkeypatch.setattr(conftest, "create_android_driver", lambda received: expected if received is config else None)
+
+    assert conftest.create_test_driver(config) is expected
+
+
 def test_prepare_logged_in_session_delegates_to_recoverable_home_setup(monkeypatch):
     driver = object()
     ios_config = object()
@@ -272,6 +289,29 @@ def test_home_and_publish_entry_reject_note_search_overlay():
     assert session._publish_entry_ready(driver) is False
 
 
+def test_home_and_publish_entry_reject_android_note_search_overlay():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="首页" displayed="true" />
+      <android.widget.TextView text="推荐" displayed="true" />
+      <android.widget.EditText text="骑行" hint="请输入内容" displayed="true" />
+      <android.widget.FrameLayout
+        resource-id="post-home-feed-category-pager"
+        displayed="true"
+      />
+    </hierarchy>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
 def test_home_visible_rejects_login_sheet_overlay():
     page_source = """
     <AppiumAUT>
@@ -436,6 +476,42 @@ def test_ensure_logged_in_on_home_taps_unlabeled_top_back_on_my_activities(monke
 
     assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
     assert taps == [("mobile: tap", {"x": 20, "y": 87})]
+
+
+def test_ensure_logged_in_on_home_discards_unpublished_note_draft(monkeypatch):
+    state = {"page": "publisher"}
+    events = []
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False,
+    )
+
+    def fake_top_back(driver):
+        events.append("top-back")
+        state["page"] = "是否保存草稿 不保存 保存草稿"
+        return True
+
+    def fake_tap_text(driver, text, timeout=1):
+        if text == "不保存" and "是否保存草稿" in state["page"]:
+            events.append("discard")
+            state["page"] = "home"
+            return True
+        return False
+
+    monkeypatch.setattr(session, "_tap_top_back_by_coordinate", fake_top_back)
+    monkeypatch.setattr(session, "tap_text_if_present", fake_tap_text)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back"))
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: True)
+
+    assert session.ensure_logged_in_on_home(object(), object()) is False
+    assert events == ["top-back", "discard"]
 
 
 def test_ensure_logged_in_for_publish_entry_returns_immediately_when_publish_entry_ready(monkeypatch):
