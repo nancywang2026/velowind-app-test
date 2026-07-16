@@ -76,6 +76,8 @@ def _perform_password_login(driver: WebDriver, username: str, password: str) -> 
 
 
 def _find_phone_input(driver: WebDriver):
+    if _is_android(driver):
+        return driver.find_element(AppiumBy.XPATH, "(//android.widget.EditText)[1]")
     return driver.find_element(AppiumBy.XPATH, "//XCUIElementTypeTextField[1]")
 
 
@@ -83,10 +85,12 @@ def _find_password_input(driver: WebDriver):
     end_at = time.monotonic() + 10
     retried_password_tab = False
     while time.monotonic() < end_at:
-        for xpath in [
-            "//XCUIElementTypeSecureTextField[1]",
-            "(//XCUIElementTypeTextField)[2]",
-        ]:
+        xpaths = (
+            ['(//android.widget.EditText[@password="true"])[1]', "(//android.widget.EditText)[2]"]
+            if _is_android(driver)
+            else ["//XCUIElementTypeSecureTextField[1]", "(//XCUIElementTypeTextField)[2]"]
+        )
+        for xpath in xpaths:
             try:
                 return driver.find_element(AppiumBy.XPATH, xpath)
             except NoSuchElementException:
@@ -102,6 +106,14 @@ def _open_password_login_form(driver: WebDriver) -> None:
     baseline = _safe_page_source(driver)
     if _has_password_input(driver) and "请输入手机号和密码完成登录" in baseline:
         return
+
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        if tap_text_if_present(driver, "密码登录", timeout=1):
+            _tap_agreement(driver)
+            time.sleep(1)
+            if _password_form_visible(driver, baseline):
+                return
 
     for xpath in [
         "//XCUIElementTypeStaticText[@name='密码登录']",
@@ -132,16 +144,23 @@ def _password_form_visible(driver: WebDriver, baseline: str) -> bool:
 
 
 def _has_password_input(driver: WebDriver) -> bool:
-    for xpath in [
-        "//XCUIElementTypeSecureTextField[1]",
-        "(//XCUIElementTypeTextField)[2]",
-    ]:
+    xpaths = (
+        ['(//android.widget.EditText[@password="true"])[1]', "(//android.widget.EditText)[2]"]
+        if _is_android(driver)
+        else ["//XCUIElementTypeSecureTextField[1]", "(//XCUIElementTypeTextField)[2]"]
+    )
+    for xpath in xpaths:
         try:
             driver.find_element(AppiumBy.XPATH, xpath)
             return True
         except NoSuchElementException:
             continue
     return False
+
+
+def _is_android(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    return str(capabilities.get("platformName", "")).lower() == "android"
 
 
 def _tap_agreement(driver: WebDriver) -> None:
@@ -213,6 +232,13 @@ def _save_password_if_prompted(driver: WebDriver) -> None:
 
 
 def _tap_login_submit(driver: WebDriver) -> bool:
+    if _is_android(driver):
+        return tap_text_if_present(driver, "登录", timeout=1) or tap_text_if_present(
+            driver,
+            "验证并登录",
+            timeout=1,
+        )
+
     for xpath in [
         '(//XCUIElementTypeOther[@name="验证并登录"])[1]',
         '(//XCUIElementTypeOther[@name="登录"])[1]',

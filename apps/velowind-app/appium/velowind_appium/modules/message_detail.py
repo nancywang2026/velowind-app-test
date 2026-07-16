@@ -22,7 +22,7 @@ from velowind_appium.actions import (
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
 import velowind_appium.modules.photo_picker as photo_picker
-from velowind_appium.modules.note_card_picker import tap_first_note_card
+from velowind_appium.modules.note_card_picker import tap_first_note_card, tap_note_card_at_ordinal
 
 
 DETAIL_READY_IDS = [
@@ -90,6 +90,9 @@ NOTE_SEARCH_ENTRY_IDS = [
 ]
 NOTE_SEARCH_TEXTS = ["搜索", "搜索笔记", "搜索内容"]
 NOTE_SEARCH_INPUT_XPATHS = [
+    '//android.widget.EditText[contains(@hint, "请输入内容")]',
+    '//android.widget.EditText[contains(@text, "请输入内容")]',
+    "//android.widget.EditText",
     "//XCUIElementTypeSearchField",
     '//XCUIElementTypeTextField[contains(@value, "请输入内容")]',
     '//XCUIElementTypeTextField[contains(@value, "搜索")]',
@@ -119,9 +122,9 @@ GENERIC_DETAIL_TEXTS = {
     "发布",
     "提交",
 }
-ATTRIBUTE_PATTERN = re.compile(r'(?:name|label|value)="([^"]+)"')
-VIEW_COUNT_PATTERN = re.compile(r"浏览(?:量)?\D*(\d+)")
-COMMENT_COUNT_PATTERN = re.compile(r"评论(?:数)?\D*(\d+)")
+ATTRIBUTE_PATTERN = re.compile(r'(?:name|label|value|text)="([^"]+)"')
+VIEW_COUNT_PATTERN = re.compile(r"浏览(?:量)?[^\d<\"]*(\d+)")
+COMMENT_COUNT_PATTERN = re.compile(r"评论(?:数)?[^\d<\"]*(\d+)")
 COUNT_ONLY_PATTERN = re.compile(r"^(?:浏览|评论)\s*(\d+)$")
 BOTTOM_ACTION_PATTERN = re.compile(r"^.+\s+(\d+)\s+(\d+)\s+(\d+)$")
 CROPPER_VISIBLE_PATTERNS = [
@@ -363,7 +366,7 @@ def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
     comment_count = _extract_count(page_source, texts, COMMENT_COUNT_PATTERN, "评论")
     comments = _extract_comments(texts)
     empty_comment_hint = next((text for text in texts if "还没有评论" in text), None)
-    bottom_action_counts = _extract_bottom_action_counts(texts)
+    bottom_action_counts = _extract_android_bottom_action_counts(page_source) or _extract_bottom_action_counts(texts)
     return MessageDetailSnapshot(
         title=title,
         body=body,
@@ -387,7 +390,7 @@ def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> Messag
 
         snapshot = parse_detail_snapshot(page_source)
         last_snapshot = snapshot
-        if snapshot.title and snapshot.body and snapshot.view_count and snapshot.comment_count:
+        if _snapshot_is_detail_ready(snapshot):
             return snapshot
         time.sleep(0.2)
 
@@ -396,7 +399,10 @@ def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> Messag
 
 def submit_message_comment(driver: WebDriver, comment_text: str, timeout: int = 20) -> None:
     before_snapshot = parse_detail_snapshot(_safe_page_source(driver))
-    if not _tap_candidate(driver, COMMENT_ENTRY_IDS, COMMENT_ENTRY_TEXTS):
+    if not (
+        _tap_candidate(driver, COMMENT_ENTRY_IDS, COMMENT_ENTRY_TEXTS)
+        or _tap_bottom_action_at_index(driver, 2)
+    ):
         raise AssertionError("Unable to open the comment entry point from message detail")
 
     input_box = _find_comment_input(driver, timeout=timeout)
@@ -435,11 +441,24 @@ def toggle_ticket_text_and_assert_change(driver: WebDriver, timeout: int = 15) -
 
 def message_detail_is_visible(driver: WebDriver) -> bool:
     snapshot = parse_detail_snapshot(_safe_page_source(driver))
-    return bool(snapshot.title and snapshot.body and snapshot.view_count and snapshot.comment_count)
+    return _snapshot_is_detail_ready(snapshot)
 
 
 def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSnapshot:
-    return read_message_detail_snapshot(driver, timeout=timeout)
+    snapshot = read_message_detail_snapshot(driver, timeout=timeout)
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if is_android and (snapshot.view_count is None or snapshot.comment_count is None):
+        swipe_vertical(driver, direction="up")
+        end_at = time.monotonic() + timeout
+        latest = snapshot
+        while time.monotonic() < end_at:
+            latest = parse_detail_snapshot(_safe_page_source(driver))
+            if latest.view_count is not None and latest.comment_count is not None:
+                return latest
+            time.sleep(0.2)
+        return latest
+    return snapshot
 
 
 def open_note_search(driver: WebDriver, timeout: int = 10) -> None:
@@ -549,11 +568,13 @@ def _tap_note_search_entry(driver: WebDriver) -> bool:
 def _tap_note_search_entry_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        y_ratio = 0.09 if str(capabilities.get("platformName", "")).lower() == "android" else 0.11
         driver.execute_script(
             "mobile: tap",
             {
                 "x": int(rect["width"] * 0.90),
-                "y": int(rect["height"] * 0.11),
+                "y": int(rect["height"] * y_ratio),
             },
         )
         return True
@@ -596,11 +617,13 @@ def _tap_keyboard_search(driver: WebDriver) -> bool:
 def _tap_note_search_submit_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        y_ratio = 0.09 if str(capabilities.get("platformName", "")).lower() == "android" else 0.11
         driver.execute_script(
             "mobile: tap",
             {
                 "x": int(rect["width"] * 0.90),
-                "y": int(rect["height"] * 0.11),
+                "y": int(rect["height"] * y_ratio),
             },
         )
         return True
@@ -613,19 +636,39 @@ def _note_search_results_visible(page_source: str, keyword: str) -> bool:
         return False
     if any(token in page_source for token in ["暂无", "没有找到", "无结果"]):
         return False
+    if "<android." in page_source:
+        return (
+            "android.widget.EditText" in page_source
+            and f'text="{keyword}"' in page_source
+            and 'text="搜索"' not in page_source
+            and "用户 " in page_source
+        )
     from velowind_appium.modules.home_feed import note_feed_contains_type_results
 
     return note_feed_contains_type_results(page_source, keyword)
 
 
 def _tap_first_note_search_result(driver: WebDriver) -> bool:
-    page_source = _safe_page_source(driver)
-    if tap_first_note_card(
-        driver,
-        page_source=page_source,
-        verify_open=lambda: message_detail_is_visible(driver),
-    ):
-        return True
+    for page_index in range(3):
+        page_source = _safe_page_source(driver)
+        if tap_first_note_card(
+            driver,
+            page_source=page_source,
+            verify_open=lambda: message_detail_is_visible(driver),
+        ):
+            return True
+        for ordinal in range(2, 7):
+            if tap_note_card_at_ordinal(
+                driver,
+                ordinal=ordinal,
+                page_source=page_source,
+                verify_open=lambda: message_detail_is_visible(driver),
+                timeout=1.2,
+            ):
+                return True
+        if page_index < 2:
+            swipe_vertical(driver, direction="up")
+            time.sleep(0.3)
     for accessibility_id in NOTE_SEARCH_RESULT_IDS:
         if _tap_accessibility_id_now(driver, accessibility_id):
             return True
@@ -846,6 +889,10 @@ def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
 
 
 def _tap_texts_now(driver: WebDriver, texts: list[str]) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        return any(tap_text_if_present(driver, text, timeout=1) for text in texts)
+
     escaped_texts = [text.replace("\\", "\\\\").replace('"', '\\"') for text in texts]
     quoted = ", ".join(f'"{text}"' for text in escaped_texts)
     predicate = f"name IN {{{quoted}}} OR label IN {{{quoted}}} OR value IN {{{quoted}}}"
@@ -995,6 +1042,7 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
 
     topic_text = " " + " ".join(topics)
     for xpath in [
+        '//android.widget.EditText[contains(@hint, "正文")]',
         "//XCUIElementTypeTextView[1]",
         '(//XCUIElementTypeTextField)[2]',
         '//XCUIElementTypeTextView[contains(@value, "长白山") or contains(@value, "正文") or contains(@value, "分享")]',
@@ -1044,6 +1092,27 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
 
 
 def _tap_note_image_plus_by_coordinate(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        try:
+            candidates = driver.find_elements(
+                AppiumBy.XPATH,
+                "//android.widget.HorizontalScrollView//android.view.ViewGroup",
+            )
+        except (AttributeError, WebDriverException):
+            candidates = []
+        for candidate in candidates:
+            rect = getattr(candidate, "rect", {}) or {}
+            width = float(rect.get("width", 0) or 0)
+            height = float(rect.get("height", 0) or 0)
+            if width < 100 or height < 100:
+                continue
+            if not 0.75 <= width / height <= 1.25:
+                continue
+            if _tap_element_center(driver, candidate):
+                return True
+        return False
+
     try:
         driver.execute_script("mobile: tap", {"x": 60, "y": 206})
         return True
@@ -1463,6 +1532,8 @@ def _choose_note_location_option(driver: WebDriver, location: str) -> bool:
 
 
 def _location_picker_visible(page_source: str) -> bool:
+    if "android.widget.EditText" in page_source and "搜索地点" in page_source:
+        return True
     return any(pattern in page_source for pattern in LOCATION_PICKER_VISIBLE_PATTERNS)
 
 
@@ -1477,14 +1548,17 @@ def _search_note_location_from_picker(driver: WebDriver, location: str) -> bool:
         _replace_text(search_input, normalized)
     except WebDriverException:
         return False
-    _hide_keyboard(driver)
-    _tap_text_or_contains(driver, "搜索")
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        _hide_keyboard(driver)
+        _tap_text_or_contains(driver, "搜索")
     time.sleep(0.5)
     return True
 
 
 def _find_location_search_input(driver: WebDriver):
     for xpath in [
+        '//android.widget.EditText[contains(@hint, "搜索地点") or contains(@text, "搜索地点")]',
         '//*[@name="搜索地点" or @label="搜索地点" or @value="搜索地点"]',
         '//*[contains(@name, "搜索地点") or contains(@label, "搜索地点") or contains(@value, "搜索地点")]',
         '//XCUIElementTypeTextField[contains(@value, "搜索")]',
@@ -1499,19 +1573,50 @@ def _find_location_search_input(driver: WebDriver):
 
 def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
     result_elements = _find_location_result_elements(driver)
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
     for element in result_elements:
-        if _tap_element_center(driver, element) and _wait_until(
+        if _tap_location_result(driver, element) and _wait_until(
             lambda: not _location_picker_visible(_safe_page_source(driver)),
             timeout=5,
         ):
             return True
+        if not is_android:
+            continue
+        for refreshed_element in _find_location_result_elements(driver):
+            if _tap_element_center(driver, refreshed_element) and _wait_until(
+                lambda: not _location_picker_visible(_safe_page_source(driver)),
+                timeout=5,
+            ):
+                return True
+        return False
     return False
+
+
+def _tap_location_result(driver: WebDriver, element) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        rect = _rect_snapshot(element)
+        if rect is not None:
+            try:
+                driver.execute_script(
+                    "mobile: tap",
+                    {
+                        "x": rect["x"] + rect["width"] / 2,
+                        "y": max(0.0, rect["y"] - 20.0),
+                    },
+                )
+                return True
+            except WebDriverException:
+                pass
+    return _tap_element_center(driver, element)
 
 
 def _find_location_result_elements(driver: WebDriver) -> list:
     positioned_elements = []
     seen: set[tuple[str, float, float, float, float]] = set()
     for xpath in [
+        "//android.widget.TextView",
         '//XCUIElementTypeOther[@visible="true"]',
         '//XCUIElementTypeStaticText[@visible="true"]',
     ]:
@@ -1553,7 +1658,7 @@ def _looks_like_location_result(name: str, rect: dict) -> bool:
     height = float(rect.get("height", 0) or 0)
     if width < 250 or height < 40 or height > 120:
         return False
-    if x > 60 or y < 160:
+    if x > 80 or y < 160:
         return False
     return True
 
@@ -1608,7 +1713,7 @@ def _looks_like_location_option(name: str, rect: dict) -> bool:
 
 
 def _element_name(element) -> str:
-    for attribute in ["name", "label", "value"]:
+    for attribute in ["text", "name", "label", "value"]:
         try:
             value = element.get_attribute(attribute)
         except WebDriverException:
@@ -1700,6 +1805,19 @@ def _fill_input_near_label(
     *,
     prefer_text_view: bool = False,
 ) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        try:
+            element = driver.find_element(
+                AppiumBy.XPATH,
+                f'//android.widget.EditText[contains(@hint, "{keyword}") or contains(@text, "{keyword}")]',
+            )
+            _replace_text(element, value)
+            _hide_keyboard(driver)
+            return True
+        except (NoSuchElementException, WebDriverException):
+            pass
+
     element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"] if prefer_text_view else [
         "XCUIElementTypeTextField",
         "XCUIElementTypeTextView",
@@ -1871,6 +1989,7 @@ def _find_bottom_submit_element(driver: WebDriver):
 
     candidates = []
     for xpath in [
+        '//android.widget.TextView[@text="发布笔记"]',
         '//*[@name="发布笔记" or @label="发布笔记" or @value="发布笔记"]',
         '//*[contains(@name, "发布笔记") or contains(@label, "发布笔记") or contains(@value, "发布笔记")]',
     ]:
@@ -1932,28 +2051,36 @@ def _extract_body(texts: list[str], title: str | None) -> str | None:
 
 
 def _extract_count(page_source: str, texts: list[str], pattern: re.Pattern[str], keyword: str) -> str | None:
-    match = pattern.search(page_source)
-    if match:
-        return match.group(1)
+    if "<android." not in page_source:
+        match = pattern.search(page_source)
+        if match:
+            return match.group(1)
 
-    for text in texts:
+    for index, text in enumerate(texts):
         if keyword not in text:
             continue
-        count_match = COUNT_ONLY_PATTERN.match(text)
+        if keyword == "评论":
+            count_match = re.fullmatch(r"(?:评论(?:数)?\s*(\d+)|共\s*(\d+)\s*条评论)", text)
+        else:
+            count_match = re.fullmatch(r"(?:浏览(?:量)?\s*(\d+)|(\d+)\s*浏览)", text)
         if count_match:
-            return count_match.group(1)
-        digits = re.search(r"(\d+)", text)
-        if digits:
-            return digits.group(1)
+            return next(group for group in count_match.groups() if group is not None)
+        if text in {keyword, f"{keyword}数", f"{keyword}量"} and index > 0 and texts[index - 1].isdigit():
+            return texts[index - 1]
     return None
 
 
 def _extract_comments(texts: list[str]) -> list[str]:
     comments: list[str] = []
     for text in texts:
-        if text in GENERIC_DETAIL_TEXTS or "图票" in text or _contains_detail_meta(text):
+        if text in GENERIC_DETAIL_TEXTS or "图票" in text or (
+            _contains_detail_meta(text) and not text.startswith("自动化评论")
+        ):
             continue
-        if any(marker in text for marker in ("：", ":", "回复", "不错", "好", "赞")) and len(text) >= 4:
+        if (
+            text.startswith("自动化评论")
+            or any(marker in text for marker in ("：", ":", "回复", "不错", "好", "赞"))
+        ) and len(text) >= 4:
             comments.append(text)
     return comments
 
@@ -1967,7 +2094,44 @@ def _extract_bottom_action_counts(texts: list[str]) -> list[str]:
         match = BOTTOM_ACTION_PATTERN.search(text)
         if match:
             return list(match.groups())
+    for index in range(len(texts) - 2):
+        candidate = texts[index : index + 3]
+        if all(part.isdigit() for part in candidate):
+            return candidate
     return []
+
+
+def _extract_android_bottom_action_counts(page_source: str) -> list[str]:
+    return [entry[0] for entry in _android_bottom_action_entries(page_source)]
+
+
+def _android_bottom_action_entries(page_source: str) -> list[tuple[str, int, int, int, int]]:
+    if "<android." not in page_source:
+        return []
+
+    rows: dict[int, list[tuple[str, int, int, int, int]]] = {}
+    for tag in re.findall(r"<android\.widget\.TextView\b[^>]*>", page_source):
+        text_match = re.search(r'\btext="(\d+)"', tag)
+        bounds_match = re.search(r'\bbounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"', tag)
+        if not text_match or not bounds_match:
+            continue
+        left, top, right, bottom = (int(value) for value in bounds_match.groups())
+        rows.setdefault(top, []).append((text_match.group(1), left, top, right, bottom))
+
+    candidate_rows = [entries for entries in rows.values() if len(entries) >= 3]
+    if not candidate_rows:
+        return []
+    bottom_row = max(candidate_rows, key=lambda entries: entries[0][2])
+    return sorted(bottom_row, key=lambda entry: entry[1])[:3]
+
+
+def _snapshot_is_detail_ready(snapshot: MessageDetailSnapshot) -> bool:
+    if not snapshot.title or not snapshot.body:
+        return False
+    return bool(
+        (snapshot.view_count and snapshot.comment_count)
+        or len(snapshot.bottom_action_counts) >= 3
+    )
 
 
 def _extract_interaction_signature(page_source: str) -> list[str]:
@@ -2069,10 +2233,29 @@ def _toggle_bottom_action_and_wait_for_change(
 
 
 def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        return _tap_android_bottom_action_by_source(driver, action_index)
     candidates = _find_bottom_action_elements(driver)
     if len(candidates) <= action_index:
         return False
     return _tap_element_center(driver, candidates[action_index])
+
+
+def _tap_android_bottom_action_by_source(driver: WebDriver, action_index: int) -> bool:
+    page_source = _safe_page_source(driver)
+    entries = _android_bottom_action_entries(page_source)
+    if len(entries) <= action_index:
+        return False
+    _, left, top, right, bottom = entries[action_index]
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
 
 
 def _find_bottom_action_elements(driver: WebDriver) -> list:
@@ -2103,6 +2286,18 @@ def _find_bottom_action_elements(driver: WebDriver) -> list:
 
 
 def _tap_detail_share_button(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        try:
+            rect = driver.get_window_rect()
+            driver.execute_script(
+                "mobile: tap",
+                {"x": int(rect["width"] * 0.95), "y": int(rect["height"] * 0.09)},
+            )
+            return True
+        except (AttributeError, KeyError, TypeError, WebDriverException):
+            return False
+
     try:
         candidates = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
     except (AttributeError, WebDriverException):
@@ -2157,6 +2352,7 @@ def _find_comment_input(driver: WebDriver, timeout: int):
                 continue
 
         for xpath in [
+            '//android.widget.EditText[@hint="写留言" or @text="写留言"]',
             '//XCUIElementTypeTextView',
             '//XCUIElementTypeTextField',
             '//*[@name="留言" or @label="留言" or @value="留言"]',

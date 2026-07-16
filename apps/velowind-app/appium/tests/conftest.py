@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
 
+from velowind_appium.android_config import load_android_config
+from velowind_appium.android_driver import create_android_driver
 from velowind_appium.config import load_ios_config
 from velowind_appium.driver import create_ios_driver
 from velowind_appium.reporting import allure, generate_and_open_allure_report
@@ -22,14 +24,30 @@ def should_capture_each_step() -> bool:
 
 @pytest.fixture(scope="session")
 def ios_config():
-    config = load_ios_config()
+    config = load_test_config()
     config.artifact_dir.mkdir(parents=True, exist_ok=True)
     return config
 
 
+def _test_platform() -> str:
+    return os.environ.get("VW_APPIUM_PLATFORM", "ios").strip().lower()
+
+
+def load_test_config():
+    if _test_platform() == "android":
+        return load_android_config()
+    return load_ios_config()
+
+
+def create_test_driver(config):
+    if _test_platform() == "android":
+        return create_android_driver(config)
+    return create_ios_driver(config)
+
+
 @pytest.fixture(scope="session")
 def driver(ios_config):
-    app_driver = create_ios_driver(ios_config)
+    app_driver = create_test_driver(ios_config)
     yield app_driver
     try:
         app_driver.quit()

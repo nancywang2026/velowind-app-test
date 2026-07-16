@@ -17,6 +17,29 @@ def test_activity_feed_contains_category_results_requires_activity_card_content(
     ]
 
 
+def test_activity_feed_extracts_android_card_with_separate_text_nodes():
+    page_source = """
+    <hierarchy>
+      <android.view.ViewGroup>
+        <android.widget.TextView text="骑行" displayed="true" />
+        <android.view.ViewGroup>
+          <android.widget.TextView text="总里程" displayed="true" />
+          <android.widget.TextView text="时长" displayed="true" />
+          <android.widget.TextView text="场次" displayed="true" />
+          <android.widget.TextView text="难度等级" displayed="true" />
+          <android.widget.TextView text="34" displayed="true" />
+          <android.widget.TextView text="1天" displayed="true" />
+          <android.widget.TextView text="0场" displayed="true" />
+        </android.view.ViewGroup>
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    assert activity_browse.activity_feed_category_result_texts(page_source, "骑行") == [
+        "骑行 总里程 时长 场次 难度等级 34 1天 0场"
+    ]
+
+
 def test_activity_feed_uses_category_tag_row_to_match_results():
     page_source = """
     <AppiumAUT>

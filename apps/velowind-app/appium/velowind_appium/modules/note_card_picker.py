@@ -4,6 +4,7 @@ import html
 import re
 import time
 from typing import Callable
+from xml.etree import ElementTree
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -148,6 +149,9 @@ def _first_note_card_rect_from_source(page_source: str) -> tuple[int, int, int, 
 
 
 def _note_card_rects_from_source(page_source: str) -> list[tuple[int, int, int, int]]:
+    if "<android." in page_source:
+        return _android_note_card_rects_from_source(page_source)
+
     rects: list[tuple[int, int, int, int]] = []
     for tag in re.findall(r"<XCUIElementTypeOther\b[^>]*>", page_source):
         attrs = _xml_tag_attrs(tag)
@@ -159,6 +163,52 @@ def _note_card_rects_from_source(page_source: str) -> list[tuple[int, int, int, 
         if _looks_like_note_card(text, x, y, width, height):
             rects.append(rect)
     return sorted(set(rects), key=lambda item: (item[1], item[0]))
+
+
+def _android_note_card_rects_from_source(page_source: str) -> list[tuple[int, int, int, int]]:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    rects: set[tuple[int, int, int, int]] = set()
+    for element in root.iter():
+        if element.tag != "android.view.ViewGroup":
+            continue
+        descendants = list(element.iter())[1:]
+        texts = [child.attrib.get("text", "").strip() for child in descendants]
+        image_count = sum(
+            child.tag == "android.widget.ImageView" and child.attrib.get("resource-id") == "image"
+            for child in descendants
+        )
+        has_author = any(text.startswith("用户 ") for text in texts) or (
+            image_count >= 2 and "赞" in texts
+        )
+        has_image = any(
+            child.tag == "android.widget.ImageView" and child.attrib.get("resource-id") == "image"
+            for child in descendants
+        )
+        has_title = any(
+            len(text) >= 4
+            and not text.startswith(("用户 ", "#"))
+            and text not in GENERIC_NOTE_CARD_TEXTS
+            for text in texts
+        )
+        rect = _android_rect_from_bounds(element.attrib.get("bounds", ""))
+        if not rect or not (has_author and has_image and has_title):
+            continue
+        _, _, width, height = rect
+        if 300 <= width <= 700 and 200 <= height <= 1000:
+            rects.add(rect)
+    return sorted(rects, key=lambda item: (item[1], item[0]))
+
+
+def _android_rect_from_bounds(bounds: str) -> tuple[int, int, int, int] | None:
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", bounds)
+    if not match:
+        return None
+    left, top, right, bottom = (int(value) for value in match.groups())
+    return left, top, right - left, bottom - top
 
 
 def _first_note_title_rect_from_source(page_source: str) -> tuple[int, int, int, int] | None:

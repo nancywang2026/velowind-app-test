@@ -27,32 +27,32 @@ use_cases:
 #        - "#东北旅行"
 #      location:
 #      allow_comments: true
-#  - id: publish-note-yunnan-erhai
-#    description: 发布笔记 - 云南
-#    note:
-#      title: 想去一趟洱海，想顺便把自己也放空一下
-#      body: |-
-#        最近总在想，应该去一次洱海。
-#        很想在清晨的时候沿着洱海慢慢走，
-#        看阳光一点点落在湖面上，
-#        吹吹风，发发呆，骑车经过那些安静的小路，
-#        累了就随便找一家喜欢的小店坐下。
-#        不用很赶，不用很满，
-#        就把旅行过成轻轻松松的样子。
-#      album: 云南洱海
-#      topics:
-#        - "#云南洱海"
-#        - "#大理旅行"
-#        - "#洱海"
-#        - "#旅行搭子"
-#        - "#一起去旅行"
-#        - "#治愈系旅行"
-#        - "#慢节奏生活"
-#        - "#云南旅游"
-#        - "#出行邀约"
-#        - "#徒步与骑行"
-#      location: 云南洱海
-#      allow_comments: true
+  - id: publish-note-yunnan-erhai
+    description: 发布笔记 - 云南
+    note:
+      title: 想去一趟洱海，想顺便把自己也放空一下
+      body: |-
+        最近总在想，应该去一次洱海。
+        很想在清晨的时候沿着洱海慢慢走，
+        看阳光一点点落在湖面上，
+        吹吹风，发发呆，骑车经过那些安静的小路，
+        累了就随便找一家喜欢的小店坐下。
+        不用很赶，不用很满，
+        就把旅行过成轻轻松松的样子。
+      album: 云南洱海
+      topics:
+        - "#云南洱海"
+        - "#大理旅行"
+        - "#洱海"
+        - "#旅行搭子"
+        - "#一起去旅行"
+        - "#治愈系旅行"
+        - "#慢节奏生活"
+        - "#云南旅游"
+        - "#出行邀约"
+        - "#徒步与骑行"
+      location: 云南洱海
+      allow_comments: true
 #  - id: publish-note-hangzhou-hiking
 #    description: 发布笔记 - 杭州
 #    note:
@@ -73,17 +73,17 @@ use_cases:
 #        - "#松弛感生活"
 #      location: 杭州
 #      allow_comments: true
-  - id: publish-note-beijing-forbidden-city
-    description: 发布笔记 - 北京故宫
-    note:
-      title: 故宫的红墙金瓦
-      body: 故宫真的很适合慢慢逛。红墙、屋檐、光影都太好看了，随手一拍都很出片，走着走着心也安静下来了。
-      album: 北京
-      topics:
-        - "#北京故宫"
-        - "#北京旅行"
-        - "#故宫拍照"
-        - "#旅行日记"
-        - "#人文景点"
-      location: 北京故宫
-      allow_comments: true
+#  - id: publish-note-beijing-forbidden-city
+#    description: 发布笔记 - 北京故宫
+#    note:
+#      title: 故宫的红墙金瓦
+#      body: 故宫真的很适合慢慢逛。红墙、屋檐、光影都太好看了，随手一拍都很出片，走着走着心也安静下来了。
+#      album: 北京
+#      topics:
+#        - "#北京故宫"
+#        - "#北京旅行"
+#        - "#故宫拍照"
+#        - "#旅行日记"
+#        - "#人文景点"
+#      location: 北京故宫
+#      allow_comments: true

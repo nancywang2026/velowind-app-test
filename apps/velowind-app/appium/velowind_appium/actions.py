@@ -32,6 +32,14 @@ def _text_locator(driver: WebDriver, text: str) -> tuple[str, str]:
     return AppiumBy.IOS_PREDICATE, predicate
 
 
+def _test_id_locator(driver: WebDriver, test_id: str) -> tuple[str, str]:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        escaped = test_id.replace('"', '\\"')
+        return AppiumBy.XPATH, f'//*[@resource-id="{escaped}" or @content-desc="{escaped}"]'
+    return ACCESSIBILITY_ID_LOCATOR, test_id
+
+
 def page_source_contains_any(page_source: str, texts: Iterable[str]) -> Optional[str]:
     for text in texts:
         if text in page_source:
@@ -52,7 +60,7 @@ def find_visible_text_if_present(driver: WebDriver, texts: Iterable[str]) -> Opt
 
 def wait_for_accessibility_id(driver: WebDriver, accessibility_id: str, timeout: int = 20):
     return WebDriverWait(driver, timeout).until(
-        ec.presence_of_element_located((ACCESSIBILITY_ID_LOCATOR, accessibility_id))
+        ec.presence_of_element_located(_test_id_locator(driver, accessibility_id))
     )
 
 
@@ -66,7 +74,7 @@ def wait_for_any_accessibility_id(
     while time.monotonic() < end_at:
         for accessibility_id in accessibility_ids:
             try:
-                driver.find_element(ACCESSIBILITY_ID_LOCATOR, accessibility_id)
+                driver.find_element(*_test_id_locator(driver, accessibility_id))
                 return accessibility_id
             except NoSuchElementException as error:
                 last_error = error
@@ -102,7 +110,7 @@ def wait_for_any_accessibility_id_or_text(
     while time.monotonic() < end_at:
         for accessibility_id in accessibility_ids:
             try:
-                driver.find_element(ACCESSIBILITY_ID_LOCATOR, accessibility_id)
+                driver.find_element(*_test_id_locator(driver, accessibility_id))
                 return accessibility_id
             except (NoSuchElementException, WebDriverException):
                 pass

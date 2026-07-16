@@ -73,7 +73,7 @@ def choose_photo_from_library(
 
 def dismiss_photo_permission_alerts(driver: WebDriver) -> None:
     page_source = _safe_page_source(driver)
-    alert_texts = ["允许访问所有照片", "允许", "好"]
+    alert_texts = ["Allow all", "允许访问所有照片", "允许", "Allow", "好"]
     if page_source and not any(text in page_source for text in alert_texts):
         return
     for text in alert_texts:
@@ -106,7 +106,18 @@ def photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
             except (NoSuchElementException, WebDriverException, AttributeError):
                 continue
         page_source = _safe_page_source(driver)
-        if any(text in page_source for text in ["最近项目", "照片图库", "所有照片", "选择项目", "选择照片"]):
+        if any(
+            text in page_source
+            for text in [
+                "最近项目",
+                "照片图库",
+                "所有照片",
+                "选择项目",
+                "选择照片",
+                "Select photos",
+                "Device folders",
+            ]
+        ):
             return True
         time.sleep(0.2)
     return False
@@ -150,6 +161,18 @@ def choose_local_photo(
 
 
 def open_photo_album(driver: WebDriver, album_name: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    page_source = _safe_page_source(driver) if is_android else ""
+    if (
+        is_android
+        and "Device folders" in page_source
+        and album_name in page_source
+    ):
+        if not _tap_named_element_center(driver, album_name):
+            return False
+        return _wait_until(lambda: bool(find_photo_grid_candidates(driver)), timeout=2)
+
     current_title = photo_album_title(driver)
     if current_title == album_name:
         return True
@@ -251,6 +274,7 @@ def find_photo_grid_candidates(driver: WebDriver) -> list:
     candidates = []
     seen: set[tuple[float, float, float, float]] = set()
     for xpath in [
+        '//android.widget.ImageView[@clickable="true" and contains(@content-desc, "Photo")]',
         "//XCUIElementTypeImage[@name='PXGGridLayout-Info']",
         "//XCUIElementTypeImage[contains(@label, 'Screenshot')]",
         "//XCUIElementTypeImage",
@@ -370,11 +394,24 @@ def confirm_system_photo_picker_selection(driver: WebDriver, timeout: int = 10) 
 
 def _photo_picker_transition_completed(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
+    if not page_source:
+        return False
     if _cropper_visible(page_source):
-        if getattr(driver, "_cropper_confirmed_once", False):
-            return True
         return confirm_note_image_cropper(driver, timeout=5)
-    return not any(text in page_source for text in ["选择最多9张照片。", 'name="Add" label="完成"'])
+    return not any(
+        text in page_source
+        for text in [
+            "选择最多9张照片。",
+            'name="Add" label="完成"',
+            "Select a photo",
+            "Select photos",
+            "Device folders",
+            'package="com.google.android.apps.photos"',
+            'text="Done"',
+            "发布笔记",
+            "发布活动",
+        ]
+    )
 
 
 def _tap_photo_source_option(driver: WebDriver, texts: list[str]) -> bool:
@@ -478,10 +515,17 @@ def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
 
 
 def _tap_named_element_center(driver: WebDriver, text: str) -> bool:
-    for xpath in [
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    xpaths = [
         f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
         f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
-    ]:
+    ]
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        xpaths = [
+            f'//*[@text="{text}"]',
+            f'//*[contains(@text, "{text}")]',
+        ] + xpaths
+    for xpath in xpaths:
         try:
             element = driver.find_element(AppiumBy.XPATH, xpath)
             rect = element.rect
@@ -532,6 +576,10 @@ def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
 
 
 def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        if tap_text_if_present(driver, "Done", timeout=1):
+            return True
     if _tap_accessibility_id_now(driver, "Add"):
         return True
     if _tap_texts_by_predicate(driver, ["完成", "添加"]):

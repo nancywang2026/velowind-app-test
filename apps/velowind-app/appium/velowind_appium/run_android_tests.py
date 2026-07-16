@@ -125,6 +125,7 @@ def build_pytest_command(cli_args: list[str]) -> list[str]:
 
 
 def main() -> int:
+    os.environ["VW_APPIUM_PLATFORM"] = "android"
     cli_args = sys.argv[1:]
     if not cli_args and DEFAULT_SUITE_FILE.exists():
         cli_args = ["--suite", str(DEFAULT_SUITE_FILE)]

@@ -62,3 +62,17 @@ def test_build_android_pytest_command_rejects_empty_suite_file(tmp_path):
 def test_android_runner_uses_android_artifact_paths():
     assert run_android_tests.ALLURE_RESULTS == Path(run_android_tests.REPO_ROOT) / ".tmp" / "appium-android" / "allure-results"
     assert run_android_tests.ALLURE_REPORT == Path(run_android_tests.REPO_ROOT) / ".tmp" / "appium-android" / "allure-report"
+
+
+def test_android_runner_selects_android_platform(monkeypatch):
+    monkeypatch.delenv("VW_APPIUM_PLATFORM", raising=False)
+    monkeypatch.setattr(run_android_tests.sys, "argv", ["run_android_tests", "--all"])
+    monkeypatch.setattr(
+        run_android_tests,
+        "_run",
+        lambda command: type("Result", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(run_android_tests, "_generate_and_open_report", lambda: None)
+
+    assert run_android_tests.main() == 0
+    assert run_android_tests.os.environ["VW_APPIUM_PLATFORM"] == "android"
