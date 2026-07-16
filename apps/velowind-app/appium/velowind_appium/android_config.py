@@ -86,7 +86,7 @@ def discover_first_online_android_udid(adb_devices_output: str) -> Optional[str]
         if len(parts) < 2:
             continue
         udid, state = parts[0], parts[1]
-        if udid.startswith("emulator-") and state == "device":
+        if state == "device":
             return udid
     return None
 
@@ -137,7 +137,7 @@ def load_android_config() -> AndroidAppiumConfig:
 def build_android_capabilities(config: AndroidAppiumConfig) -> Dict[str, object]:
     if not config.udid:
         raise RuntimeError(
-            "No online Android emulator was found. Start an emulator, verify it appears as `device` "
+            "No online Android device was found. Start a device or emulator, verify it appears as `device` "
             "in `adb devices`, or set VW_ANDROID_UDID explicitly."
         )
 
