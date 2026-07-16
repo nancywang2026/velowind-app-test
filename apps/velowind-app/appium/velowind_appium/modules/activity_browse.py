@@ -107,7 +107,42 @@ def extract_visible_activity_card_texts(page_source: str) -> list[str]:
             continue
         texts.append(normalized)
         seen.add(normalized)
+    for text in _extract_android_activity_card_texts(root):
+        if text in seen:
+            continue
+        texts.append(text)
+        seen.add(text)
     return texts
+
+
+def _extract_android_activity_card_texts(root: ElementTree.Element) -> list[str]:
+    def descendant_texts(element: ElementTree.Element) -> list[str]:
+        return [
+            child.attrib.get("text", "").strip()
+            for child in element.iter()
+            if child.attrib.get("displayed") != "false"
+            and child.attrib.get("visible") != "false"
+            and child.attrib.get("text", "").strip()
+        ]
+
+    def is_card_container(element: ElementTree.Element) -> bool:
+        values = descendant_texts(element)
+        return (
+            any(value in ACTIVITY_CATEGORY_TEXTS[1:] for value in values)
+            and all(marker in values for marker in ACTIVITY_CARD_MARKERS)
+        )
+
+    results: list[str] = []
+    for element in root.iter():
+        if not is_card_container(element):
+            continue
+        if any(is_card_container(child) for child in element):
+            continue
+        values = descendant_texts(element)
+        category = next(value for value in values if value in ACTIVITY_CATEGORY_TEXTS[1:])
+        ordered_values = [category, *[value for value in values if value != category]]
+        results.append(" ".join(ordered_values))
+    return results
 
 
 def _extract_activity_card_texts_from_plain_source(page_source: str) -> list[str]:

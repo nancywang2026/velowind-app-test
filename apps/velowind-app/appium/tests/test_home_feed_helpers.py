@@ -1,3 +1,6 @@
+import pytest
+from selenium.common.exceptions import TimeoutException
+
 from velowind_appium.modules import home_feed
 
 
@@ -114,6 +117,68 @@ def test_wait_for_home_feed_ignores_activity_detail_overlay(monkeypatch):
     monkeypatch.setattr(home_feed.time, "sleep", lambda seconds: None)
 
     assert home_feed.wait_for_home_feed(object(), timeout=3) == "home-feed-text"
+
+
+def test_wait_for_home_feed_accepts_android_test_id_without_home_label(monkeypatch):
+    page_source = '<android.widget.FrameLayout resource-id="post-home-feed-category-pager" />'
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(home_feed, "_home_ready_id_present", lambda driver: False)
+
+    assert home_feed.wait_for_home_feed(object(), timeout=0.1) == "home-feed-text"
+
+
+def test_wait_for_home_feed_rejects_android_note_search_overlay(monkeypatch):
+    page_source = """
+    <hierarchy>
+      <android.widget.EditText text="骑行" hint="请输入内容" displayed="true" />
+      <android.widget.FrameLayout
+        resource-id="post-home-feed-category-pager"
+        displayed="true"
+      />
+    </hierarchy>
+    """
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(home_feed, "_home_ready_id_present", lambda driver: False)
+
+    with pytest.raises(TimeoutException, match="Home feed did not become ready"):
+        home_feed.wait_for_home_feed(object(), timeout=0.01)
+
+
+def test_note_feed_accepts_android_results_when_a_visible_card_matches_type():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="骑行" displayed="true" />
+      <android.widget.TextView text="沿途有风" displayed="true" />
+      <android.widget.TextView text="#骑行" displayed="true" />
+      <android.widget.TextView text="湖边慢走" displayed="true" />
+      <android.widget.TextView text="#徒步" displayed="true" />
+    </hierarchy>
+    """
+
+    assert home_feed.note_feed_all_results_match_type(page_source, "骑行") == (True, [])
+
+
+def test_note_feed_accepts_android_results_when_selected_type_has_nonempty_cards():
+    page_source = """
+    <hierarchy>
+      <android.view.ViewGroup selected="true" displayed="true">
+        <android.widget.TextView text="骑行" displayed="true" />
+      </android.view.ViewGroup>
+      <android.widget.TextView text="#云南洱海" displayed="true" />
+    </hierarchy>
+    """
+
+    assert home_feed.note_feed_all_results_match_type(page_source, "骑行") == (True, [])
+
+
+def test_switch_note_type_navigation_accepts_android_root_without_home_label(monkeypatch):
+    page_source = (
+        '<android.widget.FrameLayout resource-id="post-home-feed-category-pager" /> '
+        '<android.widget.TextView text="全国" /> <android.widget.TextView text="骑行" />'
+    )
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: page_source)
+
+    home_feed.switch_note_type_navigation(object(), timeout=0.1)
 
 
 def test_note_feed_contains_type_results_requires_card_content():

@@ -1,7 +1,7 @@
 from velowind_appium.modules import message_detail
 from pathlib import Path
 import pytest
-from selenium.common.exceptions import StaleElementReferenceException
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 
 from velowind_appium.modules.message_detail import (
     build_changbaishan_note_draft,
@@ -12,6 +12,182 @@ from velowind_appium.modules.message_detail import (
     message_note_publish_success_signal,
     parse_detail_snapshot,
 )
+
+
+def test_android_note_search_coordinate_targets_visible_header_icon():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1080, "height": 2400}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_note_search_entry_by_coordinate(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 972, "y": 216})]
+
+
+def test_android_note_search_submit_targets_visible_header_action():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1080, "height": 2400}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_note_search_submit_by_coordinate(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 972, "y": 216})]
+
+
+def test_find_note_search_input_supports_android_edit_text():
+    expected = object()
+
+    class FakeDriver:
+        @staticmethod
+        def find_element(by, value):
+            if value == '//android.widget.EditText[contains(@hint, "请输入内容")]':
+                return expected
+            raise NoSuchElementException("no match")
+
+    assert message_detail._find_note_search_input(FakeDriver(), timeout=0.1) is expected
+
+
+def test_android_note_search_results_accept_hidden_keyword_matches():
+    page_source = """
+    <hierarchy>
+      <android.widget.EditText text="骑行" hint="请输入内容" />
+      <android.widget.TextView text="想去一趟洱海，想顺便把自己也放空一下" />
+      <android.widget.TextView text="#云南洱海" />
+      <android.widget.TextView text="用户 15aa909316f54c2b8671dc3c35476559" />
+    </hierarchy>
+    """
+
+    assert message_detail._note_search_results_visible(page_source, "骑行") is True
+
+
+def test_tap_note_search_result_tries_next_card_when_first_does_not_open(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            raise message_detail.NoSuchElementException("missing")
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "search-results")
+    monkeypatch.setattr(
+        message_detail,
+        "tap_first_note_card",
+        lambda driver, page_source, verify_open, timeout=1.2: events.append("first") or False,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "tap_note_card_at_ordinal",
+        lambda driver, ordinal, page_source, verify_open, timeout=1.2: events.append(ordinal) or ordinal == 2,
+        raising=False,
+    )
+    monkeypatch.setattr(message_detail, "_tap_accessibility_id_now", lambda driver, value: False)
+    monkeypatch.setattr(message_detail, "_tap_first_visible_note_search_result", lambda driver: False)
+    monkeypatch.setattr(message_detail, "_tap_first_note_search_result_by_coordinate", lambda driver: False)
+
+    assert message_detail._tap_first_note_search_result(FakeDriver()) is True
+    assert events == ["first", 2]
+
+
+def test_tap_note_search_result_scrolls_to_next_result_page(monkeypatch):
+    events = []
+    state = {"page": "page-1"}
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(
+        message_detail,
+        "tap_first_note_card",
+        lambda driver, page_source, verify_open, timeout=1.2: events.append(("first", page_source))
+        or page_source == "page-2",
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "tap_note_card_at_ordinal",
+        lambda driver, ordinal, page_source, verify_open, timeout=1.2: events.append((ordinal, page_source)) or False,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "swipe_vertical",
+        lambda driver, direction="up": events.append(("swipe", direction)) or state.update(page="page-2"),
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    assert message_detail._tap_first_note_search_result(object()) is True
+    assert ("swipe", "up") in events
+    assert events[-1] == ("first", "page-2")
+
+
+def test_parse_android_detail_snapshot_extracts_text_and_bottom_counts():
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="post-detail-banner-pager" />
+      <android.widget.TextView text="想去一趟洱海，想顺便把自己也放空一下" />
+      <android.widget.TextView text="#云南洱海 最近总在想，应该去一次洱海，沿着湖边慢慢骑行。" />
+      <android.widget.TextView text="Nancy" />
+      <android.widget.TextView text="0" bounds="[624,2275][694,2323]" />
+      <android.widget.TextView text="0" bounds="[800,2275][871,2323]" />
+      <android.widget.TextView text="0" bounds="[976,2275][1047,2323]" />
+    </hierarchy>
+    """
+
+    snapshot = parse_detail_snapshot(page_source)
+
+    assert snapshot.title == "想去一趟洱海，想顺便把自己也放空一下"
+    assert snapshot.body == "#云南洱海 最近总在想，应该去一次洱海，沿着湖边慢慢骑行。"
+    assert snapshot.bottom_action_counts == ["0", "0", "0"]
+
+
+def test_parse_android_detail_snapshot_reads_count_before_label():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="洱海骑行计划" />
+      <android.widget.TextView text="沿着洱海慢慢骑行，记录一路的湖光和晚风。" />
+      <android.widget.TextView text="61" />
+      <android.widget.TextView text="浏览" />
+      <android.widget.TextView text="共 1 条评论" />
+      <android.widget.TextView text="自动化评论0715234936" />
+    </hierarchy>
+    """
+
+    snapshot = parse_detail_snapshot(page_source)
+
+    assert snapshot.view_count == "61"
+    assert snapshot.comment_count == "1"
+    assert snapshot.comments == ["自动化评论0715234936"]
+
+
+def test_browse_android_detail_scrolls_to_load_view_and_comment_metadata(monkeypatch):
+    partial = message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"])
+    complete = message_detail.MessageDetailSnapshot("标题", "正文", "61", "0", [], "还没有评论", ["0", "0", "0"])
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(message_detail, "read_message_detail_snapshot", lambda driver, timeout: partial)
+    monkeypatch.setattr(message_detail, "swipe_vertical", lambda driver, direction: events.append(direction))
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "scrolled-detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: complete)
+
+    snapshot = message_detail.browse_note_detail(FakeDriver(), timeout=3)
+
+    assert snapshot.view_count == "61"
+    assert snapshot.comment_count == "0"
+    assert events == ["up"]
 
 def test_parse_detail_snapshot_extracts_title_counts_and_comments():
     page_source = """
@@ -314,6 +490,68 @@ def test_favorite_note_toggles_second_bottom_action_and_waits_for_count_change(m
     assert events == [("tap-bottom-action", 1)]
 
 
+def test_android_bottom_action_taps_count_center_by_index():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        page_source = """
+        <hierarchy>
+          <android.widget.FrameLayout resource-id="post-detail-banner-pager" />
+          <android.widget.TextView text="10" bounds="[932,1194][968,1236]" />
+          <android.widget.TextView text="0" bounds="[999,1686][1019,1726]" />
+          <android.widget.TextView text="0" bounds="[624,2275][694,2323]" />
+          <android.widget.TextView text="1" bounds="[800,2275][871,2323]" />
+          <android.widget.TextView text="2" bounds="[976,2275][1047,2323]" />
+        </hierarchy>
+        """
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_bottom_action_at_index(FakeDriver(), 2) is True
+    assert taps == [("mobile: tap", {"x": 1011, "y": 2299})]
+
+
+def test_submit_comment_uses_android_bottom_comment_action_when_entry_id_is_missing(monkeypatch):
+    events = []
+
+    class FakeInput:
+        @staticmethod
+        def clear():
+            events.append("clear")
+
+        @staticmethod
+        def send_keys(value):
+            events.append(("send-keys", value))
+
+    candidate_calls = iter([False, True])
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"]))
+    monkeypatch.setattr(message_detail, "_tap_candidate", lambda driver, ids, texts: next(candidate_calls))
+    monkeypatch.setattr(message_detail, "_tap_bottom_action_at_index", lambda driver, index: events.append(("tap", index)) or True)
+    monkeypatch.setattr(message_detail, "_find_comment_input", lambda driver, timeout: FakeInput())
+    monkeypatch.setattr(message_detail, "_wait_for_comment_echo", lambda *args, **kwargs: events.append("wait-echo"))
+
+    message_detail.submit_message_comment(object(), "自动化评论", timeout=3)
+
+    assert events == [("tap", 2), "clear", ("send-keys", "自动化评论"), "wait-echo"]
+
+
+def test_find_comment_input_supports_android_edit_text():
+    expected = object()
+
+    class FakeDriver:
+        @staticmethod
+        def find_element(by, value):
+            if value == '//android.widget.EditText[@hint="写留言" or @text="写留言"]':
+                return expected
+            raise NoSuchElementException("no match")
+
+    assert message_detail._find_comment_input(FakeDriver(), timeout=0.1) is expected
+
+
 def test_share_note_to_moments_taps_share_then_target(monkeypatch):
     events = []
 
@@ -359,6 +597,26 @@ def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeyp
     assert events[:2] == ["publish-entry", "note-type"]
 
 
+def test_tap_note_type_uses_android_text_locator(monkeypatch):
+    calls = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            raise NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_tap_accessibility_id_now", lambda driver, accessibility_id: False)
+    monkeypatch.setattr(
+        message_detail,
+        "tap_text_if_present",
+        lambda driver, text, timeout: calls.append((text, timeout)) or text == "笔记",
+    )
+
+    assert message_detail._tap_note_type_if_present(FakeDriver()) is True
+    assert calls == [("笔记", 1)]
+
+
 def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch):
     draft = build_changbaishan_note_draft()
     monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: None)
@@ -391,6 +649,83 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
     message_detail._upload_note_image(object(), draft)
 
     assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", True)]
+
+
+def test_android_note_image_plus_taps_first_image_slot_center():
+    taps = []
+
+    class FakeElement:
+        rect = {"x": 34, "y": 323, "width": 242, "height": 242}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_elements(self, by, value):
+            assert value == "//android.widget.HorizontalScrollView//android.view.ViewGroup"
+            return [FakeElement()]
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_note_image_plus(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 155.0, "y": 444.0})]
+
+
+def test_fill_input_near_label_supports_android_edit_text_hint(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == '//android.widget.EditText[contains(@hint, "标题") or contains(@text, "标题")]':
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    assert message_detail._fill_input_near_label(FakeDriver(), "标题", "洱海骑行计划") is True
+    assert events == ["click", "clear", ("send-keys", "洱海骑行计划"), "hide-keyboard"]
+
+
+def test_append_note_topics_uses_android_body_edit_text(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("click-body")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == '//android.widget.EditText[contains(@hint, "正文")]':
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: text == "#话题")
+    monkeypatch.setattr(message_detail, "_dismiss_editor_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    message_detail._append_note_topics_to_body(FakeDriver(), ["#云南洱海", "#大理旅行"])
+
+    assert events == [
+        "click-body",
+        ("send-keys", " #云南洱海 #大理旅行"),
+        "hide-keyboard",
+    ]
 
 
 def test_photo_source_option_taps_row_center_from_text_rect():
@@ -558,6 +893,24 @@ def test_choose_local_photo_opens_requested_album_first(monkeypatch):
         ("mobile: tap", {"x": 322.5, "y": 144.5}),
         "picker-done",
     ]
+
+
+def test_android_detail_share_taps_sticky_header_action():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1080, "height": 2400}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_detail_share_button(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 1026, "y": 216})]
 
 
 def test_choose_local_photo_falls_back_to_all_grid_images_when_badges_absent(monkeypatch):
@@ -729,6 +1082,26 @@ def test_note_submit_prefers_bottom_publish_button_region():
 
     assert message_detail._tap_note_submit(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 267.0, "y": 804.5})]
+
+
+def test_find_bottom_submit_element_supports_android_text_attribute():
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    header = FakeElement({"x": 434, "y": 191, "width": 212, "height": 66})
+    bottom_button = FakeElement({"x": 639, "y": 2215, "width": 160, "height": 56})
+
+    class FakeDriver:
+        def get_window_size(self):
+            return {"width": 1080, "height": 2400}
+
+        def find_elements(self, by, value):
+            if '@text="发布笔记"' in value:
+                return [header, bottom_button]
+            return []
+
+    assert message_detail._find_bottom_submit_element(FakeDriver()) is bottom_button
 
 
 def test_clear_existing_note_images_taps_scoped_remove_buttons_until_gone(monkeypatch):
@@ -1057,7 +1430,11 @@ def test_choose_note_location_option_searches_requested_location_from_picker(mon
 
     assert message_detail._choose_note_location_option(FakeDriver(), "长白山") is True
     assert events == [
-        ("find-element", message_detail.AppiumBy.XPATH, '//*[@name="搜索地点" or @label="搜索地点" or @value="搜索地点"]'),
+        (
+            "find-element",
+            message_detail.AppiumBy.XPATH,
+            '//android.widget.EditText[contains(@hint, "搜索地点") or contains(@text, "搜索地点")]',
+        ),
         "click-search-input",
         "clear-search-input",
         ("type-search-input", "长白山"),
@@ -1141,10 +1518,142 @@ def test_choose_first_valid_location_from_picker_accepts_real_device_result_geom
     assert taps == [result_row]
 
 
+def test_find_location_results_supports_android_text_rows():
+    class FakeElement:
+        def __init__(self, text, rect):
+            self._text = text
+            self.rect = rect
+
+        def get_attribute(self, attribute):
+            if attribute == "text":
+                return self._text
+            return None
+
+    result = FakeElement(
+        "洱海公园",
+        {"x": 68, "y": 1512, "width": 860, "height": 56},
+    )
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            if value == "//android.widget.TextView":
+                return [
+                    FakeElement("标记地点", {"x": 34, "y": 1003, "width": 1012, "height": 71}),
+                    FakeElement("不标记地点", {"x": 68, "y": 1339, "width": 855, "height": 56}),
+                    result,
+                ]
+            return []
+
+    assert message_detail._find_location_result_elements(FakeDriver()) == [result]
+
+
+def test_choose_android_location_taps_visible_row_area_above_keyboard(monkeypatch):
+    taps = []
+
+    class FakeElement:
+        rect = {"x": 68, "y": 1512, "width": 860, "height": 56}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_find_location_result_elements", lambda driver: [FakeElement()])
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 498.0, "y": 1492.0})]
+
+
+def test_choose_android_location_refinds_and_taps_row_center_after_keyboard_closes(monkeypatch):
+    first_result = object()
+    refreshed_result = object()
+    result_batches = iter([[first_result], [refreshed_result]])
+    waits = iter([False, True])
+    visible_area_taps = []
+    center_taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(
+        message_detail,
+        "_find_location_result_elements",
+        lambda driver: next(result_batches),
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_location_result",
+        lambda driver, element: visible_area_taps.append(element) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_element_center",
+        lambda driver, element: center_taps.append(element) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_wait_until",
+        lambda predicate, timeout: next(waits),
+    )
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert visible_area_taps == [first_result]
+    assert center_taps == [refreshed_result]
+
+
 def test_location_picker_visible_ignores_collapsed_unselected_row():
     page_source = 'name="不标记地点" label="不标记地点" enabled="true" visible="true"'
 
     assert message_detail._location_picker_visible(page_source) is False
+
+
+def test_location_picker_visible_accepts_android_search_input():
+    page_source = '<android.widget.EditText text="搜索地点" hint="搜索地点" />'
+
+    assert message_detail._location_picker_visible(page_source) is True
+
+
+def test_find_location_search_input_supports_android_hint():
+    expected = object()
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            if value == '//android.widget.EditText[contains(@hint, "搜索地点") or contains(@text, "搜索地点")]':
+                return expected
+            raise message_detail.NoSuchElementException()
+
+    assert message_detail._find_location_search_input(FakeDriver()) is expected
+
+
+def test_search_note_location_keeps_android_picker_open(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def send_keys(self, value):
+            events.append(("type", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(message_detail, "_find_location_search_input", lambda driver: FakeElement())
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_text_or_contains",
+        lambda driver, text: events.append(("tap-text", text)) or False,
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    assert message_detail._search_note_location_from_picker(FakeDriver(), "云南洱海") is True
+    assert events == ["click", "clear", ("type", "云南洱海")]
 
 
 def test_fill_note_location_skips_when_configured_to_not_mark_location(monkeypatch):

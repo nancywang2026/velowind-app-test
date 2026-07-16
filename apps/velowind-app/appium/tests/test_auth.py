@@ -73,6 +73,64 @@ def test_open_password_login_form_taps_agreement_after_switch_attempt(monkeypatc
     ]
 
 
+def test_open_password_login_form_uses_cross_platform_text_locator_on_android(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            raise NoSuchElementException()
+
+    monkeypatch.setattr(auth, "_has_password_input", lambda driver: False)
+    monkeypatch.setattr(auth, "_safe_page_source", lambda driver: "手机号登录 密码登录")
+    monkeypatch.setattr(
+        auth,
+        "tap_text_if_present",
+        lambda driver, text, timeout: events.append((text, timeout)) or True,
+    )
+    monkeypatch.setattr(auth, "_tap_agreement", lambda driver: events.append("tap-agreement"))
+    monkeypatch.setattr(auth, "_password_form_visible", lambda driver, baseline: True)
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+
+    auth._open_password_login_form(FakeDriver())
+
+    assert events == [("密码登录", 1), "tap-agreement"]
+
+
+def test_find_phone_input_uses_first_android_edit_text():
+    phone_input = object()
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == "(//android.widget.EditText)[1]":
+                return phone_input
+            raise NoSuchElementException()
+
+    assert auth._find_phone_input(FakeDriver()) is phone_input
+
+
+def test_find_password_input_uses_android_password_edit_text(monkeypatch):
+    password_input = object()
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == '(//android.widget.EditText[@password="true"])[1]':
+                return password_input
+            raise NoSuchElementException()
+
+    monotonic_values = iter([0, 0, 11])
+    monkeypatch.setattr(auth.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(auth, "_open_password_login_form", lambda driver: None)
+
+    assert auth._find_password_input(FakeDriver()) is password_input
+
+
 def test_tap_agreement_targets_checkbox_before_label():
     taps = []
     attempted_xpaths = []
@@ -135,6 +193,25 @@ def test_tap_login_submit_uses_immediate_predicate_lookup(monkeypatch):
     assert auth._tap_login_submit(FakeDriver()) is True
     assert "slow-fallback" not in calls
     assert calls[-1] == "click"
+
+
+def test_tap_login_submit_uses_android_text_locator(monkeypatch):
+    calls = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            raise NoSuchElementException()
+
+    monkeypatch.setattr(
+        auth,
+        "tap_text_if_present",
+        lambda driver, text, timeout: calls.append((text, timeout)) or True,
+    )
+
+    assert auth._tap_login_submit(FakeDriver()) is True
+    assert calls == [("登录", 1)]
 
 
 def test_perform_password_login_uses_password_form_then_saves_password(monkeypatch):

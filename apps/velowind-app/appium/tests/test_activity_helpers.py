@@ -50,6 +50,30 @@ def test_activity_form_is_visible_detects_publish_form_text():
     assert activity_form_is_visible(page_source) is True
 
 
+def test_activity_form_is_visible_reads_android_text_attributes():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="发布活动" />
+      <android.widget.TextView text="活动名称" />
+      <android.widget.TextView text="提交审核" />
+    </hierarchy>
+    """
+
+    assert activity_form_is_visible(page_source) is True
+
+
+def test_activity_form_is_visible_rejects_publish_type_sheet():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="选择发布类型" />
+      <android.widget.TextView text="发布笔记" />
+      <android.widget.TextView text="发布活动" />
+    </hierarchy>
+    """
+
+    assert activity_form_is_visible(page_source) is False
+
+
 def test_activity_publish_success_signal_detects_review_success():
     page_source = """
     <AppiumAUT>
@@ -231,6 +255,47 @@ def test_fill_title_keeps_existing_non_placeholder_value(monkeypatch):
     assert events == []
 
 
+def test_fill_title_supports_android_edit_text_hint(monkeypatch):
+    events = []
+    placeholder = "给这场活动起一个让人想出发的名字"
+
+    class FakeElement:
+        def get_attribute(self, name):
+            return {
+                "value": placeholder,
+                "text": placeholder,
+                "hint": placeholder,
+                "showing-hint": "true",
+            }.get(name)
+
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            if "android.widget.EditText" in value and '@text' in value:
+                return FakeElement()
+            raise activity.NoSuchElementException("missing")
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: 'text="活动名称"')
+    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    _fill_title(FakeDriver(), "太行山峡谷耐力骑行挑战")
+
+    assert events == [
+        "click",
+        "clear",
+        ("send-keys", "太行山峡谷耐力骑行挑战"),
+        "hide-keyboard",
+    ]
+
+
 def test_fill_city_hides_keyboard_after_entering_value(monkeypatch):
     events = []
 
@@ -266,6 +331,44 @@ def test_fill_description_populates_editor_title_and_body(monkeypatch):
     ]
 
 
+def test_fill_editor_entry_supports_android_edit_text_fields():
+    events = []
+
+    class FakeElement:
+        def __init__(self, field):
+            self.field = field
+
+        def click(self):
+            events.append((self.field, "click"))
+
+        def clear(self):
+            events.append((self.field, "clear"))
+
+        def send_keys(self, value):
+            events.append((self.field, "send-keys", value))
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            if "android.widget.EditText" not in value:
+                raise activity.NoSuchElementException("missing")
+            if "活动概览" in value:
+                return FakeElement("title")
+            if "请输入正文" in value:
+                return FakeElement("body")
+            raise activity.NoSuchElementException("missing")
+
+    activity._fill_editor_entry(FakeDriver(), "活动概览", "活动正文")
+
+    assert events == [
+        ("title", "click"),
+        ("title", "clear"),
+        ("title", "send-keys", "活动概览"),
+        ("body", "click"),
+        ("body", "clear"),
+        ("body", "send-keys", "活动正文"),
+    ]
+
+
 def test_fill_itinerary_fills_each_segment_and_taps_add_between_items(monkeypatch):
     events = []
 
@@ -295,6 +398,109 @@ def test_fill_itinerary_fills_each_segment_and_taps_add_between_items(monkeypatc
         ("fill-item", 2, ActivityItineraryItem("Day3 返程收尾", "自由骑行返程", "自由骑行返程，完成活动复盘后解散。")),
         "close",
     ]
+
+
+def test_find_indexed_itinerary_fields_support_android_edit_text():
+    class FakeElement:
+        def __init__(self, name, y):
+            self.name = name
+            self.rect = {"x": 229, "y": y, "width": 758, "height": 73}
+
+        def is_displayed(self):
+            return True
+
+    title = FakeElement("title", 361)
+    body = FakeElement("body", 559)
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            if "android.widget.EditText" not in value:
+                return []
+            if "标题" in value:
+                return [title]
+            if "正文" in value:
+                return [body]
+            return []
+
+    assert activity._find_indexed_editor_text_field(FakeDriver(), "标题", 0) is title
+    assert activity._find_indexed_editor_text_view(FakeDriver(), 0) is body
+
+
+def test_find_add_itinerary_segment_button_supports_android_view_group():
+    class FakeElement:
+        rect = {"x": 930, "y": 937, "width": 82, "height": 81}
+
+        def is_displayed(self):
+            return True
+
+    add_button = FakeElement()
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            if "android.view.ViewGroup" in value:
+                return [add_button]
+            return []
+
+    assert activity._find_add_itinerary_segment_button(FakeDriver()) is add_button
+
+
+def test_count_itinerary_editor_sections_supports_android_title_fields():
+    page_source = """
+    <hierarchy>
+      <node text="标题" class="android.widget.EditText" />
+      <node text="副标题" class="android.widget.EditText" />
+      <node text="标题" class="android.widget.EditText" />
+      <node text="副标题" class="android.widget.EditText" />
+    </hierarchy>
+    """
+
+    assert activity._count_itinerary_editor_sections(page_source) == 2
+
+
+def test_fill_itinerary_accepts_matching_items_already_saved_in_form(monkeypatch):
+    itinerary = [
+        ActivityItineraryItem("Day1 集合说明", "石家庄集合签到", "完成签到、路线说明与安全须知确认。"),
+        ActivityItineraryItem("Day2 主线骑行", "峡谷耐力挑战", "完成主线路骑行并设置补给点。"),
+    ]
+    page_source = " ".join(
+        [
+            "发布活动 活动行程",
+            *[part for item in itinerary for part in (item.title, item.subtitle, item.body)],
+            "存草稿 提交审核",
+        ]
+    )
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(
+        activity,
+        "_open_editor",
+        lambda driver, entry_text: (_ for _ in ()).throw(AssertionError("should not reopen saved itinerary")),
+    )
+
+    activity._fill_itinerary(object(), itinerary)
+
+
+def test_tap_submit_taps_center_of_visible_bottom_submit_button(monkeypatch):
+    taps = []
+
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    submit_button = FakeElement({"x": 145, "y": 781, "width": 244, "height": 47})
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            return [submit_button]
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(activity, "tap_if_present", lambda driver, accessibility_id, timeout: False)
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout: False)
+
+    assert activity._tap_submit(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 267.0, "y": 804.5})]
 
 
 def test_fill_itinerary_editor_item_targets_title_subtitle_and_body(monkeypatch):
@@ -493,6 +699,33 @@ def test_upload_activity_image_uses_album_from_draft(monkeypatch):
     activity._upload_activity_image(object(), draft)
 
     assert calls == [("choose-photo", "太行山", False, True)]
+
+
+def test_tap_image_picker_uses_android_activity_image_container(monkeypatch):
+    picker = object()
+    center_taps = []
+    coordinate_taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if 'android.widget.TextView[@text="活动图片"]' in value:
+                return picker
+            raise activity.NoSuchElementException("missing")
+
+        def execute_script(self, script, payload):
+            coordinate_taps.append((script, payload))
+
+    monkeypatch.setattr(
+        activity,
+        "_tap_element_center",
+        lambda driver, element: center_taps.append(element),
+    )
+
+    assert activity._tap_image_picker(FakeDriver()) is True
+    assert center_taps == [picker]
+    assert coordinate_taps == []
 
 
 def test_upload_activity_image_waits_for_photo_library_before_choosing_album(monkeypatch):

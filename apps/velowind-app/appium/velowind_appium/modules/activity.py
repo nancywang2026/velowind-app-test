@@ -241,6 +241,8 @@ def submit_activity_for_review(driver: WebDriver, expected_title: str | None = N
 def activity_form_is_visible(page_source: str) -> bool:
     texts = _extract_strings(page_source)
     joined = " ".join(texts)
+    if any(token in joined for token in PUBLISH_SHEET_TEXTS):
+        return False
     return any(token in joined for token in FORM_READY_TEXTS)
 
 
@@ -350,6 +352,9 @@ def _fill_description(driver: WebDriver, description: str) -> None:
 
 
 def _fill_itinerary(driver: WebDriver, itinerary: list[ActivityItineraryItem]) -> None:
+    if _itinerary_already_saved(_safe_page_source(driver), itinerary):
+        return
+
     with _activity_profile("itinerary-open-editor"):
         opened = _open_editor(driver, "点击补充活动行程安排")
     if opened:
@@ -368,6 +373,16 @@ def _fill_itinerary(driver: WebDriver, itinerary: list[ActivityItineraryItem]) -
         _assert_editor_saved(driver, "点击补充活动行程安排", "activity itinerary")
         return
     raise AssertionError("Unable to open or fill the activity itinerary editor")
+
+
+def _itinerary_already_saved(page_source: str, itinerary: list[ActivityItineraryItem]) -> bool:
+    if not page_source or not itinerary or "活动行程" not in page_source:
+        return False
+    source = html.unescape(page_source)
+    return all(
+        all(value and value in source for value in (item.title, item.subtitle, item.body))
+        for item in itinerary
+    )
 
 
 def _fill_city(driver: WebDriver, city: str) -> None:
@@ -518,15 +533,17 @@ def _fill_input_near_label(
     if keyword not in page_source:
         return False
 
-    element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"]
+    element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField", "android.widget.EditText"]
     if prefer_text_view:
-        element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"]
+        element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField", "android.widget.EditText"]
     else:
-        element_types = ["XCUIElementTypeTextField", "XCUIElementTypeTextView"]
+        element_types = ["XCUIElementTypeTextField", "android.widget.EditText", "XCUIElementTypeTextView"]
 
     xpath_templates = [
         f'//*[contains(@name, "{keyword}") or contains(@label, "{keyword}") or contains(@value, "{keyword}")]/following::{{element_type}}[1]',
         f'//{{element_type}}[contains(@name, "{keyword}") or contains(@label, "{keyword}") or contains(@value, "{keyword}")]',
+        f'//*[contains(@text, "{keyword}")]/following::{{element_type}}[1]',
+        f'//{{element_type}}[contains(@text, "{keyword}") or contains(@hint, "{keyword}")]',
     ]
     for element_type in element_types:
         for template in xpath_templates:
@@ -620,10 +637,26 @@ def _field_has_user_value(element) -> bool:
         current_value = (element.get_attribute("value") or "").strip()
     except WebDriverException:
         current_value = ""
+    if not current_value:
+        try:
+            current_value = (element.get_attribute("text") or "").strip()
+        except WebDriverException:
+            current_value = ""
     try:
         placeholder_value = (element.get_attribute("placeholderValue") or "").strip()
     except WebDriverException:
         placeholder_value = ""
+    if not placeholder_value:
+        try:
+            placeholder_value = (element.get_attribute("hint") or "").strip()
+        except WebDriverException:
+            placeholder_value = ""
+    try:
+        showing_hint = str(element.get_attribute("showing-hint") or "").lower() == "true"
+    except WebDriverException:
+        showing_hint = False
+    if showing_hint:
+        return False
     if not current_value:
         return False
     if placeholder_value and current_value == placeholder_value:
@@ -689,6 +722,7 @@ def _editor_opened(page_source: str, baseline: str, entry_text: str) -> bool:
 
 def _fill_editor_body(driver: WebDriver, body: str) -> None:
     for xpath in [
+        '//android.widget.EditText[@text="请输入正文" or @hint="请输入正文"]',
         '//XCUIElementTypeTextView',
         '//XCUIElementTypeTextField[contains(@value, "请输入正文")]',
         '//XCUIElementTypeTextField[1]',
@@ -707,6 +741,7 @@ def _fill_editor_entry(driver: WebDriver, title: str, body: str) -> None:
 
 def _fill_editor_title(driver: WebDriver, title: str) -> None:
     for xpath in [
+        '//android.widget.EditText[@text="活动概览" or @hint="活动概览"]',
         '//XCUIElementTypeTextField[1]',
         '//XCUIElementTypeTextField[@placeholderValue="活动概览"]',
         '//XCUIElementTypeTextField[@placeholderValue="活动行程"]',
@@ -744,23 +779,37 @@ def _fill_indexed_editor_text_view(driver: WebDriver, value: str, index: int) ->
 
 
 def _find_indexed_editor_text_field(driver: WebDriver, placeholder: str, index: int):
-    xpath = (
-        f'//XCUIElementTypeTextField[@placeholderValue="{placeholder}" '
-        f'or @value="{placeholder}" or @name="{placeholder}" or @label="{placeholder}"]'
-    )
-    return _find_indexed_visible_editor_element(driver, xpath, index, f"activity itinerary {placeholder}")
+    xpaths = [
+        (
+            f'//XCUIElementTypeTextField[@placeholderValue="{placeholder}" '
+            f'or @value="{placeholder}" or @name="{placeholder}" or @label="{placeholder}"]'
+        ),
+        f'//android.widget.EditText[@text="{placeholder}" or @hint="{placeholder}"]',
+    ]
+    return _find_indexed_visible_editor_element(driver, xpaths, index, f"activity itinerary {placeholder}")
 
 
 def _find_indexed_editor_text_view(driver: WebDriver, index: int):
-    return _find_indexed_visible_editor_element(driver, "//XCUIElementTypeTextView", index, "activity itinerary body")
+    return _find_indexed_visible_editor_element(
+        driver,
+        [
+            "//XCUIElementTypeTextView",
+            '//android.widget.EditText[@text="正文" or @hint="正文"]',
+        ],
+        index,
+        "activity itinerary body",
+    )
 
 
-def _find_indexed_visible_editor_element(driver: WebDriver, xpath: str, index: int, field_name: str):
+def _find_indexed_visible_editor_element(driver: WebDriver, xpath: str | list[str], index: int, field_name: str):
+    xpaths = [xpath] if isinstance(xpath, str) else xpath
     for _ in range(5):
-        try:
-            elements = driver.find_elements(AppiumBy.XPATH, xpath)
-        except WebDriverException:
-            elements = []
+        elements = []
+        for candidate_xpath in xpaths:
+            try:
+                elements.extend(driver.find_elements(AppiumBy.XPATH, candidate_xpath))
+            except WebDriverException:
+                continue
         visible_elements = sorted(
             [element for element in elements if _element_is_visible(element)],
             key=lambda element: (element.rect.get("y", 0), element.rect.get("x", 0)),
@@ -797,10 +846,15 @@ def _add_itinerary_segment(driver: WebDriver) -> bool:
 
 
 def _find_add_itinerary_segment_button(driver: WebDriver):
-    try:
-        buttons = driver.find_elements(AppiumBy.XPATH, '//XCUIElementTypeOther[@width="30" and @height="30"]')
-    except WebDriverException:
-        return None
+    buttons = []
+    for xpath in [
+        '//XCUIElementTypeOther[@width="30" and @height="30"]',
+        "//android.view.ViewGroup[com.horcrux.svg.SvgView]",
+    ]:
+        try:
+            buttons.extend(driver.find_elements(AppiumBy.XPATH, xpath))
+        except WebDriverException:
+            continue
     visible_buttons = sorted(
         [button for button in buttons if _element_is_visible(button)],
         key=lambda button: (button.rect.get("y", 0), button.rect.get("x", 0)),
@@ -811,12 +865,24 @@ def _find_add_itinerary_segment_button(driver: WebDriver):
 def _count_itinerary_editor_sections(page_source: str) -> int:
     if not page_source:
         return 0
-    return len(
+    ios_count = len(
         re.findall(
             r'<XCUIElementTypeTextField[^>]*visible="true"[^>]*placeholderValue="标题"',
             page_source,
         )
     )
+    android_count = len(
+        re.findall(
+            r'<node\b(?=[^>]*\bclass="android\.widget\.EditText")(?=[^>]*\btext="标题")[^>]*>',
+            page_source,
+        )
+    ) + len(
+        re.findall(
+            r'<android\.widget\.EditText\b(?=[^>]*\btext="标题")[^>]*>',
+            page_source,
+        )
+    )
+    return ios_count + android_count
 
 
 def _normalize_itinerary(raw_itinerary) -> list[ActivityItineraryItem]:
@@ -1033,6 +1099,18 @@ def _editor_page_visible(page_source: str) -> bool:
 
 
 def _tap_image_picker(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        try:
+            picker = driver.find_element(
+                AppiumBy.XPATH,
+                '(//android.widget.TextView[@text="活动图片"]'
+                '/following::android.widget.HorizontalScrollView[1]//android.view.ViewGroup)[1]',
+            )
+            _tap_element_center(driver, picker)
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            pass
     try:
         driver.execute_script("mobile: tap", {"x": 60, "y": 206})
         return True
@@ -1186,9 +1264,42 @@ def _tap_submit(driver: WebDriver) -> bool:
     for accessibility_id in ["submit-audit-button", "activity-submit-button", "publish-submit-button"]:
         if tap_if_present(driver, accessibility_id, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
+    if _tap_submit_button_center(driver):
+        return True
     for text in ["提交审核", "提交", "发布"]:
         if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
             return True
+    return False
+
+
+def _tap_submit_button_center(driver: WebDriver) -> bool:
+    try:
+        elements = driver.find_elements(
+            AppiumBy.XPATH,
+            '//*[@name="提交审核" or @label="提交审核" or @value="提交审核"]',
+        )
+    except (AttributeError, WebDriverException):
+        return False
+
+    candidates = []
+    for element in elements:
+        try:
+            rect = element.rect
+        except (AttributeError, WebDriverException):
+            continue
+        if (
+            (rect.get("width", 0) or 0) >= 120
+            and (rect.get("height", 0) or 0) >= 40
+            and (rect.get("y", 0) or 0) >= 700
+        ):
+            candidates.append(element)
+
+    for element in sorted(candidates, key=lambda item: item.rect.get("y", 0), reverse=True):
+        try:
+            _tap_element_center(driver, element)
+            return True
+        except (AttributeError, WebDriverException):
+            continue
     return False
 
 
@@ -1226,7 +1337,7 @@ def _activity_profile(label: str):
 
 
 def _extract_strings(page_source: str) -> list[str]:
-    values = re.findall(r'(?:name|label|value)="([^"]+)"', page_source)
+    values = re.findall(r'(?:text|name|label|value)="([^"]+)"', page_source)
     cleaned: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -1241,5 +1352,5 @@ def _extract_strings(page_source: str) -> list[str]:
 def _safe_page_source(driver: WebDriver) -> str:
     try:
         return driver.page_source
-    except WebDriverException:
+    except (AttributeError, WebDriverException):
         return ""

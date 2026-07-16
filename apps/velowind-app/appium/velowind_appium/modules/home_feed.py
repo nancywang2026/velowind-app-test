@@ -44,6 +44,7 @@ HOME_BLOCKING_TEXTS = [
     "页面预览提示",
     "我的活动",
     'placeholderValue="请输入内容"',
+    'hint="请输入内容"',
 ]
 def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
     end_at = time.monotonic() + timeout
@@ -91,9 +92,10 @@ def switch_note_type_navigation(driver: WebDriver, timeout: int = 10) -> None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
-        if all(text in page_source for text in ["首页", "全国"]) and any(
-            text in page_source for text in NOTE_TYPE_NAV_TEXTS
-        ):
+        root_navigation_visible = all(text in page_source for text in ["首页", "全国"]) or (
+            'resource-id="post-home-feed-category-pager"' in page_source and "全国" in page_source
+        )
+        if root_navigation_visible and any(text in page_source for text in NOTE_TYPE_NAV_TEXTS):
             return
         time.sleep(0.2)
     raise AssertionError("Unable to find the note type navigation on the home feed")
@@ -121,11 +123,18 @@ def note_feed_contains_type_results(page_source: str, type_name: str) -> bool:
 
 def note_feed_type_result_texts(page_source: str, type_name: str) -> list[str]:
     card_texts = _extract_visible_note_card_texts(page_source)
+    if _android_selected_note_type_visible(page_source, type_name):
+        return card_texts
     return [text for text in card_texts if _note_card_matches_type(text, type_name)]
 
 
 def note_feed_all_results_match_type(page_source: str, type_name: str) -> tuple[bool, list[str]]:
     card_texts = _extract_visible_note_card_texts(page_source)
+    if "<android." in page_source:
+        if _android_selected_note_type_visible(page_source, type_name):
+            return bool(card_texts), []
+        matched = [text for text in card_texts if _note_card_matches_type(text, type_name)]
+        return bool(matched), []
     mismatched = [text for text in card_texts if not _note_card_matches_type(text, type_name)]
     return bool(card_texts) and not mismatched, mismatched
 
@@ -177,6 +186,20 @@ def _extract_visible_note_card_texts(page_source: str) -> list[str]:
             continue
         texts.append(normalized)
         seen.add(normalized)
+    if texts:
+        return texts
+
+    for element in root.iter():
+        if element.attrib.get("displayed") == "false":
+            continue
+        text = element.attrib.get("text", "").strip()
+        if not text.startswith("#"):
+            continue
+        normalized = " ".join(text.split())
+        if normalized in seen:
+            continue
+        texts.append(normalized)
+        seen.add(normalized)
     return texts
 
 
@@ -205,6 +228,22 @@ def _note_card_matches_type(text: str, type_name: str) -> bool:
     return any(keyword in text for keyword in related_keywords)
 
 
+def _android_selected_note_type_visible(page_source: str, type_name: str) -> bool:
+    if "<android." not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    for element in root.iter():
+        if element.attrib.get("selected") != "true":
+            continue
+        if any(node.attrib.get("text", "").strip() == type_name for node in element.iter()):
+            return True
+    return False
+
+
 def _home_ready_id_present(driver: WebDriver) -> bool:
     for accessibility_id in HOME_READY_IDS:
         try:
@@ -218,6 +257,8 @@ def _home_ready_id_present(driver: WebDriver) -> bool:
 def _home_ready_text_present(page_source: str) -> bool:
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
         return False
+    if 'resource-id="post-home-feed-category-pager"' in page_source:
+        return True
     return "首页" in page_source and ("全国" in page_source or "推荐" in page_source)
 
 
