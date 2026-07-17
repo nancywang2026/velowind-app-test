@@ -1,7 +1,7 @@
 activities:
   - activityName: "张家界大环线2天1晚"
     activityType: "骑行"
-    province: "湖南省"
+    province: "浙江省"
     city: "张家界市"
     album: "张家界"
     activityDescription: "参考张家界大环线2天1晚活动设计，串联武陵源、天门山周边山地景观道路，适合具备稳定爬坡和长距离骑行经验的用户参与。"
@@ -24,6 +24,7 @@ activities:
       maxParticipants: 20
       fee: 0
       sceneryTags: ["峰林", "峡谷", "山地公路"]
+      scenicSpots: ["武陵源", "天门山", "张家界国家森林公园"]
       suitableMonths: ["4月", "5月", "9月", "10月"]
       riskLevel: "中"
 

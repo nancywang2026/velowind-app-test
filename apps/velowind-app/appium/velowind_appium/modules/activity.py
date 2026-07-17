@@ -89,6 +89,12 @@ class ActivityDraft:
     location: str
     max_participants: str
     fee: str
+    reference_duration: str
+    total_mileage: str
+    max_altitude: str
+    elevation_gain: str
+    scenery_tags: list[str]
+    scenic_spots: list[str]
 
 
 def build_activity_draft(*, testdata_path: Path | None = None) -> ActivityDraft:
@@ -114,11 +120,17 @@ def _build_activity_draft_from_case(case: dict) -> ActivityDraft:
         province=str(case.get("province", "")).strip(),
         city=str(case.get("city", "")).strip(),
         album=str(case.get("album", "")).strip() or None,
-        contact_name="自动化测试",
-        contact_phone="13800138000",
+        contact_name=str(advanced.get("contactName", "自动化测试")).strip(),
+        contact_phone=str(advanced.get("contactPhone", "13800138000")).strip(),
         location=str(advanced.get("defaultMeetingPoint", "")).strip(),
-        max_participants="20",
-        fee="0",
+        max_participants=str(advanced.get("maxParticipants", "20")).strip(),
+        fee=str(advanced.get("fee", "0")).strip(),
+        reference_duration=str(advanced.get("referenceDuration", "")).strip(),
+        total_mileage=str(advanced.get("totalMileage", "")).strip(),
+        max_altitude=str(advanced.get("maxAltitude", "")).strip(),
+        elevation_gain=str(advanced.get("elevationGain", "")).strip(),
+        scenery_tags=_normalize_string_list(advanced.get("sceneryTags", [])),
+        scenic_spots=_normalize_string_list(advanced.get("scenicSpots", [])),
     )
 
 
@@ -153,6 +165,14 @@ def open_activity_publisher(
     timeout: int = 30,
 ) -> None:
     end_at = time.monotonic() + timeout
+    if ios_config is not None:
+        try:
+            from velowind_appium.session import ensure_logged_in_for_publish_entry
+
+            ensure_logged_in_for_publish_entry(driver, ios_config)
+        except Exception:
+            pass
+    _prepare_android_publish_entry(driver)
 
     while time.monotonic() < end_at:
         if login_required_from_page_source(_safe_page_source(driver)):
@@ -188,6 +208,18 @@ def open_activity_publisher(
     raise AssertionError("Unable to open the activity publisher from the home page")
 
 
+def _prepare_android_publish_entry(driver: WebDriver) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return
+    try:
+        from velowind_appium.modules.message_detail import _prepare_android_publish_entry as prepare_android_publish_entry
+
+        prepare_android_publish_entry(driver)
+    except Exception:
+        return
+
+
 def fill_activity_form(driver: WebDriver, draft: ActivityDraft, timeout: int = 60) -> None:
     wait_for_activity_form(driver, timeout=timeout)
 
@@ -207,6 +239,8 @@ def fill_activity_form(driver: WebDriver, draft: ActivityDraft, timeout: int = 6
         _fill_itinerary(driver, draft.itinerary)
     with _activity_profile("fill-known-text-fields"):
         _fill_known_text_fields(driver, draft)
+    with _activity_profile("fill-advanced-settings"):
+        _fill_advanced_settings(driver, draft)
     with _activity_profile("resolve-picker-fields"):
         _resolve_picker_fields(driver, timeout=timeout)
 
@@ -938,6 +972,90 @@ def _normalize_itinerary_item(raw_item, index: int) -> ActivityItineraryItem | N
     return ActivityItineraryItem(title=f"Day{index}", subtitle="", body=text)
 
 
+def _normalize_string_list(raw_value) -> list[str]:
+    if isinstance(raw_value, list):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    if isinstance(raw_value, str):
+        return [token.strip() for token in re.split(r"[,，、\s]+", raw_value) if token.strip()]
+    return []
+
+
+def _fill_advanced_settings(driver: WebDriver, draft: ActivityDraft) -> None:
+    advanced_values = [
+        (["参考时长", "活动时长", "时长"], draft.reference_duration),
+        (["总里程", "里程"], draft.total_mileage),
+        (["最高海拔", "海拔"], draft.max_altitude),
+        (["累计爬升", "爬升"], draft.elevation_gain),
+        (["风景标签", "景色标签", "风景"], "，".join(draft.scenery_tags)),
+        (["沿途景点", "途经景点", "景点"], "，".join(draft.scenic_spots)),
+    ]
+    advanced_values = [(keywords, value) for keywords, value in advanced_values if value]
+    if not advanced_values:
+        return
+
+    if not _open_advanced_settings(driver, advanced_values):
+        raise AssertionError("Unable to open activity advanced settings")
+
+    for keywords, value in advanced_values:
+        if not _fill_advanced_field(driver, keywords, value):
+            raise AssertionError(f"Unable to fill advanced activity field: {keywords[0]}")
+
+
+def _fill_advanced_field(driver: WebDriver, keywords: list[str], value: str) -> bool:
+    for _ in range(4):
+        for keyword in keywords:
+            if _fill_input_near_label(driver, keyword, value):
+                return True
+        swipe_vertical(driver, direction="up")
+        time.sleep(0.2)
+    return False
+
+
+def _open_advanced_settings(driver: WebDriver, advanced_values: list[tuple[list[str], str]]) -> bool:
+    for _ in range(5):
+        page_source = _safe_page_source(driver)
+        if _advanced_field_visible(page_source, advanced_values):
+            return True
+        for text in ["高级设置", "更多信息", "更多设置", "展开更多", "补充更多信息"]:
+            if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
+                time.sleep(0.5)
+                if _advanced_field_visible(_safe_page_source(driver), advanced_values):
+                    return True
+        if _tap_advanced_settings_row(driver):
+            time.sleep(0.5)
+            if _advanced_field_visible(_safe_page_source(driver), advanced_values):
+                return True
+        swipe_vertical(driver, direction="up")
+        time.sleep(0.3)
+    return _advanced_field_visible(_safe_page_source(driver), advanced_values)
+
+
+def _advanced_field_visible(page_source: str, advanced_values: list[tuple[list[str], str]]) -> bool:
+    return any(keyword in page_source for keywords, _ in advanced_values for keyword in keywords)
+
+
+def _tap_advanced_settings_row(driver: WebDriver) -> bool:
+    for text in ["高级选项", "高级设置"]:
+        try:
+            element = driver.find_element(
+                AppiumBy.XPATH,
+                f'//*[contains(@text, "{text}") or contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+            )
+            rect = element.rect
+            window_rect = driver.get_window_rect()
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": int(window_rect["width"] * 0.91),
+                    "y": int(rect["y"] + rect["height"] / 2),
+                },
+            )
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError, KeyError, TypeError):
+            continue
+    return False
+
+
 def _close_editor(driver: WebDriver) -> None:
     _dismiss_editor_keyboard_fast(driver)
     _tap_editor_title(driver)
@@ -1212,7 +1330,7 @@ def _choose_specific_overlay_option(driver: WebDriver, texts: str | list[str]) -
             _confirm_overlay_selection(driver)
             return True
 
-    for _ in range(3):
+    for _ in range(8):
         try:
             swipe_vertical(driver, direction="up")
         except WebDriverException:
@@ -1306,12 +1424,24 @@ def _tap_submit_button_center(driver: WebDriver) -> bool:
 def _tap_plus_button_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        platform = str(capabilities.get("platformName", "")).lower()
         x = int(rect["width"] * 0.5)
+        if platform == "android":
+            for y_ratio in (0.935, 0.948, 0.958, 0.968):
+                driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * y_ratio)})
+                if _wait_until(lambda: _publish_entry_opened(_safe_page_source(driver)), timeout=1):
+                    return True
+            return False
         y = int(rect["height"] * 0.93)
         driver.execute_script("mobile: tap", {"x": x, "y": y})
         return True
     except WebDriverException:
         return False
+
+
+def _publish_entry_opened(page_source: str) -> bool:
+    return activity_form_is_visible(page_source) or any(text in page_source for text in PUBLISH_SHEET_TEXTS)
 
 
 def _wait_until(predicate, timeout: int) -> bool:

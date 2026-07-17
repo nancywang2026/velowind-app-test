@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import time
 
 from appium.webdriver.webdriver import WebDriver
@@ -98,6 +100,10 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
                                 return True
                     if _home_visible(driver):
                         return True
+                if _android_adb_back(driver):
+                    time.sleep(0.3)
+                    if _home_visible(driver):
+                        return True
                 safe_back(driver)
                 time.sleep(0.2)
                 continue
@@ -163,6 +169,10 @@ def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumC
                 return True
             if not _home_or_login_visible(driver):
                 if _tap_top_back_by_coordinate(driver):
+                    time.sleep(0.3)
+                    if _publish_entry_ready(driver):
+                        return True
+                if _android_adb_back(driver):
                     time.sleep(0.3)
                     if _publish_entry_ready(driver):
                         return True
@@ -254,6 +264,29 @@ def _tap_top_back_by_coordinate(driver: WebDriver) -> bool:
         )
         return True
     except Exception:
+        return False
+
+
+def _android_adb_back(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    if not udid:
+        return False
+    try:
+        subprocess.run(
+            ["adb", "-s", udid, "shell", "input", "keyevent", "4"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
