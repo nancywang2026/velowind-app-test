@@ -14,7 +14,7 @@ from velowind_appium.modules.message_detail import (
 )
 
 
-def test_android_note_search_coordinate_targets_visible_header_icon():
+def test_android_note_search_coordinate_targets_visible_header_icon(monkeypatch):
     taps = []
 
     class FakeDriver:
@@ -27,12 +27,16 @@ def test_android_note_search_coordinate_targets_visible_header_icon():
         @staticmethod
         def execute_script(script, payload):
             taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_note_search_visible", lambda page_source: page_source == "search-visible")
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "search-visible")
 
     assert message_detail._tap_note_search_entry_by_coordinate(FakeDriver()) is True
-    assert taps == [("mobile: tap", {"x": 972, "y": 216})]
+    assert taps == [("mobile: tap", {"x": 1004, "y": 160})]
 
 
-def test_android_note_search_submit_targets_visible_header_action():
+def test_android_note_search_submit_targets_visible_header_action(monkeypatch):
     taps = []
 
     class FakeDriver:
@@ -46,11 +50,14 @@ def test_android_note_search_submit_targets_visible_header_action():
         def execute_script(script, payload):
             taps.append((script, payload))
 
+    monkeypatch.setattr(message_detail, "_android_search_request_started", lambda page_source: page_source == "request-started")
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "request-started")
+
     assert message_detail._tap_note_search_submit_by_coordinate(FakeDriver()) is True
-    assert taps == [("mobile: tap", {"x": 972, "y": 216})]
+    assert taps == [("mobile: tap", {"x": 972, "y": 175})]
 
 
-def test_android_publish_entry_coordinate_targets_bottom_center_plus_button():
+def test_android_publish_entry_coordinate_targets_bottom_center_plus_button(monkeypatch):
     taps = []
 
     class FakeDriver:
@@ -64,8 +71,30 @@ def test_android_publish_entry_coordinate_targets_bottom_center_plus_button():
         def execute_script(script, payload):
             taps.append((script, payload))
 
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: True)
+
     assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
-    assert taps == [("mobile: tap", {"x": 720, "y": 2483})]
+    assert taps == [("mobile: tap", {"x": 720, "y": 2393})]
+
+
+def test_android_publish_entry_coordinate_targets_pixel_10_plus_button(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1280, "height": 2856}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: True)
+
+    assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 640, "y": 2670})]
 
 
 def test_ios_publish_entry_coordinate_keeps_existing_center_target():
@@ -102,10 +131,11 @@ def test_find_note_search_input_supports_android_edit_text():
 def test_android_note_search_results_accept_hidden_keyword_matches():
     page_source = """
     <hierarchy>
-      <android.widget.EditText text="骑行" hint="请输入内容" />
-      <android.widget.TextView text="想去一趟洱海，想顺便把自己也放空一下" />
-      <android.widget.TextView text="#云南洱海" />
-      <android.widget.TextView text="用户 15aa909316f54c2b8671dc3c35476559" />
+      <android.widget.EditText text="骑行" hint="请输入内容" bounds="[54,160][1026,240]" />
+      <android.widget.ImageView resource-id="image" bounds="[36,422][504,998]" />
+      <android.widget.TextView text="想去一趟洱海，想顺便把自己也放空一下" bounds="[64,1020][468,1098]" />
+      <android.widget.TextView text="#云南洱海" bounds="[64,1110][280,1160]" />
+      <android.widget.TextView text="用户 15aa909316f54c2b8671dc3c35476559" bounds="[64,1180][548,1234]" />
     </hierarchy>
     """
 
@@ -280,6 +310,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
+    assert draft.picture_index == 1
     assert draft.location == "黑龙江"
 
 
@@ -292,6 +323,7 @@ def test_load_message_note_draft_reads_no_location_variant():
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
+    assert draft.picture_index == 1
     assert draft.location == ""
 
 
@@ -316,6 +348,20 @@ def test_message_note_form_is_visible_from_publish_page_source():
       <XCUIElementTypeTextField name="请输入标题" />
       <XCUIElementTypeTextView name="分享你的旅行故事" />
     </AppiumAUT>
+    """
+
+    assert message_note_form_is_visible(page_source) is True
+
+
+def test_message_note_form_is_visible_from_android_publish_page_source():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="发布笔记" />
+      <android.widget.TextView text="添加标题" />
+      <android.widget.TextView text="输入正文" />
+      <android.widget.TextView text="存草稿" />
+      <android.widget.TextView text="提交审核" />
+    </hierarchy>
     """
 
     assert message_note_form_is_visible(page_source) is True
@@ -384,6 +430,7 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
     assert events == [
         "wait-form",
         ("upload-image", draft.album),
+        "wait-form",
         ("title", draft.title),
         ("body", draft.body),
         ("body-topics", draft.topics),
@@ -424,6 +471,7 @@ def test_fill_message_note_form_skips_location_when_select_location_is_false(mon
     assert events == [
         "wait-form",
         ("upload-image", draft.album),
+        "wait-form",
         ("title", draft.title),
         ("body", draft.body),
         ("body-topics", draft.topics),
@@ -657,7 +705,11 @@ def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch)
     draft = build_changbaishan_note_draft()
     monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: None)
     monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: True)
-    monkeypatch.setattr(message_detail.photo_picker, "choose_photo_from_library", lambda driver, album_name=None, retry_sheet_option=None: False)
+    monkeypatch.setattr(
+        message_detail.photo_picker,
+        "choose_photo_from_library",
+        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None: False,
+    )
 
     try:
         message_detail._upload_note_image(object(), draft)
@@ -676,15 +728,21 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
     monkeypatch.setattr(
         message_detail.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, retry_sheet_option=None: calls.append(
-            ("choose-photo", album_name, retry_sheet_option is message_detail._tap_note_photo_library_sheet_option)
+        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None: calls.append(
+            (
+                "choose-photo",
+                album_name,
+                picture_index,
+                select_all_from_album,
+                retry_sheet_option is message_detail._tap_note_photo_library_sheet_option,
+            )
         )
         or True,
     )
 
     message_detail._upload_note_image(object(), draft)
 
-    assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", True)]
+    assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", 1, False, True)]
 
 
 def test_android_note_image_plus_taps_first_image_slot_center():
@@ -738,8 +796,16 @@ def test_append_note_topics_uses_android_body_edit_text(monkeypatch):
     events = []
 
     class FakeElement:
+        def get_attribute(self, name):
+            if name == "text":
+                return ""
+            return None
+
         def click(self):
             events.append("click-body")
+
+        def clear(self):
+            events.append("clear-body")
 
         def send_keys(self, value):
             events.append(("send-keys", value))
@@ -759,7 +825,47 @@ def test_append_note_topics_uses_android_body_edit_text(monkeypatch):
 
     assert events == [
         "click-body",
-        ("send-keys", " #云南洱海 #大理旅行"),
+        "clear-body",
+        ("send-keys", "#云南洱海 #大理旅行"),
+        "hide-keyboard",
+    ]
+
+
+def test_append_note_topics_preserves_existing_android_body(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def get_attribute(self, name):
+            if name == "text":
+                return "今天骑行风很舒服"
+            return None
+
+        def click(self):
+            events.append("click-body")
+
+        def clear(self):
+            events.append("clear-body")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == '//android.widget.EditText[contains(@hint, "正文")]':
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: text == "#话题")
+    monkeypatch.setattr(message_detail, "_dismiss_editor_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    message_detail._append_note_topics_to_body(FakeDriver(), ["#杭州徒步", "#西湖"])
+
+    assert events == [
+        "click-body",
+        "clear-body",
+        ("send-keys", "今天骑行风很舒服 #杭州徒步 #西湖"),
         "hide-keyboard",
     ]
 
@@ -1158,7 +1264,7 @@ def test_clear_existing_note_images_taps_scoped_remove_buttons_until_gone(monkey
     ])
 
     monkeypatch.setattr(message_detail, "message_note_form_is_visible", lambda source: True)
-    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "发布笔记 标题 正文")
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "发布笔记 标题 正文 已选择")
     monkeypatch.setattr(message_detail, "_find_note_image_remove_buttons", lambda driver: next(groups, []))
     monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
 
@@ -1218,6 +1324,39 @@ def test_find_note_image_remove_buttons_scopes_to_top_thumbnail_strip():
         {"x": 86, "y": 132, "width": 17, "height": 17},
         {"x": 185, "y": 132, "width": 17, "height": 17},
     ]
+
+
+def test_find_android_note_image_remove_buttons_scopes_to_thumbnail_close_badges():
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_elements(self, by, value):
+            assert value == "//android.widget.HorizontalScrollView//android.view.ViewGroup"
+            return [
+                FakeElement({"x": 309, "y": 324, "width": 60, "height": 60}),
+                FakeElement({"x": 663, "y": 324, "width": 60, "height": 60}),
+                FakeElement({"x": 1017, "y": 324, "width": 60, "height": 60}),
+                FakeElement({"x": 45, "y": 324, "width": 324, "height": 324}),
+                FakeElement({"x": 753, "y": 588, "width": 66, "height": 60}),
+            ]
+
+    buttons = message_detail._find_note_image_remove_buttons(FakeDriver())
+
+    assert [element.rect for element in buttons] == [
+        {"x": 309, "y": 324, "width": 60, "height": 60},
+        {"x": 663, "y": 324, "width": 60, "height": 60},
+        {"x": 1017, "y": 324, "width": 60, "height": 60},
+    ]
+
+
+def test_note_selected_images_hint_accepts_android_thumbnail_strip():
+    page_source = '发布笔记 <android.widget.ImageView resource-id="image" />'
+
+    assert message_detail._note_selected_images_hint(page_source) is True
 
 
 def test_choose_note_location_option_taps_first_visible_chip(monkeypatch):
@@ -1566,7 +1705,7 @@ def test_find_location_results_supports_android_text_rows():
             return None
 
     result = FakeElement(
-        "洱海公园",
+        "洱海公园 云南省大理白族自治州大理市滨海大道",
         {"x": 68, "y": 1512, "width": 860, "height": 56},
     )
 
@@ -1599,7 +1738,7 @@ def test_choose_android_location_taps_visible_row_area_above_keyboard(monkeypatc
     monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
 
     assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
-    assert taps == [("mobile: tap", {"x": 498.0, "y": 1492.0})]
+    assert taps == [("mobile: tap", {"x": 498.0, "y": 1542.8})]
 
 
 def test_choose_android_location_refinds_and_taps_row_center_after_keyboard_closes(monkeypatch):

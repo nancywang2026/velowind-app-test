@@ -11,10 +11,23 @@ from velowind_appium.config import IosAppiumConfig
 
 
 def login_required_from_page_source(page_source: str) -> bool:
+    if _login_redirect_visible_from_page_source(page_source):
+        return True
+    return _login_form_visible_from_page_source(page_source)
+
+
+def _login_form_visible_from_page_source(page_source: str) -> bool:
     phone_login_tokens = ["手机号登录", "请输入手机号", "登录"]
     password_login_tokens = ["密码登录", "请输入手机号和密码完成登录", "登录"]
     return all(token in page_source for token in phone_login_tokens) or all(
         token in page_source for token in password_login_tokens
+    )
+
+
+def _login_redirect_visible_from_page_source(page_source: str) -> bool:
+    return all(
+        token in page_source
+        for token in ["登录后查看个人中心", "正在为你跳转到登录页"]
     )
 
 
@@ -30,9 +43,22 @@ def ensure_logged_in_if_needed(driver: WebDriver, config: IosAppiumConfig) -> bo
         tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=3)
         return False
 
+    _wait_for_login_form(driver)
     _perform_password_login(driver, config.login_username, config.login_password)
     tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=5)
     return True
+
+
+def _wait_for_login_form(driver: WebDriver, timeout: int = 12) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if _login_form_visible_from_page_source(page_source):
+            return True
+        if not login_required_from_page_source(page_source):
+            return False
+        time.sleep(0.5)
+    return False
 
 
 def _perform_password_login(driver: WebDriver, username: str, password: str) -> None:

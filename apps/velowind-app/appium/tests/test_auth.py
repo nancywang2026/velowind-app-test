@@ -39,6 +39,17 @@ def test_login_required_from_page_source_detects_password_login_screen():
     assert login_required_from_page_source(page_source) is True
 
 
+def test_login_required_from_page_source_detects_android_login_redirect_screen():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="登录后查看个人中心" />
+      <android.widget.TextView text="正在为你跳转到登录页，登录后会自动回到“我的”。" />
+    </hierarchy>
+    """
+
+    assert login_required_from_page_source(page_source) is True
+
+
 def test_open_password_login_form_taps_agreement_after_switch_attempt(monkeypatch):
     events = []
 
@@ -96,6 +107,22 @@ def test_open_password_login_form_uses_cross_platform_text_locator_on_android(mo
     auth._open_password_login_form(FakeDriver())
 
     assert events == [("密码登录", 1), "tap-agreement"]
+
+
+def test_wait_for_login_form_handles_android_redirect_before_form(monkeypatch):
+    page_sources = iter(
+        [
+            "登录后查看个人中心 正在为你跳转到登录页",
+            "登录后查看个人中心 正在为你跳转到登录页",
+            "手机号登录 请输入手机号 登录",
+        ]
+    )
+
+    monkeypatch.setattr(auth, "_safe_page_source", lambda driver: next(page_sources))
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(auth.time, "monotonic", iter([0, 1, 2, 3]).__next__)
+
+    assert auth._wait_for_login_form(object(), timeout=12) is True
 
 
 def test_find_phone_input_uses_first_android_edit_text():

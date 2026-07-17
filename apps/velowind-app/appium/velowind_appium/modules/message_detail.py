@@ -6,6 +6,7 @@ import html
 import os
 from pathlib import Path
 import re
+import subprocess
 import time
 
 from appium.webdriver.common.appiumby import AppiumBy
@@ -74,8 +75,24 @@ NOTE_FORM_READY_IDS = [
     "message-publish-page",
     "post-publish-page",
     "note-submit-button",
+    "message-submit-button",
+    "post-submit-button",
+    "publish-submit-button",
 ]
-NOTE_FORM_READY_TEXTS = ["发布笔记", "标题", "正文", "话题", "标记地点", "允许评论"]
+NOTE_FORM_READY_TEXTS = [
+    "发布笔记",
+    "标题",
+    "正文",
+    "话题",
+    "标记地点",
+    "允许评论",
+    "添加标题",
+    "输入标题",
+    "添加正文",
+    "输入正文",
+    "存草稿",
+    "提交审核",
+]
 NOTE_SUCCESS_TEXTS = ["发布成功", "提交成功", "审核中", "待审核", "提交审核成功", "已发布"]
 NOTE_SUCCESS_IDS = [
     "note-publish-success",
@@ -104,8 +121,8 @@ NOTE_SEARCH_RESULT_IDS = [
     "post-search-result-0",
 ]
 NOTE_ERROR_TEXTS = ["服务开小差了，请稍后重试", "服务器内部错误", "发布失败", "提交失败"]
-TITLE_FIELD_KEYWORDS = ["标题", "请输入标题"]
-BODY_FIELD_KEYWORDS = ["正文", "内容", "分享", "描述"]
+TITLE_FIELD_KEYWORDS = ["标题", "请输入标题", "添加标题", "输入标题"]
+BODY_FIELD_KEYWORDS = ["正文", "内容", "分享", "描述", "添加正文", "输入正文"]
 LOCATION_FIELD_KEYWORDS = ["标记地点", "地点", "位置"]
 GENERIC_DETAIL_TEXTS = {
     "首页",
@@ -161,6 +178,7 @@ class MessageNoteDraft:
     topics: list[str]
     location: str
     album: str | None = None
+    picture_index: int = 1
     allow_comments: bool = True
 
 
@@ -207,6 +225,11 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
     raw_location = note.get("location", "")
     location = "" if raw_location is None else str(raw_location).strip()
     album = str(note.get("album", "")).strip() or None
+    raw_picture_index = note.get("picture_index", 1)
+    try:
+        picture_index = max(1, int(raw_picture_index))
+    except (TypeError, ValueError):
+        picture_index = 1
     allow_comments = note.get("allow_comments", True)
     if isinstance(allow_comments, str):
         allow_comments = allow_comments.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
@@ -216,6 +239,7 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         topics=[str(topic).strip() for topic in topics if str(topic).strip()],
         location=location,
         album=album,
+        picture_index=picture_index,
         allow_comments=bool(allow_comments),
     )
 
@@ -251,6 +275,14 @@ def open_message_note_publisher(
     timeout: int = 30,
 ) -> None:
     end_at = time.monotonic() + timeout
+    if ios_config is not None:
+        try:
+            from velowind_appium.session import ensure_logged_in_for_publish_entry
+
+            ensure_logged_in_for_publish_entry(driver, ios_config)
+        except Exception:
+            pass
+    _prepare_android_publish_entry(driver)
 
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
@@ -279,11 +311,86 @@ def open_message_note_publisher(
     raise AssertionError("Unable to open the message note publisher from the home page")
 
 
+def _prepare_android_publish_entry(driver: WebDriver) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return
+    for _ in range(5):
+        page_source = _safe_page_source(driver)
+        if _android_publish_entry_ready(page_source):
+            return
+        if _android_share_sheet_visible(page_source):
+            if _tap_android_share_close(driver):
+                time.sleep(0.4)
+                continue
+            if _android_adb_back(driver):
+                time.sleep(0.4)
+                continue
+            driver.back()
+            time.sleep(0.4)
+            continue
+        if _android_search_page_visible(page_source):
+            if _tap_android_header_close(driver) or _android_adb_back(driver) or _tap_android_top_back(driver):
+                time.sleep(0.4)
+                continue
+            driver.back()
+            time.sleep(0.4)
+            continue
+        if _android_detail_page_visible(page_source) or _android_fullscreen_preview_visible(page_source):
+            if _android_adb_back(driver) or _tap_android_top_back(driver):
+                time.sleep(0.4)
+                continue
+            driver.back()
+            time.sleep(0.4)
+            continue
+        _tap_home_tab_fast(driver)
+        time.sleep(0.3)
+
+
+def _android_publish_entry_ready(page_source: str) -> bool:
+    return all(text in page_source for text in ["首页", "活动", "消息", "我的"]) and "搜索" not in page_source
+
+
+def _tap_home_tab_fast(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {"x": int(rect["width"] * 0.12), "y": int(rect["height"] * 0.95)},
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
+def _android_adb_back(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    if not udid:
+        return False
+    try:
+        subprocess.run(
+            ["adb", "-s", udid, "shell", "input", "keyevent", "4"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: int = 60) -> None:
     wait_for_message_note_form(driver, timeout=timeout)
 
     with _note_profile("upload-image"):
         _upload_note_image(driver, draft)
+    with _note_profile("stabilize-form-after-upload"):
+        _stabilize_android_note_form_after_upload(driver, timeout=min(timeout, 15))
     with _note_profile("fill-title"):
         _fill_note_title(driver, draft.title)
     with _note_profile("fill-body"):
@@ -464,6 +571,7 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
 def open_note_search(driver: WebDriver, timeout: int = 10) -> None:
     if _note_search_visible(_safe_page_source(driver)):
         return
+    _prepare_android_search_entry(driver)
     if not _tap_note_search_entry(driver):
         raise AssertionError("Unable to find the note search entry")
     if not _wait_until(lambda: _note_search_visible(_safe_page_source(driver)), timeout=timeout):
@@ -473,7 +581,12 @@ def open_note_search(driver: WebDriver, timeout: int = 10) -> None:
 def search_notes(driver: WebDriver, keyword: str, timeout: int = 10) -> None:
     search_input = _find_note_search_input(driver, timeout=timeout)
     _replace_text(search_input, keyword)
-    if not (_tap_note_search_submit_by_coordinate(driver) or _tap_texts_now(driver, ["搜索", "Search"]) or _tap_keyboard_search(driver)):
+    if not (
+        _tap_android_search_submit(driver)
+        or _tap_note_search_submit_by_coordinate(driver)
+        or _tap_texts_now(driver, ["搜索", "Search"])
+        or _tap_keyboard_search(driver)
+    ):
         _hide_keyboard(driver)
     if not _wait_until(lambda: _note_search_results_visible(_safe_page_source(driver), keyword), timeout=timeout):
         raise AssertionError(f"Note search results did not appear for keyword: {keyword}")
@@ -532,16 +645,120 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
         return False
 
 
+def _prepare_android_search_entry(driver: WebDriver) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return
+    for _ in range(4):
+        page_source = _safe_page_source(driver)
+        if _android_search_entry_ready(page_source):
+            return
+        if _android_share_sheet_visible(page_source):
+            if _tap_android_share_close(driver):
+                time.sleep(0.4)
+                continue
+            driver.back()
+            time.sleep(0.4)
+            continue
+        if _android_fullscreen_preview_visible(page_source):
+            if _tap_android_top_back(driver):
+                time.sleep(0.4)
+                continue
+            driver.back()
+            time.sleep(0.4)
+            continue
+        driver.back()
+        time.sleep(0.3)
+
+
+def _android_search_entry_ready(page_source: str) -> bool:
+    return "全国" in page_source and "推荐" in page_source and "骑行" in page_source and "搜索" not in page_source
+
+
+def _android_share_sheet_visible(page_source: str) -> bool:
+    return any(text in page_source for text in ["选择分享方式", "微信好友", "朋友圈"])
+
+
+def _android_search_page_visible(page_source: str) -> bool:
+    return "android.widget.EditText" in page_source and 'text="搜索"' in page_source
+
+
+def _android_detail_page_visible(page_source: str) -> bool:
+    if any(text in page_source for text in ["写留言", "共 0 条评论", "地点 |", "浏览", "评论"]):
+        return True
+    if any(text in page_source for text in ["首页", "活动", "消息", "我的"]):
+        return False
+    if _android_search_page_visible(page_source) or _android_share_sheet_visible(page_source):
+        return False
+    return page_source.count('resource-id="image"') >= 3 and page_source.count('text="赞"') >= 1
+
+
+def _android_fullscreen_preview_visible(page_source: str) -> bool:
+    return (
+        not _android_share_sheet_visible(page_source)
+        and "android:id/content" in page_source
+        and "post-home-feed-category-pager" not in page_source
+        and "发布笔记" not in page_source
+        and "登录" not in page_source
+        and page_source.count('resource-id="image"') <= 1
+    )
+
+
+def _tap_android_share_close(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        for x_ratio, y_ratio in [(0.95, 0.81), (0.95, 0.84), (0.97, 0.81)]:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": int(rect["width"] * x_ratio), "y": int(rect["height"] * y_ratio)},
+            )
+            time.sleep(0.2)
+            if not _android_share_sheet_visible(_safe_page_source(driver)):
+                return True
+        return False
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
+def _tap_android_top_back(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {"x": int(rect["width"] * 0.06), "y": int(rect["height"] * 0.09)},
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
 def _tap_publish_entry_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
         capabilities = getattr(driver, "capabilities", {}) or {}
         platform = str(capabilities.get("platformName", "")).lower()
-        y_ratio = 0.97 if platform == "android" else 0.93
-        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.5), "y": int(rect["height"] * y_ratio)})
+        x = int(rect["width"] * 0.5)
+        if platform == "android":
+            for y_ratio in (0.935, 0.948, 0.958, 0.968):
+                driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * y_ratio)})
+                if _wait_until(
+                    lambda: _publish_entry_opened(_safe_page_source(driver)),
+                    timeout=1,
+                ):
+                    return True
+            return False
+        driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * 0.93)})
         return True
     except (AttributeError, KeyError, TypeError, WebDriverException):
         return False
+
+
+def _publish_entry_opened(page_source: str) -> bool:
+    return (
+        message_note_form_is_visible(page_source)
+        or _note_type_visible(page_source)
+        or _android_share_sheet_visible(page_source)
+    )
 
 
 def _tap_note_search_entry(driver: WebDriver) -> bool:
@@ -572,12 +789,24 @@ def _tap_note_search_entry_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
         capabilities = getattr(driver, "capabilities", {}) or {}
-        y_ratio = 0.09 if str(capabilities.get("platformName", "")).lower() == "android" else 0.11
+        platform = str(capabilities.get("platformName", "")).lower()
+        if platform == "android":
+            for x_ratio, y_ratio in [(0.93, 0.067), (0.91, 0.072), (0.95, 0.067)]:
+                driver.execute_script(
+                    "mobile: tap",
+                    {
+                        "x": int(rect["width"] * x_ratio),
+                        "y": int(rect["height"] * y_ratio),
+                    },
+                )
+                if _wait_until(lambda: _note_search_visible(_safe_page_source(driver)), timeout=0.8):
+                    return True
+            return False
         driver.execute_script(
             "mobile: tap",
             {
                 "x": int(rect["width"] * 0.90),
-                "y": int(rect["height"] * y_ratio),
+                "y": int(rect["height"] * 0.11),
             },
         )
         return True
@@ -621,12 +850,24 @@ def _tap_note_search_submit_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
         capabilities = getattr(driver, "capabilities", {}) or {}
-        y_ratio = 0.09 if str(capabilities.get("platformName", "")).lower() == "android" else 0.11
+        if str(capabilities.get("platformName", "")).lower() == "android":
+            for x_ratio, y_ratio in [(0.90, 0.073), (0.93, 0.073), (0.90, 0.09)]:
+                driver.execute_script(
+                    "mobile: tap",
+                    {
+                        "x": int(rect["width"] * x_ratio),
+                        "y": int(rect["height"] * y_ratio),
+                    },
+                )
+                time.sleep(0.2)
+                if _android_search_request_started(_safe_page_source(driver)):
+                    return True
+            return False
         driver.execute_script(
             "mobile: tap",
             {
                 "x": int(rect["width"] * 0.90),
-                "y": int(rect["height"] * y_ratio),
+                "y": int(rect["height"] * 0.11),
             },
         )
         return True
@@ -640,18 +881,83 @@ def _note_search_results_visible(page_source: str, keyword: str) -> bool:
     if any(token in page_source for token in ["暂无", "没有找到", "无结果"]):
         return False
     if "<android." in page_source:
-        return (
-            "android.widget.EditText" in page_source
-            and f'text="{keyword}"' in page_source
-            and 'text="搜索"' not in page_source
-            and "用户 " in page_source
-        )
+        return _android_search_results_visible(page_source, keyword)
     from velowind_appium.modules.home_feed import note_feed_contains_type_results
 
     return note_feed_contains_type_results(page_source, keyword)
 
 
+def _tap_android_search_submit(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    for xpath in [
+        '//android.widget.TextView[@text="搜索"]',
+        '//android.view.ViewGroup[.//android.widget.TextView[@text="搜索"]]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+        except (NoSuchElementException, WebDriverException):
+            continue
+        if _tap_element_center(driver, element):
+            time.sleep(0.2)
+            if _android_search_request_started(_safe_page_source(driver)):
+                return True
+        try:
+            element.click()
+        except WebDriverException:
+            continue
+        time.sleep(0.2)
+        if _android_search_request_started(_safe_page_source(driver)):
+            return True
+    return False
+
+
+def _android_search_request_started(page_source: str) -> bool:
+    return "请输入内容" in page_source or "推荐" in page_source or 'resource-id="post-home-feed-category-pager"' in page_source
+
+
+def _android_search_results_visible(page_source: str, keyword: str) -> bool:
+    if "android.widget.EditText" not in page_source or f'text="{keyword}"' not in page_source:
+        return False
+    try:
+        from xml.etree import ElementTree
+
+        root = ElementTree.fromstring(page_source)
+    except Exception:
+        return False
+
+    visible_titles = 0
+    visible_images = 0
+    for element in root.iter():
+        rect = _android_bounds_to_rect(element.attrib.get("bounds", ""))
+        if rect is None:
+            continue
+        _, top, width, height = rect
+        if top < 260:
+            continue
+        if element.tag == "android.widget.ImageView" and element.attrib.get("resource-id") == "image" and width >= 200 and height >= 200:
+            visible_images += 1
+        if element.tag == "android.widget.TextView":
+            text = element.attrib.get("text", "").strip()
+            if len(text) >= 4 and text not in {"搜索", keyword, "推荐", "骑行", "徒步", "滑雪", "登山", "赞"} and not text.startswith("#"):
+                visible_titles += 1
+    return visible_images >= 1 and visible_titles >= 1
+
+
+def _android_bounds_to_rect(bounds: str) -> tuple[int, int, int, int] | None:
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", bounds)
+    if not match:
+        return None
+    left, top, right, bottom = (int(value) for value in match.groups())
+    return left, top, right - left, bottom - top
+
+
 def _tap_first_note_search_result(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        if _tap_first_android_note_search_result(driver):
+            return True
     for page_index in range(3):
         page_source = _safe_page_source(driver)
         if tap_first_note_card(
@@ -691,6 +997,83 @@ def _tap_first_note_search_result(driver: WebDriver) -> bool:
         except (NoSuchElementException, WebDriverException):
             continue
     return False
+
+
+def _tap_first_android_note_search_result(driver: WebDriver) -> bool:
+    for x_ratio, y_ratio in [(0.10, 0.35), (0.10, 0.28), (0.17, 0.40)]:
+        if _tap_android_ratio_by_adb(driver, x_ratio, y_ratio) and _wait_until(
+            lambda: message_detail_is_visible(driver),
+            timeout=2.2,
+        ):
+            return True
+    for xpath in [
+        '(//android.widget.ImageView[@resource-id="image"])[1]',
+        '(//android.widget.ImageView[@resource-id="image"])[2]',
+        '(//android.widget.TextView[@text="亲子骑行"])[1]',
+        '(//android.widget.TextView[contains(@text, "骑行")])[1]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+        except (NoSuchElementException, WebDriverException):
+            continue
+        if _tap_element_center(driver, element) and _wait_until(lambda: message_detail_is_visible(driver), timeout=2):
+            return True
+        try:
+            element.click()
+        except WebDriverException:
+            pass
+        if _wait_until(lambda: message_detail_is_visible(driver), timeout=2):
+            return True
+    return _tap_first_note_search_result_by_coordinate(driver)
+
+
+def _tap_element_center(driver: WebDriver, element) -> bool:
+    try:
+        rect = element.rect
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(rect["x"] + rect["width"] / 2),
+                "y": int(rect["y"] + rect["height"] / 2),
+            },
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        try:
+            return _adb_tap_point(
+                driver,
+                int(rect["x"] + rect["width"] / 2),
+                int(rect["y"] + rect["height"] / 2),
+            )
+        except Exception:
+            return False
+    return False
+
+
+def _adb_tap_point(driver: WebDriver, x: int, y: int) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    udid = str(capabilities.get("udid") or capabilities.get("appium:udid") or "").strip()
+    if not udid:
+        return False
+    try:
+        subprocess.run(
+            ["adb", "-s", udid, "shell", "input", "tap", str(x), str(y)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _tap_android_ratio_by_adb(driver: WebDriver, x_ratio: float, y_ratio: float) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        return _adb_tap_point(driver, int(rect["width"] * x_ratio), int(rect["height"] * y_ratio))
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
 
 
 def _tap_first_visible_note_search_result(driver: WebDriver) -> bool:
@@ -848,6 +1231,27 @@ def _looks_like_note_search_result_title(text: str, x: int, y: int, width: int, 
 def _tap_first_note_search_result_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        if str(capabilities.get("platformName", "")).lower() == "android":
+            for x_ratio, y_ratio in [
+                (0.10, 0.35),
+                (0.14, 0.30),
+                (0.10, 0.28),
+                (0.17, 0.40),
+                (0.22, 0.52),
+                (0.45, 0.30),
+                (0.50, 0.40),
+            ]:
+                driver.execute_script(
+                    "mobile: tap",
+                    {
+                        "x": int(rect["width"] * x_ratio),
+                        "y": int(rect["height"] * y_ratio),
+                    },
+                )
+                if _wait_until(lambda: message_detail_is_visible(driver), timeout=1.5):
+                    return True
+            return False
         driver.execute_script(
             "mobile: tap",
             {
@@ -907,9 +1311,16 @@ def _tap_texts_now(driver: WebDriver, texts: list[str]) -> bool:
 
 
 def _fill_note_title(driver: WebDriver, title: str) -> None:
-    for keyword in TITLE_FIELD_KEYWORDS:
-        if _fill_input_near_label(driver, keyword, title):
-            return
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    attempts = 2 if is_android else 1
+    for attempt in range(attempts):
+        for keyword in TITLE_FIELD_KEYWORDS:
+            if _fill_input_near_label(driver, keyword, title):
+                return
+        if is_android and attempt + 1 < attempts:
+            wait_for_message_note_form(driver, timeout=5)
+            time.sleep(0.5)
     for xpath in [
         '//XCUIElementTypeTextField[contains(@value, "标题")]',
         "//XCUIElementTypeTextField[1]",
@@ -921,6 +1332,59 @@ def _fill_note_title(driver: WebDriver, title: str) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to locate the note title input")
+
+
+def _stabilize_android_note_form_after_upload(driver: WebDriver, timeout: int) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        wait_for_message_note_form(driver, timeout=timeout)
+        return
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if message_note_form_is_visible(page_source):
+            return
+        if "publish-note-image-picker-cropper-viewport" in page_source or "确认裁剪" in page_source:
+            _force_confirm_android_cropper(driver)
+            time.sleep(0.5)
+            continue
+        time.sleep(0.2)
+
+    wait_for_message_note_form(driver, timeout=1)
+
+
+def _force_confirm_android_cropper(driver: WebDriver) -> bool:
+    for point in [(1059, 2398), (1173, 2398), (970, 2398)]:
+        if not _adb_input_tap(driver, *point):
+            continue
+        if _wait_until(lambda: message_note_form_is_visible(_safe_page_source(driver)), timeout=5):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _adb_input_tap(driver: WebDriver, x: int, y: int) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    if not udid:
+        return False
+    try:
+        result = subprocess.run(
+            ["adb", "-s", udid, "shell", "input", "tap", str(x), str(y)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def _fill_note_body(driver: WebDriver, body: str) -> None:
@@ -953,6 +1417,8 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
         photo_chosen = photo_picker.choose_photo_from_library(
             driver,
             album_name=draft.album,
+            picture_index=draft.picture_index,
+            select_all_from_album=False,
             retry_sheet_option=_tap_note_photo_library_sheet_option,
         )
     if photo_chosen:
@@ -997,10 +1463,15 @@ def _clear_existing_note_images(driver: WebDriver, max_images: int = 9) -> None:
 
 
 def _note_selected_images_hint(page_source: str) -> bool:
+    if 'resource-id="image"' in page_source and "发布笔记" in page_source:
+        return True
     return any(text in page_source for text in ["删除图片", "移除图片", "删除", "移除", "已选择"])
 
 
 def _find_note_image_remove_buttons(driver: WebDriver) -> list:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        return _find_android_note_image_remove_buttons(driver)
     try:
         candidates = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
     except (AttributeError, WebDriverException):
@@ -1027,6 +1498,38 @@ def _find_note_image_remove_buttons(driver: WebDriver) -> list:
     return remove_buttons
 
 
+def _find_android_note_image_remove_buttons(driver: WebDriver) -> list:
+    try:
+        candidates = driver.find_elements(
+            AppiumBy.XPATH,
+            "//android.widget.HorizontalScrollView//android.view.ViewGroup",
+        )
+    except (AttributeError, WebDriverException):
+        return []
+
+    remove_buttons = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for element in candidates:
+        rect = getattr(element, "rect", {}) or {}
+        x = float(rect.get("x", 0) or 0)
+        y = float(rect.get("y", 0) or 0)
+        width = float(rect.get("width", 0) or 0)
+        height = float(rect.get("height", 0) or 0)
+        if not (40 <= width <= 90 and 40 <= height <= 90):
+            continue
+        if not (250 <= y <= 450):
+            continue
+        if x < 250:
+            continue
+        key = (x, y, width, height)
+        if key in seen:
+            continue
+        seen.add(key)
+        remove_buttons.append(element)
+    remove_buttons.sort(key=lambda element: ((getattr(element, "rect", {}) or {}).get("x", 0)))
+    return remove_buttons
+
+
 def _tap_note_image_remove_button(driver: WebDriver, element) -> bool:
     if _tap_element_center(driver, element):
         return True
@@ -1043,7 +1546,6 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
     if not (_tap_text_or_contains(driver, "#话题") or _tap_text_or_contains(driver, "话题")):
         raise AssertionError("Unable to find the #topic action on the note editor")
 
-    topic_text = " " + " ".join(topics)
     for xpath in [
         '//android.widget.EditText[contains(@hint, "正文")]',
         "//XCUIElementTypeTextView[1]",
@@ -1052,13 +1554,44 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
     ]:
         try:
             element = driver.find_element(AppiumBy.XPATH, xpath)
-            element.click()
-            element.send_keys(topic_text)
+            existing_body = _text_input_current_value(element)
+            missing_topics = [topic for topic in topics if topic not in existing_body]
+            combined_body = existing_body.rstrip()
+            if missing_topics:
+                topic_text = " ".join(missing_topics)
+                combined_body = f"{combined_body} {topic_text}".strip()
+            _replace_text(element, combined_body)
             _dismiss_editor_keyboard(driver)
             return
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to append topics to the note body")
+
+
+def _text_input_current_value(element) -> str:
+    placeholder_values = {
+        "正文",
+        "添加正文",
+        "输入正文",
+        "请输入正文",
+        "分享正文",
+        "分享你的正文",
+        "分享你的内容",
+    }
+    for attribute in ["text", "value", "name", "label"]:
+        try:
+            value = element.get_attribute(attribute)
+        except (AttributeError, WebDriverException):
+            continue
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if text in placeholder_values:
+            continue
+        if text.startswith(("请输入", "添加")) and "正文" in text:
+            continue
+        return text
+    return ""
 
 
 def _tap_note_image_plus(driver: WebDriver) -> bool:
@@ -1606,7 +2139,7 @@ def _tap_location_result(driver: WebDriver, element) -> bool:
                     "mobile: tap",
                     {
                         "x": rect["x"] + rect["width"] / 2,
-                        "y": max(0.0, rect["y"] - 20.0),
+                        "y": rect["y"] + min(rect["height"] * 0.55, rect["height"] - 8.0),
                     },
                 )
                 return True
@@ -1659,9 +2192,11 @@ def _looks_like_location_result(name: str, rect: dict) -> bool:
     y = float(rect.get("y", 0) or 0)
     width = float(rect.get("width", 0) or 0)
     height = float(rect.get("height", 0) or 0)
+    if "省" not in text and "市" not in text and "区" not in text and "路" not in text and "号" not in text:
+        return False
     if width < 250 or height < 40 or height > 120:
         return False
-    if x > 80 or y < 160:
+    if y < 160:
         return False
     return True
 
