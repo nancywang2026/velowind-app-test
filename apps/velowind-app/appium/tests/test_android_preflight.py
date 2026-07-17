@@ -9,8 +9,8 @@ from velowind_appium.android_config import AndroidAppiumConfig
 
 def _config(**overrides):
     values = {
-        "target": "emulator",
-        "server_url": "http://127.0.0.1:4723",
+        "target": "android_studio",
+        "server_url": "http://127.0.0.1:4724",
         "udid": "emulator-5554",
         "device_name": "Android Emulator",
         "app_path": None,

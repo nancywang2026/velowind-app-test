@@ -7,11 +7,12 @@ from typing import Dict, Optional
 import yaml
 
 
-DEFAULT_SERVER_URL = "http://127.0.0.1:4723"
+DEFAULT_SERVER_URL = "http://127.0.0.1:4724"
 DEFAULT_APP_PACKAGE = "com.velowind.rider"
 DEFAULT_DEVICE_NAME = "Android Emulator"
 DEFAULT_ARTIFACT_DIR = Path(".tmp/appium-android")
 DEFAULT_CONFIG_FILE = Path(__file__).resolve().parents[1] / "android-appium.yaml"
+DEFAULT_TARGET = "android_studio"
 
 
 @dataclass(frozen=True)
@@ -107,7 +108,7 @@ def auto_detect_online_android_udid() -> Optional[str]:
 
 def load_android_config() -> AndroidAppiumConfig:
     yaml_config = _read_yaml_config()
-    target = _env_text("VW_ANDROID_TARGET") or _yaml_text(yaml_config, "target") or "emulator"
+    target = _env_text("VW_ANDROID_TARGET") or _yaml_text(yaml_config, "target") or DEFAULT_TARGET
     explicit_udid = _env_text("VW_ANDROID_UDID")
     target_udid = _yaml_text(yaml_config, target, "udid")
     target_config = yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}

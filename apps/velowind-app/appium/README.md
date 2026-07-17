@@ -43,10 +43,12 @@ emulator -avd <AVD_NAME>
 adb devices
 ```
 
-启动 Appium server：
+`pnpm appium:android:test:local*` 会自动启动一台 Android 专用 Appium server，默认地址是 `http://127.0.0.1:4724`，不再复用 iOS 常驻的 `4723`。
+
+如果你要手动启动 Android Appium server，建议也使用独立端口：
 
 ```bash
-appium --log-timestamp
+appium server --address 127.0.0.1 --port 4724 --use-drivers=uiautomator2 --log-timestamp
 ```
 
 配置 APK 或已安装 App：
@@ -78,17 +80,22 @@ pnpm appium:android:preflight
 pnpm appium:android:test
 ```
 
-本地 MuMu / 模拟器脚本也支持直接传 `--udid`：
+本地脚本默认走 Android Studio 模拟器 target；如果没有在线 emulator，会自动拉起一个 AVD。也支持显式指定 AVD 或切到 MuMu：
 
 ```bash
-pnpm appium:android:test:local --udid 127.0.0.1:16385
-pnpm appium:android:test:local:publish --udid 127.0.0.1:16385
+pnpm appium:android:test:local
+pnpm appium:android:test:local:publish
+pnpm appium:android:test:local --avd velowind_api35
+pnpm appium:android:test:local:publish --avd velowind_api35
+pnpm appium:android:test:local --target mumu
+pnpm appium:android:test:local:publish --target mumu
 ```
 
 也仍然兼容环境变量写法：
 
 ```bash
-VW_ANDROID_UDID=127.0.0.1:16385 pnpm appium:android:test:local
+VW_ANDROID_UDID=emulator-5554 pnpm appium:android:test:local
+VW_ANDROID_TARGET=mumu pnpm appium:android:test:local
 ```
 
 按 suite 文件运行：
@@ -107,7 +114,7 @@ Android 常用环境变量：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `VW_APPIUM_SERVER_URL` | `http://127.0.0.1:4723` | Appium server 地址 |
+| `VW_APPIUM_SERVER_URL` | `http://127.0.0.1:4724` | Android Appium server 地址 |
 | `VW_ANDROID_UDID` | 自动发现在线 emulator | Android 模拟器 UDID |
 | `VW_ANDROID_DEVICE_NAME` | `Android Emulator` | Appium deviceName |
 | `VW_ANDROID_APP` | 空 | 指向 `.apk` 文件时，Appium 会安装并启动 |
