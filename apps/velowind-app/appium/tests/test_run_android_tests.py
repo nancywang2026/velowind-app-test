@@ -76,3 +76,23 @@ def test_android_runner_selects_android_platform(monkeypatch):
 
     assert run_android_tests.main() == 0
     assert run_android_tests.os.environ["VW_APPIUM_PLATFORM"] == "android"
+
+
+def test_android_runner_syncs_media_before_pytest(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(run_android_tests.sys, "argv", ["run_android_tests", "--all"])
+    monkeypatch.setattr(
+        run_android_tests.android_media_sync,
+        "main",
+        lambda: calls.append("sync") or 0,
+    )
+    monkeypatch.setattr(
+        run_android_tests,
+        "_run",
+        lambda command: calls.append("pytest") or type("Result", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(run_android_tests, "_generate_and_open_report", lambda: None)
+
+    assert run_android_tests.main() == 0
+    assert calls == ["sync", "pytest"]
