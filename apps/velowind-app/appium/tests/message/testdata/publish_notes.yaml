@@ -13,78 +13,78 @@ use_cases:
         - "#东北旅行"
       location: 黑龙江
       allow_comments: true
-  - id: publish-note-changbaishan-no-location
-    description: 发布笔记 - 长白山（不选地点）
-    note:
-      title: 长白山真的有种让人瞬间安静下来的魔力
-      body: 第一次去长白山，真的会被那种辽阔感击中。一路上的森林、山风、云雾都很治愈，像把城市里的疲惫慢慢吹散了。看到天池的那一刻，脑子里突然什么都不想了，只想安安静静站着看一会儿。照片根本装不下它的震撼，只有亲眼看到才会懂。
-      album: 长白山
-      topics:
-        - "#长白山"
-        - "#旅行日记"
-        - "#治愈系风景"
-        - "#长白山天池"
-        - "#东北旅行"
-      location:
-      allow_comments: true
-  - id: publish-note-yunnan-erhai
-    description: 发布笔记 - 云南
-    note:
-      title: 想去一趟洱海，想顺便把自己也放空一下
-      body: |-
-        最近总在想，应该去一次洱海。
-        很想在清晨的时候沿着洱海慢慢走，
-        看阳光一点点落在湖面上，
-        吹吹风，发发呆，骑车经过那些安静的小路，
-        累了就随便找一家喜欢的小店坐下。
-        不用很赶，不用很满，
-        就把旅行过成轻轻松松的样子。
-      album: 云南洱海
-      picture_index: 2
-      topics:
-        - "#云南洱海"
-        - "#大理旅行"
-        - "#洱海"
-        - "#旅行搭子"
-        - "#一起去旅行"
-        - "#治愈系旅行"
-        - "#慢节奏生活"
-        - "#云南旅游"
-        - "#出行邀约"
-        - "#徒步与骑行"
-      location: 云南洱海
-      allow_comments: true
-  - id: publish-note-hangzhou-hiking
-    description: 发布笔记 - 杭州
-    note:
-      title: 徒步的一天，像把自己重新捡回来
-      body: |-
-        原本只是想出门走走，没想到这趟徒步，真的把最近有点乱糟糟的自己慢慢安静下来了。
-        山里的风很轻，路边的树影一下一下晃着，阳光落在石阶上，连呼吸都变得很慢。
-        只要出发，山会慢慢治愈你。
-      album: 杭州西湖
-      topics:
-        - "#徒步日记"
-        - "#周末徒步"
-        - "#治愈系生活"
-        - "#爬山治愈一切"
-        - "#户外徒步"
-        - "#生活碎片"
-        - "#亲近大自然"
-        - "#松弛感生活"
-      location: 杭州
-      allow_comments: true
-  - id: publish-note-beijing-forbidden-city
-    description: 发布笔记 - 北京故宫
-    note:
-      title: 故宫的红墙金瓦
-      body: 故宫真的很适合慢慢逛。红墙、屋檐、光影都太好看了，随手一拍都很出片，走着走着心也安静下来了。
-      album: 北京
-      topics:
-        - "#北京故宫"
-        - "#北京旅行"
-        - "#故宫拍照"
-        - "#旅行日记"
-        - "#人文景点"
-      location: 北京故宫
-      allow_comments: true
+#  - id: publish-note-changbaishan-no-location
+#    description: 发布笔记 - 长白山（不选地点）
+#    note:
+#      title: 长白山真的有种让人瞬间安静下来的魔力
+#      body: 第一次去长白山，真的会被那种辽阔感击中。一路上的森林、山风、云雾都很治愈，像把城市里的疲惫慢慢吹散了。看到天池的那一刻，脑子里突然什么都不想了，只想安安静静站着看一会儿。照片根本装不下它的震撼，只有亲眼看到才会懂。
+#      album: 长白山
+#      topics:
+#        - "#长白山"
+#        - "#旅行日记"
+#        - "#治愈系风景"
+#        - "#长白山天池"
+#        - "#东北旅行"
+#      location:
+#      allow_comments: true
+#  - id: publish-note-yunnan-erhai
+#    description: 发布笔记 - 云南
+#    note:
+#      title: 想去一趟洱海，想顺便把自己也放空一下
+#      body: |-
+#        最近总在想，应该去一次洱海。
+#        很想在清晨的时候沿着洱海慢慢走，
+#        看阳光一点点落在湖面上，
+#        吹吹风，发发呆，骑车经过那些安静的小路，
+#        累了就随便找一家喜欢的小店坐下。
+#        不用很赶，不用很满，
+#        就把旅行过成轻轻松松的样子。
+#      album: 云南洱海
+#      picture_index: 2
+#      topics:
+#        - "#云南洱海"
+#        - "#大理旅行"
+#        - "#洱海"
+#        - "#旅行搭子"
+#        - "#一起去旅行"
+#        - "#治愈系旅行"
+#        - "#慢节奏生活"
+#        - "#云南旅游"
+#        - "#出行邀约"
+#        - "#徒步与骑行"
+#      location: 云南洱海
+#      allow_comments: true
+#  - id: publish-note-hangzhou-hiking
+#    description: 发布笔记 - 杭州
+#    note:
+#      title: 徒步的一天，像把自己重新捡回来
+#      body: |-
+#        原本只是想出门走走，没想到这趟徒步，真的把最近有点乱糟糟的自己慢慢安静下来了。
+#        山里的风很轻，路边的树影一下一下晃着，阳光落在石阶上，连呼吸都变得很慢。
+#        只要出发，山会慢慢治愈你。
+#      album: 杭州西湖
+#      topics:
+#        - "#徒步日记"
+#        - "#周末徒步"
+#        - "#治愈系生活"
+#        - "#爬山治愈一切"
+#        - "#户外徒步"
+#        - "#生活碎片"
+#        - "#亲近大自然"
+#        - "#松弛感生活"
+#      location: 杭州
+#      allow_comments: true
+#  - id: publish-note-beijing-forbidden-city
+#    description: 发布笔记 - 北京故宫
+#    note:
+#      title: 故宫的红墙金瓦
+#      body: 故宫真的很适合慢慢逛。红墙、屋檐、光影都太好看了，随手一拍都很出片，走着走着心也安静下来了。
+#      album: 北京
+#      topics:
+#        - "#北京故宫"
+#        - "#北京旅行"
+#        - "#故宫拍照"
+#        - "#旅行日记"
+#        - "#人文景点"
+#      location: 北京故宫
+#      allow_comments: true
