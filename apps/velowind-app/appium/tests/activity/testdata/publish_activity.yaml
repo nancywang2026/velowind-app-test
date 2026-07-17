@@ -1,25 +1,30 @@
 activities:
-  - activityName: "太行山峡谷耐力骑行挑战"
+  - activityName: "张家界大环线2天1晚"
     activityType: "骑行"
     province: "浙江省"
-    city: "石家庄市"
-    album: "太行山"
-    activityDescription: "围绕太行山沿线打造的中高强度骑行活动，适合具备一定长距离骑行经验的用户参与。"
+    city: "张家界市"
+    album: "张家界"
+    activityDescription: "参考张家界大环线2天1晚活动设计，串联武陵源、天门山周边山地景观道路，适合具备稳定爬坡和长距离骑行经验的用户参与。"
     activityItinerary:
-      - title: "Day1 集合说明"
-        subtitle: "石家庄集合签到"
-        body: "完成签到、路线说明与安全须知确认。"
-      - title: "Day2 主线骑行"
-        subtitle: "峡谷耐力挑战"
-        body: "完成主线路骑行并设置补给点。"
+      - title: "Day1 集合与环线热身"
+        subtitle: "张家界西站集合"
+        body: "完成签到、车辆调试和安全说明，沿城市绿道热身骑行后入住武陵源。"
+      - title: "Day2 大环线骑行"
+        subtitle: "武陵源至天门山环线"
+        body: "完成张家界大环线主线路骑行，途经山地观景路段和补给点，返程后提交活动收尾确认。"
     advancedOptions:
       referenceDuration: "2天1晚"
-      activityTags: ["耐力骑行", "山地路线", "周末活动"]
-      totalMileage: 142
-      maxAltitude: 1680
-      elevationGain: 1950
-      defaultMeetingPoint: "石家庄站东广场"
-      sceneryTags: ["峡谷", "山脉", "乡村公路"]
+      activityTags: ["张家界大环线", "山地骑行", "2天1晚"]
+      totalMileage: 128
+      maxAltitude: 1518
+      elevationGain: 1860
+      defaultMeetingPoint: "张家界西站出站口"
+      contactName: "张家界大环线领队"
+      contactPhone: "13800138000"
+      maxParticipants: 20
+      fee: 0
+      sceneryTags: ["峰林", "峡谷", "山地公路"]
+      scenicSpots: ["武陵源", "天门山", "张家界国家森林公园"]
       suitableMonths: ["4月", "5月", "9月", "10月"]
       riskLevel: "中"
 

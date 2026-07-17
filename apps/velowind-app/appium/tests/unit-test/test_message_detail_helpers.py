@@ -303,7 +303,7 @@ def test_build_changbaishan_note_draft_uses_requested_content():
 
 def test_load_message_note_draft_reads_yaml_use_case():
     testdata_path = (
-        Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
+        Path(__file__).resolve().parent.parent / "message" / "testdata" / "publish_notes.yaml"
     )
 
     draft = load_message_note_draft("publish-note-changbaishan", testdata_path=testdata_path)
@@ -316,7 +316,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
 
 def test_load_message_note_draft_reads_no_location_variant():
     testdata_path = (
-        Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
+        Path(__file__).resolve().parent.parent / "message" / "testdata" / "publish_notes.yaml"
     )
 
     draft = load_message_note_draft("publish-note-changbaishan-no-location", testdata_path=testdata_path)
@@ -329,7 +329,7 @@ def test_load_message_note_draft_reads_no_location_variant():
 
 def test_list_message_note_use_case_ids_reads_all_yaml_cases():
     testdata_path = (
-        Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
+        Path(__file__).resolve().parent.parent / "message" / "testdata" / "publish_notes.yaml"
     )
 
     use_case_ids = list_message_note_use_case_ids(testdata_path=testdata_path)
@@ -443,7 +443,7 @@ def test_fill_message_note_form_skips_location_when_select_location_is_false(mon
     events = []
     draft = load_message_note_draft(
         "publish-note-changbaishan-no-location",
-        testdata_path=Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml",
+        testdata_path=Path(__file__).resolve().parent.parent / "message" / "testdata" / "publish_notes.yaml",
     )
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))

@@ -64,6 +64,22 @@ def test_android_runner_uses_android_artifact_paths():
     assert run_android_tests.ALLURE_REPORT == Path(run_android_tests.REPO_ROOT) / ".tmp" / "appium-android" / "allure-report"
 
 
+def test_android_activity_publish_suite_uses_platform_neutral_activity_case():
+    suite_file = (
+        Path(run_android_tests.REPO_ROOT)
+        / "apps"
+        / "velowind-app"
+        / "appium"
+        / "test-suites"
+        / "android-activity-publish.yaml"
+    )
+
+    suite = run_android_tests.load_test_suite(suite_file)
+
+    assert suite.tests == ["activity/test_publish_activity.py"]
+    assert suite.pytest_args == ["--maxfail=1"]
+
+
 def test_android_runner_selects_android_platform(monkeypatch):
     monkeypatch.delenv("VW_APPIUM_PLATFORM", raising=False)
     monkeypatch.setattr(run_android_tests.sys, "argv", ["run_android_tests", "--all"])

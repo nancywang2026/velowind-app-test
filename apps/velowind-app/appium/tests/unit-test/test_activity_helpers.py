@@ -12,28 +12,61 @@ from velowind_appium.modules.activity import (
 from velowind_appium.modules import activity
 
 
-TESTDATA_PATH = Path(__file__).resolve().parent / "activity" / "testdata" / "publish_activity.yaml"
+TESTDATA_PATH = Path(__file__).resolve().parent.parent / "activity" / "testdata" / "publish_activity.yaml"
 
 
 def test_build_activity_draft_reads_first_yaml_case():
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
-    assert draft.title == "太行山峡谷耐力骑行挑战"
+    assert draft.title == "张家界大环线2天1晚"
     assert draft.activity_type == "骑行"
     assert draft.province == "浙江省"
-    assert draft.city == "石家庄市"
-    assert draft.location == "石家庄站东广场"
-    assert draft.album == "太行山"
+    assert draft.city == "张家界市"
+    assert draft.location == "张家界西站出站口"
+    assert draft.album == "张家界"
     assert draft.itinerary == [
         ActivityItineraryItem(
-            title="Day1 集合说明",
-            subtitle="石家庄集合签到",
-            body="完成签到、路线说明与安全须知确认。",
+            title="Day1 集合与环线热身",
+            subtitle="张家界西站集合",
+            body="完成签到、车辆调试和安全说明，沿城市绿道热身骑行后入住武陵源。",
         ),
         ActivityItineraryItem(
-            title="Day2 主线骑行",
-            subtitle="峡谷耐力挑战",
-            body="完成主线路骑行并设置补给点。",
+            title="Day2 大环线骑行",
+            subtitle="武陵源至天门山环线",
+            body="完成张家界大环线主线路骑行，途经山地观景路段和补给点，返程后提交活动收尾确认。",
+        ),
+    ]
+
+
+def test_build_activity_draft_reads_all_zhangjiajie_fields():
+    draft = build_activity_draft(testdata_path=TESTDATA_PATH)
+
+    assert draft.title == "张家界大环线2天1晚"
+    assert draft.activity_type == "骑行"
+    assert draft.province == "浙江省"
+    assert draft.city == "张家界市"
+    assert draft.album == "张家界"
+    assert draft.contact_name == "张家界大环线领队"
+    assert draft.contact_phone == "13800138000"
+    assert draft.location == "张家界西站出站口"
+    assert draft.max_participants == "20"
+    assert draft.fee == "0"
+    assert draft.reference_duration == "2天1晚"
+    assert draft.total_mileage == "128"
+    assert draft.max_altitude == "1518"
+    assert draft.elevation_gain == "1860"
+    assert draft.scenery_tags == ["峰林", "峡谷", "山地公路"]
+    assert draft.scenic_spots == ["武陵源", "天门山", "张家界国家森林公园"]
+    assert draft.itinerary == [
+        ActivityItineraryItem(
+            title="Day1 集合与环线热身",
+            subtitle="张家界西站集合",
+            body="完成签到、车辆调试和安全说明，沿城市绿道热身骑行后入住武陵源。",
+        ),
+        ActivityItineraryItem(
+            title="Day2 大环线骑行",
+            subtitle="武陵源至天门山环线",
+            body="完成张家界大环线主线路骑行，途经山地观景路段和补给点，返程后提交活动收尾确认。",
         ),
     ]
 
@@ -87,13 +120,13 @@ def test_activity_publish_success_signal_detects_review_success():
 
 def test_activity_publish_success_signal_accepts_my_activity_page_with_expected_title():
     page_source = """
-    <AppiumAUT>
-      <XCUIElementTypeStaticText name="我的活动" label="我的活动" value="我的活动" />
-      <XCUIElementTypeStaticText name="太行山峡谷耐力骑行挑战" label="太行山峡谷耐力骑行挑战" value="太行山峡谷耐力骑行挑战" />
+      <AppiumAUT>
+        <XCUIElementTypeStaticText name="我的活动" label="我的活动" value="我的活动" />
+      <XCUIElementTypeStaticText name="张家界大环线2天1晚" label="张家界大环线2天1晚" value="张家界大环线2天1晚" />
     </AppiumAUT>
     """
 
-    assert activity_publish_success_signal(page_source, expected_title="太行山峡谷耐力骑行挑战") == "我的活动列表"
+    assert activity_publish_success_signal(page_source, expected_title="张家界大环线2天1晚") == "我的活动列表"
 
 
 def test_open_activity_publisher_retries_when_publish_entry_opens_login(monkeypatch):
@@ -129,6 +162,27 @@ def test_open_activity_publisher_retries_when_publish_entry_opens_login(monkeypa
     assert len(login_calls) == 1
 
 
+def test_open_activity_publisher_prepares_android_publish_entry_before_loop(monkeypatch):
+    events = []
+    state = {"page": "form"}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "login_required_from_page_source", lambda page: False)
+    monkeypatch.setattr(activity, "activity_form_is_visible", lambda page: page == "form")
+    monkeypatch.setattr(
+        activity,
+        "_prepare_android_publish_entry",
+        lambda driver: events.append("prepare-android-publish-entry"),
+    )
+
+    open_activity_publisher(FakeDriver(), ios_config=object(), timeout=5)
+
+    assert events == ["prepare-android-publish-entry"]
+
+
 def test_open_activity_publisher_aggressively_taps_activity_type_after_publish_entry(monkeypatch):
     events = []
     state = {"page": "home"}
@@ -158,6 +212,32 @@ def test_open_activity_publisher_aggressively_taps_activity_type_after_publish_e
     open_activity_publisher(object(), ios_config=object(), timeout=5)
 
     assert events == ["tap-publish-entry", "tap-activity-type-by-coordinate"]
+
+
+def test_tap_plus_button_by_coordinate_verifies_android_publish_sheet_opened(monkeypatch):
+    taps = []
+    pages = iter(["home", "选择发布类型 发布活动"])
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1000, "height": 2000}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(pages))
+    monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: condition())
+    monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
+
+    assert activity._tap_plus_button_by_coordinate(FakeDriver()) is True
+    assert taps == [
+        ("mobile: tap", {"x": 500, "y": 1870}),
+        ("mobile: tap", {"x": 500, "y": 1896}),
+    ]
 
 
 def test_open_activity_publisher_taps_activity_type_after_publish_entry_without_sheet_signal(monkeypatch):
@@ -218,6 +298,7 @@ def test_fill_activity_form_resolves_picker_placeholders_after_text_fields(monke
     monkeypatch.setattr(activity, "_fill_description", lambda driver, value: events.append("fill-description"))
     monkeypatch.setattr(activity, "_fill_itinerary", lambda driver, value: events.append("fill-itinerary"))
     monkeypatch.setattr(activity, "_fill_known_text_fields", lambda driver, value: events.append("fill-known-fields"))
+    monkeypatch.setattr(activity, "_fill_advanced_settings", lambda driver, value: events.append("fill-advanced-settings"))
     monkeypatch.setattr(
         activity,
         "_resolve_picker_fields",
@@ -227,6 +308,7 @@ def test_fill_activity_form_resolves_picker_placeholders_after_text_fields(monke
 
     fill_activity_form(object(), draft, timeout=30)
 
+    assert "fill-advanced-settings" in events
     assert events[-1] == "resolve-picker-fields"
 
 
@@ -583,6 +665,65 @@ def test_choose_specific_overlay_option_scrolls_until_target_appears(monkeypatch
     assert events == [("swipe", "up"), "confirm"]
 
 
+def test_choose_specific_overlay_option_keeps_scrolling_until_later_province_appears(monkeypatch):
+    events = []
+    state = {"page": "浙江省 四川省 云南省 广东省", "swipes": 0}
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=2: text in state["page"])
+
+    def fake_swipe_vertical(driver, direction="up"):
+        events.append(("swipe", direction))
+        state["swipes"] += 1
+        if state["swipes"] == 5:
+            state["page"] = "湖北省 湖南省 广西壮族自治区 海南省"
+
+    monkeypatch.setattr(activity, "swipe_vertical", fake_swipe_vertical)
+    monkeypatch.setattr(activity, "_confirm_overlay_selection", lambda driver: events.append("confirm"))
+    monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
+
+    assert activity._choose_specific_overlay_option(object(), ["湖南省", "湖南"]) is True
+    assert events == [
+        ("swipe", "up"),
+        ("swipe", "up"),
+        ("swipe", "up"),
+        ("swipe", "up"),
+        ("swipe", "up"),
+        "confirm",
+    ]
+
+
+def test_open_advanced_settings_taps_android_row_arrow(monkeypatch):
+    taps = []
+    advanced_values = [(["总里程"], "128")]
+    sources = iter(["发布活动 高级选项", "发布活动 总里程"])
+
+    class FakeElement:
+        rect = {"x": 87, "y": 2313, "width": 192, "height": 66}
+
+    class FakeDriver:
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1280, "height": 2856}
+
+        @staticmethod
+        def find_element(by, value):
+            if "高级选项" in value:
+                return FakeElement()
+            raise activity.NoSuchElementException("missing")
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(sources))
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
+
+    assert activity._open_advanced_settings(FakeDriver(), advanced_values) is True
+    assert taps == [("mobile: tap", {"x": 1164, "y": 2346})]
+
+
 def test_close_editor_dismisses_keyboard_like_note_before_bottom_done(monkeypatch):
     events = []
     sources = iter([
@@ -698,7 +839,7 @@ def test_upload_activity_image_uses_album_from_draft(monkeypatch):
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == [("choose-photo", "太行山", False, True)]
+    assert calls == [("choose-photo", "张家界", False, True)]
 
 
 def test_tap_image_picker_uses_android_activity_image_container(monkeypatch):
@@ -744,7 +885,7 @@ def test_upload_activity_image_waits_for_photo_library_before_choosing_album(mon
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == [("choose-photo", "太行山", False)]
+    assert calls == [("choose-photo", "张家界", False)]
 
 
 def test_upload_activity_image_requires_phone_photo_library_source(monkeypatch):
@@ -789,4 +930,4 @@ def test_upload_activity_image_retries_activity_action_sheet_option_when_library
 
     activity._upload_activity_image(object(), draft)
 
-    assert calls == [("retry", True, "太行山", False)]
+    assert calls == [("retry", True, "张家界", False)]

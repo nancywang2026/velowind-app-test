@@ -22,7 +22,7 @@ def test_user_can_publish_activity_for_review(driver, ios_config, step):
             [
                 "1. 已进入首页并完成登录态准备",
                 "2. 已从底部加号/发布入口进入活动发布流程",
-                "3. 已填写活动标题、描述及可见必填信息",
+                "3. 已填写张家界大环线2天1晚活动的全部可见必填信息",
                 f"4. 已提交审核并拿到成功信号: {success_signal}",
             ]
         ),

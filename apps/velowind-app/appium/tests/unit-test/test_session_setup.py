@@ -430,6 +430,40 @@ def test_ensure_logged_in_on_home_recovers_detail_page_before_waiting(monkeypatc
     assert events[0] == "back"
 
 
+def test_ensure_logged_in_on_home_uses_android_adb_back_for_blocking_detail(monkeypatch):
+    state = {"page": "detail"}
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "emulator-5554"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "_tap_top_back_by_coordinate", lambda driver: events.append("top-back") or False)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back") or False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False,
+    )
+
+    def fake_android_adb_back(driver):
+        events.append("android-adb-back")
+        state["page"] = "home"
+        return True
+
+    monkeypatch.setattr(session, "_android_adb_back", fake_android_adb_back)
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or True)
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert "android-adb-back" in events
+    assert "wait-home" not in events
+
+
 def test_ensure_logged_in_on_home_unwinds_nested_blocking_pages(monkeypatch):
     pages = ["activity-detail", "my-activities", "profile", "home"]
     events = []
