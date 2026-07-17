@@ -1,14 +1,20 @@
-target: emulator
+target: android_studio
 app_package: com.velowind.rider
-app_activity:
+app_activity: .MainActivity
 no_reset: true
 auto_grant_permissions: true
 
-emulator:
+android_studio:
   udid:
   device_name: Android Emulator
   platform_version:
-  app_path:
+  app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.1.apk
+
+mumu:
+  udid: 127.0.0.1:16385
+  device_name: MuMu
+  platform_version:
+  app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.1.apk
 
 login:
   username:

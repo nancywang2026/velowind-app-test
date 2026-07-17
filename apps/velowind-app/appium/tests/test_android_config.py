@@ -40,8 +40,8 @@ def test_load_android_config_uses_safe_defaults(monkeypatch):
 
     config = load_android_config()
 
-    assert config.target == "emulator"
-    assert config.server_url == "http://127.0.0.1:4723"
+    assert config.target == "android_studio"
+    assert config.server_url == "http://127.0.0.1:4724"
     assert config.udid is None
     assert config.device_name == "Android Emulator"
     assert config.app_path is None
@@ -56,7 +56,7 @@ def test_load_android_config_reads_yaml_and_login(tmp_path, monkeypatch):
     config_file = tmp_path / "android-appium.yaml"
     config_file.write_text(
         """
-target: emulator
+target: android_studio
 app_package: com.example.demo
 app_activity: .MainActivity
 no_reset: false
@@ -64,7 +64,7 @@ auto_grant_permissions: false
 login:
   username: 13381509990
   password: 12345678
-emulator:
+android_studio:
   udid: emulator-5556
   device_name: Pixel 8
   platform_version: "15"
@@ -78,7 +78,7 @@ emulator:
 
     config = load_android_config()
 
-    assert config.target == "emulator"
+    assert config.target == "android_studio"
     assert config.udid == "emulator-5556"
     assert config.device_name == "Pixel 8"
     assert config.platform_version == "15"
@@ -95,10 +95,10 @@ def test_env_overrides_android_yaml(tmp_path, monkeypatch):
     config_file = tmp_path / "android-appium.yaml"
     config_file.write_text(
         """
-target: emulator
+target: android_studio
 app_package: com.example.demo
 app_activity: .MainActivity
-emulator:
+android_studio:
   udid: emulator-5556
   device_name: Pixel 8
 """.strip(),

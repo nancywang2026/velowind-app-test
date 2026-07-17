@@ -151,6 +151,8 @@ def choose_local_photo(
     select_all_from_album: bool = True,
 ) -> bool:
     normalized_index = max(1, picture_index)
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
     if _is_android_gallery3d_picker(driver):
         return _choose_local_photo_from_android_gallery3d(
             driver,
@@ -161,6 +163,8 @@ def choose_local_photo(
         with _photo_picker_profile("open-photo-album"):
             album_opened = open_photo_album(driver, album_name)
         if not album_opened:
+            return False
+        if is_ios and not _ensure_ios_photo_album_active(driver, album_name):
             return False
     if album_name:
         if select_all_from_album:
@@ -200,24 +204,44 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
         return _wait_until(lambda: bool(find_photo_grid_candidates(driver)), timeout=2)
 
     current_title = photo_album_title(driver)
+    _photo_picker_debug(f"open album start; target={album_name} current={current_title}")
     if current_title == album_name:
         return True
-    if current_title not in {None, "选择最多9张照片。"}:
+    if current_title == "选择最多9张照片。":
         if not _tap_photo_picker_back(driver):
+            _photo_picker_debug("failed to leave multi-select grid before opening requested album")
             return False
-        time.sleep(0.3)
+        if not _wait_until(
+            lambda: _photo_picker_collections_visible(driver) or photo_album_title(driver) != current_title,
+            timeout=2,
+        ):
+            _photo_picker_debug(f"still on multi-select grid after back; current={photo_album_title(driver)}")
+            return False
         current_title = photo_album_title(driver)
+        _photo_picker_debug(f"after leaving multi-select grid; current={current_title}")
+    if current_title not in {None, "选择最多9张照片。"}:
+        if not _return_photo_picker_to_collections(driver, current_title=current_title):
+            _photo_picker_debug(f"failed to return to collections from current={current_title}")
+            return False
+        current_title = photo_album_title(driver)
+        _photo_picker_debug(f"after return to collections; current={current_title}")
     if not switch_photo_picker_to_collections(driver, current_title=current_title):
+        _photo_picker_debug(f"failed to switch to collections; current={current_title}")
         return False
     for _ in range(4):
         if _tap_named_element_center(driver, album_name):
             if _wait_until(lambda: photo_album_title(driver) == album_name, timeout=2):
+                _photo_picker_debug(f"opened target album={album_name}")
                 return True
-        try:
-            swipe_vertical(driver, direction="up")
-        except WebDriverException:
-            pass
+        if not is_android and _swipe_ios_album_carousel_left(driver):
+            _wait_until(lambda: _tap_named_element_center(driver, album_name), timeout=1)
+        else:
+            try:
+                swipe_vertical(driver, direction="up")
+            except WebDriverException:
+                pass
         time.sleep(0.3)
+    _photo_picker_debug(f"failed to open target album={album_name}; final={photo_album_title(driver)}")
     return False
 
 
@@ -226,7 +250,11 @@ def tap_photo_grid_candidate(driver: WebDriver, picture_index: int) -> bool:
     if not candidates:
         return False
     target_index = min(max(1, picture_index), len(candidates)) - 1
-    rect = _rect_snapshot(candidates[target_index])
+    candidate = candidates[target_index]
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        return _tap_ios_photo_grid_candidate(driver, candidate)
+    rect = _rect_snapshot(candidate)
     if rect is None:
         return False
     return _tap_rect_center(driver, rect)
@@ -350,8 +378,10 @@ def switch_photo_picker_to_collections(driver: WebDriver, *, current_title: str 
         return True
     if not _tap_text_or_contains(driver, "精选集"):
         return False
-    time.sleep(0.5)
-    return True
+    return _wait_until(
+        lambda: photo_album_title(driver) == "精选集" or _visible_text_present(driver, "精选集"),
+        timeout=2,
+    )
 
 
 def _tap_photo_picker_back(driver: WebDriver) -> bool:
@@ -381,6 +411,53 @@ def _tap_photo_picker_back(driver: WebDriver) -> bool:
         return True
     except (AttributeError, WebDriverException):
         return False
+
+
+def _return_photo_picker_to_collections(driver: WebDriver, *, current_title: str) -> bool:
+    for _ in range(2):
+        if _photo_picker_collections_visible(driver):
+            _photo_picker_debug(f"collections already visible while leaving {current_title}")
+            return True
+        if not _tap_photo_picker_back(driver):
+            _photo_picker_debug(f"back tap failed while leaving {current_title}")
+            return False
+        if _wait_until(
+            lambda: _photo_picker_collections_visible(driver) or photo_album_title(driver) != current_title,
+            timeout=2,
+        ):
+            _photo_picker_debug(f"back navigation left album {current_title}; now={photo_album_title(driver)}")
+            return True
+        time.sleep(0.3)
+        _photo_picker_debug(f"back navigation still in album {current_title}; retrying")
+    return _photo_picker_collections_visible(driver)
+
+
+def _ensure_ios_photo_album_active(driver: WebDriver, album_name: str) -> bool:
+    active_title = photo_album_title(driver)
+    if active_title == album_name:
+        return True
+    _photo_picker_debug(f"album mismatch after open; expected={album_name} actual={active_title}")
+    if active_title not in {None, "选择最多9张照片。"}:
+        if not _return_photo_picker_to_collections(driver, current_title=active_title):
+            return False
+    if not switch_photo_picker_to_collections(driver):
+        return False
+    for _ in range(4):
+        if _tap_named_element_center(driver, album_name) and _wait_until(
+            lambda: photo_album_title(driver) == album_name,
+            timeout=2,
+        ):
+            return True
+        if _swipe_ios_album_carousel_left(driver):
+            _wait_until(lambda: _tap_named_element_center(driver, album_name), timeout=1)
+        else:
+            try:
+                swipe_vertical(driver, direction="up")
+            except WebDriverException:
+                pass
+        time.sleep(0.3)
+    _photo_picker_debug(f"album mismatch persisted; expected={album_name} actual={photo_album_title(driver)}")
+    return False
 
 
 def _photo_picker_collections_visible(driver: WebDriver) -> bool:
@@ -601,19 +678,24 @@ def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
 
 def _tap_named_element_center(driver: WebDriver, text: str) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
-    xpaths = [
-        f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
-        f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
-    ]
-    if str(capabilities.get("platformName", "")).lower() == "android":
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    xpaths = _visible_ios_text_xpaths(text)
+    if is_android:
         xpaths = [
             f'//*[@text="{text}"]',
             f'//*[contains(@text, "{text}")]',
+            f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
+            f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
         ] + xpaths
     for xpath in xpaths:
         try:
             element = driver.find_element(AppiumBy.XPATH, xpath)
-            rect = element.rect
+            rect = _rect_snapshot(element)
+            if rect is None:
+                continue
+            if not is_android and not _rect_center_inside_window(driver, rect):
+                _photo_picker_debug(f"skip offscreen iOS element text={text} rect={rect}")
+                continue
             x = rect["x"] + rect["width"] / 2
             y = rect["y"] + rect["height"] / 2
             try:
@@ -633,14 +715,58 @@ def _tap_named_element_center(driver: WebDriver, text: str) -> bool:
     return False
 
 
-def _tap_text_or_contains(driver: WebDriver, text: str) -> bool:
-    if tap_text_if_present(driver, text, timeout=1):
+def _rect_center_inside_window(driver: WebDriver, rect: dict[str, float]) -> bool:
+    size = _safe_window_size(driver)
+    if size is None:
         return True
-    for xpath in [
-        f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
-    ]:
+    x = rect["x"] + rect["width"] / 2
+    y = rect["y"] + rect["height"] / 2
+    return 0 <= x <= size["width"] and 0 <= y <= size["height"]
+
+
+def _swipe_ios_album_carousel_left(driver: WebDriver) -> bool:
+    size = _safe_window_size(driver)
+    if size is None:
+        return False
+    y = size["height"] * 0.52
+    try:
+        driver.execute_script(
+            "mobile: dragFromToForDuration",
+            {
+                "duration": 0.35,
+                "fromX": size["width"] * 0.86,
+                "fromY": y,
+                "toX": size["width"] * 0.16,
+                "toY": y,
+            },
+        )
+        return True
+    except WebDriverException:
         try:
-            driver.find_element(AppiumBy.XPATH, xpath).click()
+            driver.execute_script("mobile: swipe", {"direction": "left"})
+            return True
+        except WebDriverException:
+            return False
+
+
+def _tap_text_or_contains(driver: WebDriver, text: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if is_android and tap_text_if_present(driver, text, timeout=1):
+        return True
+    xpaths = _visible_ios_text_xpaths(text)
+    if is_android:
+        xpaths.extend(
+            [
+                f'//*[contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}")]',
+            ]
+        )
+    for xpath in xpaths:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            if _tap_element_center(driver, element):
+                return True
+            element.click()
             return True
         except (NoSuchElementException, WebDriverException):
             continue
@@ -650,12 +776,29 @@ def _tap_text_or_contains(driver: WebDriver, text: str) -> bool:
 def _tap_texts_by_predicate(driver: WebDriver, texts: list[str]) -> bool:
     escaped_texts = [text.replace("\\", "\\\\").replace('"', '\\"') for text in texts]
     quoted = ", ".join(f'"{text}"' for text in escaped_texts)
-    predicate = f"name IN {{{quoted}}} OR label IN {{{quoted}}} OR value IN {{{quoted}}}"
+    predicate = f"visible == 1 AND (name IN {{{quoted}}} OR label IN {{{quoted}}} OR value IN {{{quoted}}})"
     try:
         driver.find_element(AppiumBy.IOS_PREDICATE, predicate).click()
         return True
     except (NoSuchElementException, WebDriverException):
         return False
+
+
+def _visible_ios_text_xpaths(text: str) -> list[str]:
+    return [
+        f'//*[@visible="true" and (@name="{text}" or @label="{text}" or @value="{text}")]',
+        f'//*[@visible="true" and (contains(@name, "{text}") or contains(@label, "{text}") or contains(@value, "{text}"))]',
+    ]
+
+
+def _visible_text_present(driver: WebDriver, text: str) -> bool:
+    for xpath in _visible_ios_text_xpaths(text):
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath)
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+    return False
 
 
 def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
@@ -695,6 +838,70 @@ def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
 
     for text in ["完成", "添加"]:
         if _tap_text_or_contains(driver, text):
+            return True
+    return False
+
+
+def _tap_ios_photo_grid_candidate(driver: WebDriver, candidate) -> bool:
+    if _ios_photo_picker_selection_active(driver):
+        return True
+    try:
+        candidate.click()
+        if _wait_until(lambda: _ios_photo_picker_selection_active(driver), timeout=1):
+            return True
+    except (AttributeError, WebDriverException):
+        pass
+
+    rect = _rect_snapshot(candidate)
+    if rect is None:
+        return False
+
+    for x_ratio, y_ratio in [
+        (0.5, 0.5),
+        (0.35, 0.5),
+        (0.65, 0.5),
+        (0.5, 0.35),
+        (0.5, 0.65),
+    ]:
+        if not _tap_rect_ratio(driver, rect, x_ratio=x_ratio, y_ratio=y_ratio):
+            continue
+        if _wait_until(lambda: _ios_photo_picker_selection_active(driver), timeout=1):
+            return True
+    return False
+
+
+def _ios_photo_picker_selection_active(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if _cropper_visible(page_source, driver=driver):
+        return True
+    return _photo_picker_done_button_enabled(driver, page_source=page_source)
+
+
+def _photo_picker_done_button_enabled(driver: WebDriver, *, page_source: str | None = None) -> bool:
+    source = page_source if page_source is not None else _safe_page_source(driver)
+    enabled_patterns = [
+        'name="Add" label="完成" enabled="true"',
+        'name="Add" enabled="true"',
+        'name="完成" label="完成" enabled="true"',
+        'name="添加" label="添加" enabled="true"',
+        'label="完成" enabled="true"',
+        'label="添加" enabled="true"',
+    ]
+    if any(pattern in source for pattern in enabled_patterns):
+        return True
+    for xpath in [
+        '//*[@name="Add"]',
+        '//*[@name="完成" or @label="完成" or @name="添加" or @label="添加"]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+        try:
+            enabled = str(element.get_attribute("enabled") or "").strip().lower()
+        except (AttributeError, WebDriverException):
+            enabled = ""
+        if enabled in {"true", "1"}:
             return True
     return False
 

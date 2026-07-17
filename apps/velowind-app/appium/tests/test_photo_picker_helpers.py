@@ -56,17 +56,71 @@ def test_choose_photo_from_library_retries_sheet_option_before_selecting_album(m
 
 def test_open_photo_album_goes_back_before_switching_from_other_album(monkeypatch):
     events = []
-    titles = iter(["云南洱海", None, None, "长白山"])
+    titles = iter(["云南洱海", None, None, "长白山", "长白山", "长白山"])
 
     monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
     monkeypatch.setattr(photo_picker, "_tap_photo_picker_back", lambda driver: events.append("back") or True)
     monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: events.append(("tap-text", text)) or text == "精选集")
     monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("tap-album", text)) or text == "长白山")
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: text == "精选集")
     monkeypatch.setattr(photo_picker, "swipe_vertical", lambda driver, direction="up": events.append(("swipe", direction)))
     monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
 
     assert photo_picker.open_photo_album(object(), "长白山") is True
     assert events == [
+        "back",
+        ("tap-text", "精选集"),
+        ("tap-album", "长白山"),
+    ]
+
+
+def test_open_photo_album_waits_for_back_to_leave_current_album(monkeypatch):
+    events = []
+    titles = iter(["北京", "北京", None, "长白山", "长白山", "长白山", "长白山"])
+
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(photo_picker, "_tap_photo_picker_back", lambda driver: events.append("back") or True)
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: False)
+    monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: events.append(("tap-text", text)) or text == "精选集")
+    monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("tap-album", text)) or text == "长白山")
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: text == "精选集")
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+
+    assert photo_picker.open_photo_album(object(), "长白山") is True
+    assert events == [
+        "back",
+        "back",
+        ("tap-text", "精选集"),
+        ("tap-album", "长白山"),
+    ]
+
+
+def test_open_photo_album_leaves_ios_multi_select_grid_before_selecting_target(monkeypatch):
+    events = []
+    titles = iter([
+        "选择最多9张照片。",
+        "北京",
+        "北京",
+        None,
+        "长白山",
+        "长白山",
+        "长白山",
+        "长白山",
+    ])
+
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(photo_picker, "_tap_photo_picker_back", lambda driver: events.append("back") or True)
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: False)
+    monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: events.append(("tap-text", text)) or text == "精选集")
+    monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("tap-album", text)) or text == "长白山")
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: text == "精选集")
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+
+    assert photo_picker.open_photo_album(object(), "长白山") is True
+    assert events == [
+        "back",
         "back",
         ("tap-text", "精选集"),
         ("tap-album", "长白山"),
@@ -139,6 +193,63 @@ def test_find_photo_grid_candidates_supports_android_google_photos():
     assert photo_picker.find_photo_grid_candidates(FakeDriver()) == [candidate]
 
 
+def test_tap_photo_grid_candidate_clicks_ios_photo_and_waits_for_done_enable(monkeypatch):
+    events = []
+    selection_state = {"selected": False}
+
+    class FakeElement:
+        rect = {"x": 0, "y": 141, "width": 133, "height": 134}
+
+        def click(self):
+            events.append("click")
+            selection_state["selected"] = True
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(photo_picker, "find_photo_grid_candidates", lambda driver: [FakeElement()])
+    monkeypatch.setattr(
+        photo_picker,
+        "_safe_page_source",
+        lambda driver: 'name="完成" label="完成" enabled="true"' if selection_state["selected"] else 'name="完成" label="完成" enabled="false"',
+    )
+
+    assert photo_picker.tap_photo_grid_candidate(FakeDriver(), 1) is True
+    assert events == ["click"]
+
+
+def test_tap_photo_grid_candidate_retries_ios_hotspots_until_done_enables(monkeypatch):
+    taps = []
+    selection_state = {"selected": False}
+
+    class FakeElement:
+        rect = {"x": 0, "y": 141, "width": 133, "height": 134}
+
+        def click(self):
+            raise photo_picker.WebDriverException()
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+            if len(taps) == 2:
+                selection_state["selected"] = True
+
+    monkeypatch.setattr(photo_picker, "find_photo_grid_candidates", lambda driver: [FakeElement()])
+    monkeypatch.setattr(
+        photo_picker,
+        "_safe_page_source",
+        lambda driver: 'name="完成" label="完成" enabled="true"' if selection_state["selected"] else 'name="完成" label="完成" enabled="false"',
+    )
+
+    assert photo_picker.tap_photo_grid_candidate(FakeDriver(), 1) is True
+    assert taps == [
+        ("mobile: tap", {"x": 66.5, "y": 208.0}),
+        ("mobile: tap", {"x": 46.55, "y": 208.0}),
+    ]
+
+
 def test_choose_album_photo_confirms_android_system_selection_before_cropper(monkeypatch):
     events = []
 
@@ -160,6 +271,34 @@ def test_choose_album_photo_confirms_android_system_selection_before_cropper(mon
 
     assert photo_picker.choose_local_photo(FakeDriver(), album_name="云南洱海") is True
     assert events == ["system"]
+
+
+def test_choose_local_photo_reopens_requested_ios_album_when_title_mismatches(monkeypatch):
+    events = []
+    titles = iter(["北京", "长白山", "长白山"])
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(photo_picker, "open_photo_album", lambda driver, album_name: True)
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(photo_picker, "_return_photo_picker_to_collections", lambda driver, current_title: events.append(("back-to-collections", current_title)) or True)
+    monkeypatch.setattr(photo_picker, "switch_photo_picker_to_collections", lambda driver, current_title=None: events.append(("switch", current_title)) or True)
+    monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("tap-album", text)) or True)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(photo_picker, "tap_photo_grid_candidate", lambda driver, picture_index: events.append(("tap-photo", picture_index)) or True)
+    monkeypatch.setattr(photo_picker, "confirm_note_image_cropper", lambda driver: False)
+    monkeypatch.setattr(photo_picker, "confirm_system_photo_picker_selection", lambda driver: events.append("confirm") or True)
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+
+    assert photo_picker.choose_local_photo(FakeDriver(), album_name="长白山", select_all_from_album=False) is True
+    assert events == [
+        ("back-to-collections", "北京"),
+        ("switch", None),
+        ("tap-album", "长白山"),
+        ("tap-photo", 1),
+        "confirm",
+    ]
 
 
 def test_choose_local_photo_uses_gallery3d_fallback_on_android(monkeypatch):
@@ -382,7 +521,10 @@ def test_tap_photo_picker_done_button_taps_visible_enabled_add_center():
 
     class FakeDriver:
         def find_element(self, by, value):
-            if value in {"Add", 'name IN {"完成", "添加"} OR label IN {"完成", "添加"} OR value IN {"完成", "添加"}'}:
+            if value in {
+                "Add",
+                'visible == 1 AND (name IN {"完成", "添加"} OR label IN {"完成", "添加"} OR value IN {"完成", "添加"})',
+            }:
                 raise photo_picker.NoSuchElementException()
             assert value == '//*[@name="Add" and @enabled="true" and @visible="true"]'
             return FakeElement()
@@ -392,6 +534,82 @@ def test_tap_photo_picker_done_button_taps_visible_enabled_add_center():
 
     assert photo_picker._tap_photo_picker_done_button(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 364.0, "y": 110.0})]
+
+
+def test_tap_named_element_center_prefers_visible_ios_match():
+    taps = []
+
+    class HiddenElement:
+        rect = {"x": 0, "y": 0, "width": 0, "height": 0}
+
+        def click(self):
+            raise photo_picker.WebDriverException()
+
+    class VisibleElement:
+        rect = {"x": 120, "y": 240, "width": 80, "height": 32}
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            if value == '//*[@visible="true" and (@name="长白山" or @label="长白山" or @value="长白山")]':
+                return VisibleElement()
+            if value == '//*[@name="长白山" or @label="长白山" or @value="长白山"]':
+                return HiddenElement()
+            raise photo_picker.NoSuchElementException()
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert photo_picker._tap_named_element_center(FakeDriver(), "长白山") is True
+    assert taps == [("mobile: tap", {"x": 160.0, "y": 256.0})]
+
+
+def test_tap_named_element_center_skips_offscreen_ios_album_card():
+    taps = []
+
+    class OffscreenElement:
+        rect = {"x": 512, "y": 405, "width": 110, "height": 111}
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def find_element(self, by, value):
+            if value == '//*[@visible="true" and (@name="长白山" or @label="长白山" or @value="长白山")]':
+                return OffscreenElement()
+            raise photo_picker.NoSuchElementException()
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert photo_picker._tap_named_element_center(FakeDriver(), "长白山") is False
+    assert taps == []
+
+
+def test_swipe_ios_album_carousel_left_drags_album_shelf():
+    events = []
+
+    class FakeDriver:
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    assert photo_picker._swipe_ios_album_carousel_left(FakeDriver()) is True
+    assert events == [
+        (
+            "mobile: dragFromToForDuration",
+            {
+                "duration": 0.35,
+                "fromX": 345.71999999999997,
+                "fromY": 454.48,
+                "toX": 64.32000000000001,
+                "toY": 454.48,
+            },
+        )
+    ]
 
 
 def test_tap_photo_picker_done_button_supports_android_google_photos_done(monkeypatch):
