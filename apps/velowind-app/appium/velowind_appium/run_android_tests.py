@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from . import android_media_sync
+
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 TEST_PATH = REPO_ROOT / "apps" / "velowind-app" / "appium" / "tests"
@@ -129,6 +131,9 @@ def main() -> int:
     cli_args = sys.argv[1:]
     if not cli_args and DEFAULT_SUITE_FILE.exists():
         cli_args = ["--suite", str(DEFAULT_SUITE_FILE)]
+    media_sync_exit_code = android_media_sync.main()
+    if media_sync_exit_code != 0:
+        return media_sync_exit_code
     pytest_result = _run(build_pytest_command(cli_args))
     _generate_and_open_report()
     return pytest_result.returncode
