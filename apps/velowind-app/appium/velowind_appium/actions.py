@@ -162,6 +162,20 @@ def tap_text_if_present(driver: WebDriver, text: str, timeout: int = 2) -> bool:
         return False
 
 
+def enter_text_if_present(driver: WebDriver, accessibility_id: str, value: str, timeout: int = 2) -> bool:
+    try:
+        element = wait_for_accessibility_id(driver, accessibility_id, timeout=timeout)
+        element.click()
+        try:
+            element.clear()
+        except WebDriverException:
+            pass
+        element.send_keys(value)
+        return True
+    except (NoSuchElementException, TimeoutException, WebDriverException):
+        return False
+
+
 def safe_back(driver: WebDriver) -> None:
     try:
         driver.back()

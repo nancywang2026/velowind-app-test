@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import os
+from pathlib import Path
+import subprocess
 import time
 from typing import Callable
 
@@ -13,12 +15,24 @@ from velowind_appium.actions import swipe_vertical, tap_text_if_present
 
 
 RetrySheetOption = Callable[[WebDriver], bool]
+DEFAULT_ANDROID_MEDIA_DIR = Path(__file__).resolve().parents[2] / "test-media" / "android"
+IOS_CROPPER_VISIBLE_PATTERNS = [
+    'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
+    'name="裁剪图片" label="裁剪图片" enabled="true" visible="true"',
+]
+ANDROID_CROPPER_VISIBLE_PATTERNS = [
+    'resource-id="publish-note-image-picker-cropper-viewport"',
+    'resource-id="publish-note-image-picker-cropper-frame"',
+    'text="确认裁剪"',
+    'text="裁剪图片"',
+]
 
 
 def choose_photo_from_library(
     driver: WebDriver,
     *,
     album_name: str | None = None,
+    picture_index: int = 1,
     select_all_from_album: bool = True,
     prefer_retry_sheet_option_first: bool = False,
     retry_sheet_option: RetrySheetOption | None = None,
@@ -55,7 +69,12 @@ def choose_photo_from_library(
         return False
 
     with _photo_picker_profile("choose-local-photo-primary"):
-        primary_chosen = choose_local_photo(driver, album_name=album_name, select_all_from_album=select_all_from_album)
+        primary_chosen = choose_local_photo(
+            driver,
+            album_name=album_name,
+            picture_index=picture_index,
+            select_all_from_album=select_all_from_album,
+        )
     if primary_chosen:
         return True
 
@@ -67,6 +86,7 @@ def choose_photo_from_library(
         return choose_local_photo(
             driver,
             album_name=album_name,
+            picture_index=picture_index,
             select_all_from_album=select_all_from_album,
         )
 
@@ -131,6 +151,12 @@ def choose_local_photo(
     select_all_from_album: bool = True,
 ) -> bool:
     normalized_index = max(1, picture_index)
+    if _is_android_gallery3d_picker(driver):
+        return _choose_local_photo_from_android_gallery3d(
+            driver,
+            preferred_album_name=album_name,
+            picture_index=normalized_index,
+        )
     if album_name:
         with _photo_picker_profile("open-photo-album"):
             album_opened = open_photo_album(driver, album_name)
@@ -363,19 +389,26 @@ def _photo_picker_collections_visible(driver: WebDriver) -> bool:
 
 
 def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
-        if _cropper_visible(page_source):
+        if _cropper_visible(page_source, driver=driver):
+            _photo_picker_debug(f"cropper visible; android={is_android}")
             if _tap_cropper_confirm_button(driver) and _wait_until(
-                lambda: not _cropper_visible(_safe_page_source(driver)),
-                timeout=5,
+                lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver)
+                if is_android
+                else not _cropper_visible(_safe_page_source(driver), driver=driver, allow_generic_text_fallback=False),
+                timeout=8,
             ):
+                _photo_picker_debug("cropper confirm succeeded")
                 try:
                     setattr(driver, "_cropper_confirmed_once", True)
                 except Exception:
                     pass
                 return True
+            _photo_picker_debug(f"cropper confirm did not exit; source={_safe_page_source(driver)[:300]}")
         time.sleep(0.2)
     return False
 
@@ -396,8 +429,14 @@ def _photo_picker_transition_completed(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if not page_source:
         return False
-    if _cropper_visible(page_source):
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if _cropper_visible(page_source, driver=driver):
+        if is_android and getattr(driver, "_cropper_confirmed_once", False) and not _android_cropper_visible(page_source):
+            return True
         return confirm_note_image_cropper(driver, timeout=5)
+    if is_android and _android_publish_selection_completed(page_source):
+        return True
     return not any(
         text in page_source
         for text in [
@@ -457,40 +496,86 @@ def _tap_photo_library_sheet_option(driver: WebDriver) -> bool:
 
 
 def _tap_cropper_confirm_button(driver: WebDriver) -> bool:
-    try:
-        size = driver.get_window_size()
-    except (AttributeError, WebDriverException):
-        size = None
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    size = _safe_window_size(driver)
 
-    for xpath in [
+    xpaths = [
         '//*[@name="确认裁剪" or @label="确认裁剪" or @value="确认裁剪"]',
         '//*[contains(@name, "确认裁剪") or contains(@label, "确认裁剪") or contains(@value, "确认裁剪")]',
-    ]:
+    ]
+    if is_android:
+        xpaths = [
+            '//*[@text="确认裁剪"]/..',
+            '//*[@text="确认裁剪"]',
+            '//*[contains(@text, "确认裁剪")]',
+        ] + xpaths
+
+    for xpath in xpaths:
         try:
             element = driver.find_element(AppiumBy.XPATH, xpath)
-            rect = element.rect
-            driver.execute_script(
-                "mobile: tap",
-                {
-                    "x": rect["x"] + rect["width"] / 2,
-                    "y": rect["y"] + rect["height"] / 2,
-                },
-            )
-            return True
         except (NoSuchElementException, WebDriverException):
             continue
-    if size is not None:
+        rect = _rect_snapshot(element)
+        if is_android and rect is not None and _adb_tap_rect_ratio(driver, rect, x_ratio=0.5, y_ratio=0.5):
+            _photo_picker_debug(f"cropper adb tap center via {xpath} rect={rect}")
+            if _wait_until(lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver), timeout=4):
+                return True
         try:
-            driver.execute_script(
-                "mobile: tap",
-                {
-                    "x": size["width"] * 0.74,
-                    "y": size["height"] * 0.91,
-                },
-            )
-            return True
-        except WebDriverException:
+            element.click()
+            _photo_picker_debug(f"cropper element.click via {xpath}")
+            if _wait_until(lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver), timeout=2):
+                return True
+        except (AttributeError, WebDriverException):
             pass
+        if rect is not None and _tap_rect_center(driver, rect):
+            _photo_picker_debug(f"cropper appium center tap via {xpath} rect={rect}")
+            if _wait_until(lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver), timeout=2):
+                return True
+        if is_android and rect is not None and _tap_rect_confirm_hotspots(driver, rect):
+            return True
+    if size is not None and _tap_android_cropper_confirm_fallbacks(driver, size=size, is_android=is_android):
+        return True
+    return False
+
+
+def _tap_rect_confirm_hotspots(driver: WebDriver, rect: dict[str, float]) -> bool:
+    hotspot_ratios = [
+        (0.82, 0.5),
+        (0.82, 0.25),
+        (0.82, 0.75),
+        (0.68, 0.5),
+    ]
+    for x_ratio, y_ratio in hotspot_ratios:
+        if not _tap_rect_ratio(driver, rect, x_ratio=x_ratio, y_ratio=y_ratio):
+            continue
+        if _wait_until(lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver), timeout=2):
+            return True
+        if _adb_tap_rect_ratio(driver, rect, x_ratio=x_ratio, y_ratio=y_ratio):
+            if _wait_until(lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver), timeout=2):
+                return True
+    return False
+
+
+def _tap_android_cropper_confirm_fallbacks(
+    driver: WebDriver,
+    *,
+    size: dict[str, int],
+    is_android: bool,
+) -> bool:
+    fallback_points = [
+        (0.735, 0.9375 if is_android else 0.91),
+        (0.80, 0.9375 if is_android else 0.91),
+        (0.67, 0.9375 if is_android else 0.91),
+    ]
+    for x_ratio, y_ratio in fallback_points:
+        if not _tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size):
+            continue
+        if _wait_until(lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver), timeout=2):
+            return True
+        if _adb_tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size):
+            if _wait_until(lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver), timeout=2):
+                return True
     return False
 
 
@@ -529,14 +614,20 @@ def _tap_named_element_center(driver: WebDriver, text: str) -> bool:
         try:
             element = driver.find_element(AppiumBy.XPATH, xpath)
             rect = element.rect
-            driver.execute_script(
-                "mobile: tap",
-                {
-                    "x": rect["x"] + rect["width"] / 2,
-                    "y": rect["y"] + rect["height"] / 2,
-                },
-            )
-            return True
+            x = rect["x"] + rect["width"] / 2
+            y = rect["y"] + rect["height"] / 2
+            try:
+                driver.execute_script("mobile: tap", {"x": x, "y": y})
+                return True
+            except WebDriverException:
+                pass
+            try:
+                element.click()
+                return True
+            except WebDriverException:
+                pass
+            if _tap_android_point_by_adb(driver, x=x, y=y):
+                return True
         except (NoSuchElementException, WebDriverException):
             continue
     return False
@@ -608,6 +699,143 @@ def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
     return False
 
 
+def _choose_local_photo_from_android_gallery3d(
+    driver: WebDriver,
+    *,
+    preferred_album_name: str | None = None,
+    picture_index: int = 1,
+) -> bool:
+    size = _safe_window_size(driver)
+    if size is None:
+        return False
+
+    album_name = preferred_album_name or _preferred_android_gallery3d_album_name()
+    if album_name:
+        if _tap_named_element_center(driver, album_name):
+            if _wait_until(lambda: not _android_gallery3d_album_list_visible(_safe_page_source(driver)), timeout=2):
+                time.sleep(0.5)
+        card_index = _android_gallery3d_album_index(album_name)
+        if card_index is not None and _android_gallery3d_album_list_visible(_safe_page_source(driver)):
+            if _tap_android_gallery3d_album_card(driver, card_index, size=size):
+                time.sleep(1)
+
+    tap_order = _android_gallery3d_photo_positions()
+    preferred_index = min(max(1, picture_index), len(tap_order)) - 1
+    ordered_taps = [tap_order[preferred_index], *tap_order[:preferred_index], *tap_order[preferred_index + 1 :]]
+
+    for x_ratio, y_ratio in ordered_taps:
+        current_page = _safe_page_source(driver)
+        if _android_publish_selection_completed(current_page):
+            return True
+        if not _tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size):
+            continue
+        if _wait_until(lambda: _photo_picker_transition_completed(driver) or _cropper_visible(_safe_page_source(driver), driver=driver), timeout=2):
+            if _cropper_visible(_safe_page_source(driver), driver=driver):
+                return confirm_note_image_cropper(driver, timeout=5)
+            return True
+        if _adb_tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size) and _wait_until(
+            lambda: _photo_picker_transition_completed(driver) or _cropper_visible(_safe_page_source(driver), driver=driver),
+            timeout=2,
+        ):
+            if _cropper_visible(_safe_page_source(driver), driver=driver):
+                return confirm_note_image_cropper(driver, timeout=5)
+            return True
+        time.sleep(0.4)
+        if _android_publish_selection_completed(_safe_page_source(driver)):
+            return True
+    return False
+
+
+def _android_gallery3d_photo_positions() -> list[tuple[float, float]]:
+    return [
+        (0.18, 0.28),
+        (0.50, 0.28),
+        (0.82, 0.28),
+        (0.18, 0.48),
+        (0.50, 0.48),
+    ]
+
+
+def _is_android_gallery3d_picker(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    page_source = _safe_page_source(driver)
+    return "com.android.gallery3d" in page_source and "选择照片" in page_source
+
+
+def _android_gallery3d_album_list_visible(page_source: str) -> bool:
+    return "选择照片" in page_source and any(text in page_source for text in ["相机", "云南洱海", "长白山"])
+
+
+def _preferred_android_gallery3d_album_name() -> str | None:
+    raw_value = os.environ.get("VW_MAC_PHOTO_ALBUMS", "").strip()
+    if raw_value:
+        for name in raw_value.split(","):
+            normalized = name.strip()
+            if normalized:
+                return normalized
+    return None
+
+
+def _android_gallery3d_album_index(album_name: str) -> int | None:
+    media_dir = Path(os.environ.get("VW_ANDROID_MEDIA_DIR", "")).expanduser() if os.environ.get("VW_ANDROID_MEDIA_DIR") else DEFAULT_ANDROID_MEDIA_DIR
+    if not media_dir.exists():
+        return None
+    album_dirs = sorted(path.name for path in media_dir.iterdir() if path.is_dir())
+    try:
+        return album_dirs.index(album_name)
+    except ValueError:
+        return None
+
+
+def _tap_android_gallery3d_album_card(driver: WebDriver, album_index: int, *, size: dict[str, int]) -> bool:
+    # Gallery3d shows a system "相机" entry before our synced albums.
+    y_ratios = [0.49, 0.76, 0.92]
+    if album_index < 0 or album_index >= len(y_ratios):
+        return False
+    y_ratio = y_ratios[album_index]
+    if _tap_by_ratio(driver, x_ratio=0.5, y_ratio=y_ratio, size=size):
+        return True
+    return _adb_tap_by_ratio(driver, x_ratio=0.5, y_ratio=y_ratio, size=size)
+
+
+def _tap_by_ratio(
+    driver: WebDriver,
+    *,
+    x_ratio: float,
+    y_ratio: float,
+    size: dict[str, int] | None = None,
+) -> bool:
+    if size is None:
+        size = _safe_window_size(driver)
+    if size is None:
+        return False
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": size["width"] * x_ratio,
+                "y": size["height"] * y_ratio,
+            },
+        )
+        return True
+    except WebDriverException:
+        return _adb_tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size)
+
+
+def _safe_window_size(driver: WebDriver) -> dict[str, int] | None:
+    try:
+        size = driver.get_window_size()
+    except (AttributeError, WebDriverException):
+        return None
+    width = int(size.get("width", 0) or 0)
+    height = int(size.get("height", 0) or 0)
+    if width <= 0 or height <= 0:
+        return None
+    return {"width": width, "height": height}
+
+
 def _rect_snapshot(element) -> dict[str, float] | None:
     try:
         rect = getattr(element, "rect", {}) or {}
@@ -626,17 +854,75 @@ def _rect_snapshot(element) -> dict[str, float] | None:
 
 
 def _tap_rect_center(driver: WebDriver, rect: dict[str, float]) -> bool:
+    return _tap_rect_ratio(driver, rect, x_ratio=0.5, y_ratio=0.5)
+
+
+def _tap_rect_ratio(
+    driver: WebDriver,
+    rect: dict[str, float],
+    *,
+    x_ratio: float,
+    y_ratio: float,
+) -> bool:
     try:
         driver.execute_script(
             "mobile: tap",
             {
-                "x": rect["x"] + rect["width"] / 2,
-                "y": rect["y"] + rect["height"] / 2,
+                "x": rect["x"] + rect["width"] * x_ratio,
+                "y": rect["y"] + rect["height"] * y_ratio,
             },
         )
         return True
     except WebDriverException:
         return False
+
+
+def _adb_tap_rect_ratio(
+    driver: WebDriver,
+    rect: dict[str, float],
+    *,
+    x_ratio: float,
+    y_ratio: float,
+) -> bool:
+    x = rect["x"] + rect["width"] * x_ratio
+    y = rect["y"] + rect["height"] * y_ratio
+    return _adb_tap(driver, x=x, y=y)
+
+
+def _adb_tap_by_ratio(
+    driver: WebDriver,
+    *,
+    x_ratio: float,
+    y_ratio: float,
+    size: dict[str, int],
+) -> bool:
+    return _adb_tap(
+        driver,
+        x=size["width"] * x_ratio,
+        y=size["height"] * y_ratio,
+    )
+
+
+def _adb_tap(driver: WebDriver, *, x: float, y: float) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    if not udid:
+        return False
+    command = ["adb", "-s", udid, "shell", "input", "tap", str(int(x)), str(int(y))]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        _photo_picker_debug(f"adb tap failed to execute at ({int(x)}, {int(y)})")
+        return False
+    _photo_picker_debug(
+        f"adb tap at ({int(x)}, {int(y)}) rc={result.returncode} stdout={(result.stdout or '').strip()} stderr={(result.stderr or '').strip()}"
+    )
+    return result.returncode == 0
 
 
 def _tap_element_center(driver: WebDriver, element) -> bool:
@@ -646,8 +932,45 @@ def _tap_element_center(driver: WebDriver, element) -> bool:
     return _tap_rect_center(driver, rect)
 
 
-def _cropper_visible(page_source: str) -> bool:
-    return any(pattern in page_source for pattern in ["确认裁剪", "裁剪"])
+def _cropper_visible(
+    page_source: str,
+    *,
+    driver: WebDriver | None = None,
+    allow_generic_text_fallback: bool = True,
+) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    patterns = ANDROID_CROPPER_VISIBLE_PATTERNS if is_android else IOS_CROPPER_VISIBLE_PATTERNS
+    if any(pattern in page_source for pattern in patterns):
+        return True
+    if allow_generic_text_fallback and not is_android:
+        return any(pattern in page_source for pattern in ["确认裁剪", "裁剪图片"])
+    return any(pattern in page_source for pattern in patterns)
+
+
+def _android_cropper_visible(page_source: str) -> bool:
+    return any(pattern in page_source for pattern in ANDROID_CROPPER_VISIBLE_PATTERNS)
+
+
+def _android_publish_form_visible(page_source: str) -> bool:
+    publish_markers = [
+        'text="发布笔记"',
+        'text="添加标题"',
+        'text="输入正文"',
+        'resource-id="image"',
+    ]
+    return any(marker in page_source for marker in publish_markers)
+
+
+def _android_publish_selection_completed(page_source: str) -> bool:
+    return _android_publish_form_visible(page_source) and 'resource-id="image"' in page_source
+
+
+def _cropper_exit_confirmed(page_source: str, *, driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        return _android_publish_form_visible(page_source)
+    return not _cropper_visible(page_source, driver=driver, allow_generic_text_fallback=False)
 
 
 def _wait_until(predicate, timeout: int) -> bool:
@@ -662,12 +985,21 @@ def _wait_until(predicate, timeout: int) -> bool:
 def _safe_page_source(driver: WebDriver) -> str:
     try:
         return driver.page_source
-    except WebDriverException:
+    except (AttributeError, WebDriverException):
         return ""
 
 
 def _photo_picker_profile_enabled() -> bool:
     return os.getenv("VW_ACTIVITY_PROFILE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _photo_picker_debug_enabled() -> bool:
+    return os.getenv("VW_APPIUM_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _photo_picker_debug(message: str) -> None:
+    if _photo_picker_debug_enabled():
+        print(f"[photo-picker-debug] {message}", flush=True)
 
 
 @contextmanager

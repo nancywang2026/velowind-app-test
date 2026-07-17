@@ -267,6 +267,24 @@ def test_home_and_publish_entry_reject_my_activities_overlay():
     assert session._publish_entry_ready(driver) is False
 
 
+def test_home_and_publish_entry_reject_my_notes_overlay():
+    page_source = """
+    <AppiumAUT>
+      <android.widget.TextView text="我的笔记" />
+      <android.widget.TextView text="长白山真的有种让人瞬间安静下来的魔力" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        pass
+
+    driver = FakeDriver()
+    driver.page_source = page_source
+
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
 def test_home_and_publish_entry_reject_note_search_overlay():
     page_source = """
     <AppiumAUT>
@@ -544,3 +562,37 @@ def test_ensure_logged_in_for_publish_entry_logs_in_and_recovers(monkeypatch):
     assert session.ensure_logged_in_for_publish_entry(object(), object()) is True
     assert "login" in events
     assert "tap-home-fast" not in events
+
+
+def test_ensure_logged_in_for_publish_entry_unwinds_my_notes_detail(monkeypatch):
+    pages = ["my-note-detail", "my-notes", "home"]
+    events = []
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: events.append("dismiss-alerts"))
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: pages[0])
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page: False)
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: pages[0] == "home")
+    monkeypatch.setattr(session, "_publish_entry_ready", lambda driver: pages[0] == "home")
+    monkeypatch.setattr(session, "_tap_home_tab_by_coordinate", lambda driver: events.append("tap-home-fast") or True)
+
+    def fake_top_back(driver):
+        events.append(("top-back", pages[0]))
+        if len(pages) > 1:
+            pages.pop(0)
+        return True
+
+    def fake_back(driver):
+        events.append(("back", pages[0]))
+        if len(pages) > 1:
+            pages.pop(0)
+        return True
+
+    monkeypatch.setattr(session, "_tap_top_back_by_coordinate", fake_top_back)
+    monkeypatch.setattr(session, "safe_back", fake_back)
+    monkeypatch.setattr(session.time, "monotonic", itertools.count().__next__)
+    monkeypatch.setattr(session.time, "sleep", lambda seconds: None)
+
+    assert session.ensure_logged_in_for_publish_entry(object(), object()) is False
+    assert pages[0] == "home"
+    assert ("top-back", "my-note-detail") in events

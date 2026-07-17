@@ -78,6 +78,19 @@ pnpm appium:android:preflight
 pnpm appium:android:test
 ```
 
+本地 MuMu / 模拟器脚本也支持直接传 `--udid`：
+
+```bash
+pnpm appium:android:test:local --udid 127.0.0.1:16385
+pnpm appium:android:test:local:publish --udid 127.0.0.1:16385
+```
+
+也仍然兼容环境变量写法：
+
+```bash
+VW_ANDROID_UDID=127.0.0.1:16385 pnpm appium:android:test:local
+```
+
 按 suite 文件运行：
 
 ```bash

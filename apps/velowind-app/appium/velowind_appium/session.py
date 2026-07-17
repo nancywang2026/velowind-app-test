@@ -30,6 +30,10 @@ HOME_BLOCKING_TEXTS = [
     "活动详情",
     "页面预览提示",
     "我的活动",
+    "我的笔记",
+    "选择分享方式",
+    "微信好友",
+    "朋友圈",
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]
@@ -154,9 +158,18 @@ def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumC
         return False
 
     def _recover() -> bool:
-        for _ in range(2):
+        for _ in range(5):
             if _publish_entry_ready(driver):
                 return True
+            if not _home_or_login_visible(driver):
+                if _tap_top_back_by_coordinate(driver):
+                    time.sleep(0.3)
+                    if _publish_entry_ready(driver):
+                        return True
+                safe_back(driver)
+                time.sleep(0.3)
+                if _publish_entry_ready(driver):
+                    return True
             _tap_home_fast()
             if _wait_publish_ready():
                 return _publish_entry_ready(driver)
