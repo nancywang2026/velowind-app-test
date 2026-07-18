@@ -64,6 +64,10 @@ def logged_in_session(request, ios_config):
     if "driver" not in request.fixturenames:
         yield
         return
+    request_node = getattr(request, "node", None)
+    if request_node is not None and request_node.get_closest_marker("skip_home_session") is not None:
+        yield
+        return
 
     driver = request.getfixturevalue("driver")
     prepare_logged_in_session(driver, ios_config)

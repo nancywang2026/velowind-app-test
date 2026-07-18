@@ -291,6 +291,16 @@ run_publish_suite() {
     --suite apps/velowind-app/appium/test-suites/android-message-publish.yaml
 }
 
+run_activity_publish_suite() {
+  PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_android_tests \
+    --suite apps/velowind-app/appium/test-suites/android-activity-publish.yaml
+}
+
+run_activity_session_suite() {
+  PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_android_tests \
+    --suite apps/velowind-app/appium/test-suites/android-activity-session.yaml
+}
+
 run_default_suite() {
   PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_android_tests
 }
@@ -305,6 +315,12 @@ case "$MODE" in
     ;;
   publish)
     run_publish_suite
+    ;;
+  activity-publish)
+    run_activity_publish_suite
+    ;;
+  activity-session)
+    run_activity_session_suite
     ;;
   *)
     echo "Unsupported mode: $MODE" >&2
