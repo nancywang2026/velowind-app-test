@@ -85,9 +85,24 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
             return True
         return wait_for_home_feed(driver, timeout=20)
 
+    def _relaunch_from_android_launcher() -> bool:
+        if not _android_launcher_visible(driver):
+            return False
+        for app_name in ["寻风集", "Predicted app: 寻风集"]:
+            if tap_accessibility_id_or_text_if_present(driver, app_name, app_name, timeout=2):
+                time.sleep(1)
+                try:
+                    _wait_home()
+                except Exception:
+                    pass
+                return True
+        return False
+
     def _recover_to_home():
         for _ in range(5):
             if _home_visible(driver):
+                return True
+            if _relaunch_from_android_launcher():
                 return True
             if not _home_or_login_visible(driver):
                 if _tap_top_back_by_coordinate(driver):
@@ -119,6 +134,9 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         return True
 
     def _prepare() -> bool:
+        if _relaunch_from_android_launcher():
+            return False
+
         if _go_home():
             try:
                 _wait_home()
@@ -235,6 +253,14 @@ def _publish_entry_ready(driver: WebDriver) -> bool:
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
         return False
     return all(text in page_source for text in ["首页", "活动", "消息", "我的"])
+
+
+def _android_launcher_visible(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    page_source = _safe_page_source(driver)
+    return "com.google.android.apps.nexuslauncher" in page_source
 
 
 def _tap_home_tab_by_coordinate(driver: WebDriver) -> bool:

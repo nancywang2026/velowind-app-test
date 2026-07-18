@@ -60,6 +60,31 @@ def test_logged_in_session_skips_tests_without_driver_fixture(monkeypatch):
     assert calls == []
 
 
+def test_logged_in_session_can_skip_home_preparation_with_marker(monkeypatch):
+    calls = []
+
+    class DummyNode:
+        @staticmethod
+        def get_closest_marker(name):
+            return object() if name == "skip_home_session" else None
+
+    class DummyRequest:
+        fixturenames = ["driver"]
+        node = DummyNode()
+
+        def getfixturevalue(self, name):
+            raise AssertionError(f"should not request fixture: {name}")
+
+    monkeypatch.setattr(conftest, "prepare_logged_in_session", lambda driver, ios_config: calls.append(True))
+
+    fixture = conftest.logged_in_session.__wrapped__(DummyRequest(), object())
+    next(fixture)
+    with pytest.raises(StopIteration):
+        next(fixture)
+
+    assert calls == []
+
+
 def test_logged_in_session_prepares_before_and_after_every_driver_case(monkeypatch):
     driver = object()
     ios_config = object()
@@ -564,6 +589,34 @@ def test_ensure_logged_in_on_home_discards_unpublished_note_draft(monkeypatch):
 
     assert session.ensure_logged_in_on_home(object(), object()) is False
     assert events == ["top-back", "discard"]
+
+
+def test_ensure_logged_in_on_home_relaunches_android_app_from_launcher(monkeypatch):
+    state = {"page": "com.google.android.apps.nexuslauncher 寻风集"}
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "emulator-5554"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "_tap_top_back_by_coordinate", lambda driver: events.append("top-back") or False)
+    monkeypatch.setattr(session, "_android_adb_back", lambda driver: events.append("adb-back") or False)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back") or False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: events.append(("tap", accessibility_id, text)) or state.update(page="home") or True,
+    )
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or True)
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert events[0] == ("tap", "寻风集", "寻风集")
+    assert state["page"] == "home"
 
 
 def test_ensure_logged_in_for_publish_entry_returns_immediately_when_publish_entry_ready(monkeypatch):

@@ -1,4 +1,4 @@
 tests:
-  - activity/test_ios_publish_activity.py
+  - activity/test_publish_activity.py
 pytest_args:
   - --maxfail=1
