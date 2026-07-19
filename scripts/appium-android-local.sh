@@ -301,6 +301,11 @@ run_activity_session_suite() {
     --suite apps/velowind-app/appium/test-suites/android-activity-session.yaml
 }
 
+run_rental_order_suite() {
+  PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_android_tests \
+    --suite apps/velowind-app/appium/test-suites/android-rental-order.yaml
+}
+
 run_default_suite() {
   PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_android_tests
 }
@@ -321,6 +326,9 @@ case "$MODE" in
     ;;
   activity-session)
     run_activity_session_suite
+    ;;
+  rental-order)
+    run_rental_order_suite
     ;;
   *)
     echo "Unsupported mode: $MODE" >&2
