@@ -12,7 +12,7 @@ from velowind_appium.config import IosAppiumConfig
 from velowind_appium.modules.home_feed import wait_for_home_feed
 
 
-COMMON_ALERT_TEXTS = ["允许", "好", "以后", "暂不", "取消"]
+COMMON_ALERT_TEXTS = ["Close app", "关闭应用", "允许", "好", "以后", "暂不", "取消"]
 OPTIONAL_ALERT_TIMEOUT_SECONDS = 0.2
 HOME_BLOCKING_TEXTS = [
     "发布活动",
