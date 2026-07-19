@@ -33,7 +33,7 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     base_date = today or date.today()
     return ActivitySessionDraft(
         title=f"自动化场次 {base_date:%m%d}",
-        signup_deadline=_format_datetime(base_date + timedelta(days=5), datetime_time(18, 0)),
+        signup_deadline=_format_datetime(base_date + timedelta(days=4), datetime_time(18, 0)),
         start_time=_format_datetime(base_date + timedelta(days=5), datetime_time(9, 0)),
         end_time=_format_datetime(base_date + timedelta(days=10), datetime_time(18, 0)),
         meeting_point="张家界景区",
@@ -170,6 +170,9 @@ def _reset_session_form_to_top(driver: WebDriver) -> None:
         activity._hide_keyboard(driver)
     except (WebDriverException, AttributeError):
         pass
+    page_source = _safe_page_source(driver)
+    if all(token in page_source for token in ["新增场次", "场次展示文案", "报名截止时间", "活动名额"]):
+        return
     for _ in range(3):
         try:
             swipe_vertical(driver, direction="down")
@@ -291,15 +294,25 @@ def _choose_session_location(driver: WebDriver, value: str) -> bool:
         if not _wait_until(lambda: _session_location_results_visible(_safe_page_source(driver)), timeout=5):
             return False
         if _tap_session_location_result(driver, value):
-            if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=2):
+            selected_timeout = 2 if _is_ios_driver(driver) else 6
+            if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=selected_timeout):
                 return True
+            if not _is_ios_driver(driver) and _tap_session_location_result(driver, value):
+                if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=4):
+                    return True
             _dismiss_session_location_modal(driver)
-            return _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=5)
+            return _wait_until(
+                lambda: _session_location_selected(_safe_page_source(driver)),
+                timeout=5 if _is_ios_driver(driver) else 8,
+            )
 
     return False
 
 
 def _search_session_location(driver: WebDriver, value: str) -> bool:
+    if _is_ios_driver(driver):
+        return _search_ios_session_location(driver, value)
+
     for xpath in [
         '//android.widget.EditText',
         '//*[contains(@text, "搜索")]/following::android.widget.EditText[1]',
@@ -333,6 +346,57 @@ def _search_session_location(driver: WebDriver, value: str) -> bool:
     return False
 
 
+def _search_ios_session_location(driver: WebDriver, value: str) -> bool:
+    xpaths = [
+        (
+            '//XCUIElementTypeTextField['
+            '@value="搜索地点" or @name="搜索地点" or @label="搜索地点" or @placeholderValue="搜索地点"'
+            ']'
+        ),
+        '//*[contains(@name, "搜索地点") or contains(@label, "搜索地点")]/descendant::XCUIElementTypeTextField[1]',
+        '//XCUIElementTypeTextField',
+    ]
+    candidates = []
+    for xpath in xpaths:
+        try:
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (WebDriverException, AttributeError):
+            continue
+        for element in elements:
+            try:
+                if not element.is_displayed():
+                    continue
+                rect = element.rect
+            except (WebDriverException, AttributeError):
+                continue
+            try:
+                y = int(rect["y"])
+                height = int(rect["height"])
+            except (KeyError, TypeError, ValueError):
+                y = 9999
+                height = 9999
+            candidates.append((y, height, element))
+        if candidates:
+            break
+
+    for _y, _height, field in sorted(candidates, key=lambda item: (item[0], item[1])):
+        try:
+            field.click()
+            try:
+                field.clear()
+            except WebDriverException:
+                pass
+            try:
+                field.set_value(value)
+            except (WebDriverException, AttributeError):
+                field.send_keys(value)
+            time.sleep(0.8)
+            return True
+        except (WebDriverException, AttributeError):
+            continue
+    return False
+
+
 def _paste_android_text(driver: WebDriver, value: str) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() != "android":
@@ -346,6 +410,9 @@ def _paste_android_text(driver: WebDriver, value: str) -> bool:
 
 
 def _tap_session_location_result(driver: WebDriver, value: str) -> bool:
+    if _is_ios_driver(driver) and _tap_ios_session_location_result(driver, value):
+        return True
+
     try:
         second_row_titles = driver.find_elements(
             AppiumBy.XPATH,
@@ -353,13 +420,27 @@ def _tap_session_location_result(driver: WebDriver, value: str) -> bool:
         )
     except (WebDriverException, AttributeError):
         second_row_titles = []
-    if len(second_row_titles) >= 2:
-        try:
-            activity._tap_element_center(driver, second_row_titles[1])
-            time.sleep(0.6)
-            return True
-        except (WebDriverException, AttributeError):
-            pass
+    if second_row_titles:
+        matched_title_elements = _sort_android_session_location_elements(second_row_titles, value)
+        if matched_title_elements:
+            for element in matched_title_elements:
+                title_text = _android_session_location_result_text(element)
+                if title_text and _tap_android_session_location_result_card(driver, title_text):
+                    time.sleep(0.6)
+                    return True
+                try:
+                    activity._tap_element_center(driver, element)
+                    time.sleep(0.6)
+                    return True
+                except (WebDriverException, AttributeError):
+                    continue
+        elif all(not _android_session_location_result_text(element) for element in second_row_titles):
+            try:
+                activity._tap_element_center(driver, second_row_titles[1])
+                time.sleep(0.6)
+                return True
+            except (WebDriverException, AttributeError):
+                pass
 
     try:
         rect = driver.get_window_rect()
@@ -423,6 +504,183 @@ def _tap_session_location_result(driver: WebDriver, value: str) -> bool:
             except (WebDriverException, AttributeError):
                 continue
     return False
+
+
+def _sort_android_session_location_elements(elements: list, value: str) -> list:
+    search_terms = _session_location_search_terms(value)
+    scored_elements = []
+    for element in elements:
+        score = _android_session_location_result_score(element, search_terms)
+        if score is None:
+            continue
+        try:
+            rect = element.rect
+            y = int(rect["y"])
+            height = int(rect["height"])
+        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+            y = 9999
+            height = 9999
+        scored_elements.append((score, y, height, element))
+    return [element for _score, _y, _height, element in sorted(scored_elements, key=lambda item: (item[0], item[1], item[2]))]
+
+
+def _tap_android_session_location_result_card(driver: WebDriver, title_text: str) -> bool:
+    escaped = title_text.replace('"', '\\"')
+    try:
+        address = driver.find_element(
+            AppiumBy.XPATH,
+            f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/following-sibling::android.widget.TextView[1])[1]',
+        )
+        rect = address.rect
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": rect["x"] + rect["width"] / 2,
+                "y": rect["y"] + min(rect["height"] * 0.55, rect["height"] - 8.0),
+            },
+        )
+        return True
+    except (NoSuchElementException, WebDriverException, KeyError, TypeError, AttributeError):
+        pass
+
+    for xpath in [
+        f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/ancestor::android.view.ViewGroup[1])[1]',
+        f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/ancestor::android.view.ViewGroup[2])[1]',
+        f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/ancestor::android.view.ViewGroup[3])[1]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            activity._tap_element_center(driver, element)
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _android_session_location_result_score(element, search_terms: list[str]) -> int | None:
+    text = _android_session_location_result_text(element)
+    if not text:
+        return None
+    title = text.split(" ")[0].strip()
+    for term in search_terms:
+        if term and term in title:
+            return 0
+    for term in search_terms:
+        if term and text.startswith(term):
+            return 1
+    for term in search_terms:
+        if term and term in text:
+            return 2
+    return 3
+
+
+def _android_session_location_result_text(element) -> str:
+    for attr in ["text", "content-desc", "name", "label", "value"]:
+        try:
+            text = str(element.get_attribute(attr) or "").strip()
+        except (WebDriverException, AttributeError):
+            text = ""
+        if text:
+            return text
+    return ""
+
+
+def _tap_ios_session_location_result(driver: WebDriver, value: str) -> bool:
+    search_terms = _session_location_search_terms(value)
+    xpaths = []
+    for term in search_terms:
+        term = term.strip()
+        if not term:
+            continue
+        escaped = term.replace('"', '\\"')
+        xpaths.append(
+            '//XCUIElementTypeScrollView//XCUIElementTypeStaticText['
+            f'(contains(@name, "{escaped}") or contains(@label, "{escaped}") or contains(@value, "{escaped}"))'
+            ']'
+        )
+        xpaths.append(
+            '//XCUIElementTypeScrollView//XCUIElementTypeOther['
+            f'(contains(@name, "{escaped}") or contains(@label, "{escaped}") or contains(@value, "{escaped}"))'
+            ']'
+        )
+
+    candidates = []
+    seen_elements = set()
+    for xpath in xpaths:
+        try:
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (WebDriverException, AttributeError):
+            continue
+        for element in elements:
+            element_key = getattr(element, "id", None) or id(element)
+            if element_key in seen_elements:
+                continue
+            seen_elements.add(element_key)
+            try:
+                if not element.is_displayed():
+                    continue
+                rect = element.rect
+                width = int(rect["width"])
+                height = int(rect["height"])
+                y = int(rect["y"])
+            except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+                continue
+            if width < 250 or height < 48 or height > 130 or y < 150:
+                continue
+            score = _ios_session_location_result_score(element, search_terms)
+            candidates.append((score, y, height, element))
+
+    for _score, _y, _height, element in sorted(candidates, key=lambda item: (item[0], item[1], item[2])):
+        try:
+            try:
+                element.click()
+                if _wait_until(lambda: not _session_location_modal_visible(_safe_page_source(driver)), timeout=1):
+                    return True
+            except (WebDriverException, AttributeError):
+                pass
+            activity._tap_element_center(driver, element)
+            if _wait_until(lambda: not _session_location_modal_visible(_safe_page_source(driver)), timeout=1):
+                return True
+        except (WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _session_location_search_terms(value: str) -> list[str]:
+    terms = []
+    for term in [value, value.replace("景区", "")]:
+        term = term.strip()
+        if term and term not in terms:
+            terms.append(term)
+    return terms
+
+
+def _ios_session_location_result_score(element, search_terms: list[str]) -> int:
+    text = _ios_session_location_result_text(element)
+    title = text.split(" ")[0].strip()
+    if title.startswith("湖南省"):
+        title = ""
+    for term in search_terms:
+        if term and term in title:
+            return 0
+    for term in search_terms:
+        if term and text.startswith(term):
+            return 1
+    for term in search_terms:
+        if term and term in text:
+            return 2
+    return 3
+
+
+def _ios_session_location_result_text(element) -> str:
+    for attr in ["name", "label", "value"]:
+        try:
+            text = str(element.get_attribute(attr) or "").strip()
+        except (WebDriverException, AttributeError):
+            text = ""
+        if text:
+            return text
+    return ""
 
 
 def _dismiss_session_location_modal(driver: WebDriver) -> None:
@@ -500,6 +758,16 @@ def _session_location_modal_visible(page_source: str) -> bool:
 
 
 def _tap_session_datetime_field(driver: WebDriver, keyword: str) -> bool:
+    if _is_ios_driver(driver):
+        if _tap_ios_session_datetime_field(driver, keyword):
+            time.sleep(0.3)
+            return True
+        return False
+
+    if _tap_ios_session_datetime_field(driver, keyword):
+        time.sleep(0.3)
+        return True
+
     if _tap_session_datetime_container(driver, keyword):
         time.sleep(0.3)
         return True
@@ -542,6 +810,135 @@ def _tap_session_datetime_field(driver: WebDriver, keyword: str) -> bool:
     return False
 
 
+def _tap_ios_session_datetime_field(driver: WebDriver, keyword: str) -> bool:
+    if not _is_ios_driver(driver):
+        return False
+
+    if _tap_ios_session_datetime_element(driver, keyword):
+        return True
+
+    points = {
+        "报名截止时间": [(0.44, 0.307), (0.26, 0.307), (0.16, 0.307), (0.44, 0.285)],
+        "报名截止": [(0.44, 0.307), (0.26, 0.307), (0.16, 0.307), (0.44, 0.285)],
+        "开始时间": [(0.44, 0.398), (0.26, 0.398), (0.16, 0.398), (0.44, 0.376)],
+        "活动开始": [(0.44, 0.398), (0.26, 0.398), (0.16, 0.398), (0.44, 0.376)],
+        "结束时间": [(0.92, 0.398), (0.74, 0.398), (0.64, 0.398), (0.92, 0.376)],
+        "活动结束": [(0.92, 0.398), (0.74, 0.398), (0.64, 0.398), (0.92, 0.376)],
+    }
+    field_points = points.get(keyword)
+    if field_points is None:
+        return False
+    try:
+        rect = driver.get_window_rect()
+        for x_ratio, y_ratio in field_points:
+            _tap_ios_point(driver, round(rect["width"] * x_ratio), round(rect["height"] * y_ratio))
+            if _wait_until(lambda: _ios_datetime_picker_visible(_safe_page_source(driver)), timeout=1):
+                return True
+        return False
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        return False
+
+
+def _tap_ios_session_datetime_element(driver: WebDriver, keyword: str) -> bool:
+    escaped = keyword.replace('"', '\\"')
+    xpaths = [
+        (
+            '//XCUIElementTypeOther['
+            f'contains(@name, "{escaped}") and contains(@name, "月") '
+            'and @width <= 230 and @height <= 100'
+            ']'
+        ),
+        (
+            '//XCUIElementTypeOther['
+            f'contains(@label, "{escaped}") and contains(@label, "月") '
+            'and @width <= 230 and @height <= 100'
+            ']'
+        ),
+    ]
+    for xpath in xpaths:
+        try:
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (WebDriverException, AttributeError):
+            continue
+        candidates = []
+        for element in elements:
+            try:
+                rect = element.rect
+                if not element.is_displayed():
+                    continue
+            except AttributeError:
+                rect = getattr(element, "rect", {}) or {}
+            except WebDriverException:
+                continue
+            candidates.append((rect.get("width", 9999) * rect.get("height", 9999), rect, element))
+        for _area, _rect, element in sorted(candidates, key=lambda item: item[0]):
+            try:
+                element.click()
+            except (WebDriverException, AttributeError):
+                pass
+            if _wait_until(lambda: _ios_datetime_picker_visible(_safe_page_source(driver)), timeout=1):
+                return True
+            for x, y in _ios_datetime_field_points(_rect):
+                try:
+                    _tap_ios_point(driver, x, y)
+                except (WebDriverException, AttributeError):
+                    continue
+                if _wait_until(lambda: _ios_datetime_picker_visible(_safe_page_source(driver)), timeout=1):
+                    return True
+    return False
+
+
+def _ios_datetime_field_points(rect: dict) -> list[tuple[int, int]]:
+    try:
+        left = int(rect["x"])
+        top = int(rect["y"])
+        width = int(rect["width"])
+        height = int(rect["height"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    value_y = top + round(height * 0.72)
+    return [
+        (left + width - 20, value_y),
+        (left + int(width * 0.50), value_y),
+        (left + int(width * 0.50), top + int(height * 0.50)),
+        (left + int(width * 0.25), value_y),
+        (left + width - 12, top + int(height * 0.50)),
+    ]
+
+
+def _tap_ios_point(driver: WebDriver, x: int, y: int) -> None:
+    try:
+        driver.tap([(x, y)], 100)
+        return
+    except (WebDriverException, AttributeError):
+        pass
+    driver.execute_script("mobile: tap", {"x": x, "y": y})
+
+
+def _is_ios_driver(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    return str(capabilities.get("platformName", "")).lower() == "ios"
+
+
+def _ios_datetime_picker_visible(page_source: str) -> bool:
+    if "XCUIElementTypePickerWheel" in page_source:
+        return True
+    return all(token in page_source for token in ["已选择时间", "取消", "确认", "月", "日", "时"])
+
+
+def _ios_datetime_picker_current_parts_from_source(page_source: str) -> dict[str, str] | None:
+    match = re.search(r"(\d{1,2})月(\d{1,2})日\s*(\d{1,2})点", page_source)
+    if not match:
+        return None
+    month, day, hour = match.groups()
+    return {
+        "month": f"{int(month):02d}",
+        "day": f"{int(day):02d}",
+        "hour": f"{int(hour):02d}",
+        "minute": "00",
+    }
+
+
 def _tap_session_datetime_container(driver: WebDriver, keyword: str) -> bool:
     for xpath in [
         f'//*[contains(@text, "{keyword}")]/following-sibling::*[2]',
@@ -559,8 +956,12 @@ def _tap_session_datetime_container(driver: WebDriver, keyword: str) -> bool:
 
 def _write_session_datetime_value(driver: WebDriver, keyword: str, value: str) -> bool:
     expected = _session_datetime_target_rect(keyword)
-    if _write_android_datetime_picker_value(driver, keyword, value):
-        return True
+    if _is_ios_driver(driver):
+        if _ios_datetime_picker_visible(_safe_page_source(driver)):
+            return _write_ios_datetime_picker_value(driver, keyword, value)
+    else:
+        if _write_android_datetime_picker_value(driver, keyword, value):
+            return True
     try:
         active = driver.switch_to.active_element
         active_class = str(active.get_attribute("class") or "")
@@ -609,6 +1010,127 @@ def _write_session_datetime_value(driver: WebDriver, keyword: str, value: str) -
     return False
 
 
+def _write_ios_datetime_picker_value(driver: WebDriver, keyword: str, value: str) -> bool:
+    if not _is_ios_driver(driver):
+        return False
+    parts = _parse_session_datetime(value)
+    if parts is None:
+        return False
+    if not _wait_until(lambda: _ios_datetime_picker_visible(_safe_page_source(driver)), timeout=3):
+        return False
+    return _fill_ios_datetime_picker_fields(driver, ["month", "day", "hour"], parts)
+
+
+def _fill_ios_datetime_picker_fields(driver: WebDriver, field_order: list[str], parts: dict[str, str]) -> bool:
+    for field in field_order:
+        target = parts[field]
+        current = _ios_datetime_picker_current_parts(driver)
+        if current is None:
+            return False
+        if current.get(field) == target:
+            continue
+        if _tap_ios_datetime_picker_value(driver, field, target):
+            if _wait_until(
+                lambda: ((_ios_datetime_picker_current_parts(driver) or {}).get(field) == target),
+                timeout=1.5,
+            ):
+                continue
+        if not _tap_ios_datetime_picker_wheel_to_target(driver, field, target):
+            return False
+    current = _ios_datetime_picker_current_parts(driver)
+    return bool(current and all(current.get(field) == parts[field] for field in field_order))
+
+
+def _ios_datetime_picker_current_parts(driver: WebDriver) -> dict[str, str] | None:
+    return _ios_datetime_picker_current_parts_from_source(_safe_page_source(driver))
+
+
+def _tap_ios_datetime_picker_value(driver: WebDriver, field: str, value: str) -> bool:
+    escaped = value.replace('"', '\\"')
+    try:
+        rect = driver.get_window_rect()
+        expected_x, _expected_y = _ios_datetime_picker_wheel_center(rect, field)
+        min_y = int(rect["height"] * 0.52)
+        max_y = int(rect["height"] * 0.92)
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        return False
+
+    try:
+        elements = driver.find_elements(
+            AppiumBy.XPATH,
+            f'//*[@name="{escaped}" or @label="{escaped}" or @value="{escaped}"]',
+        )
+    except (WebDriverException, AttributeError):
+        elements = []
+
+    candidates = []
+    for element in elements:
+        try:
+            element_rect = element.rect
+            center_x = element_rect["x"] + element_rect["width"] / 2
+            center_y = element_rect["y"] + element_rect["height"] / 2
+        except (WebDriverException, KeyError, TypeError, AttributeError):
+            continue
+        if not min_y <= center_y <= max_y:
+            continue
+        candidates.append((abs(center_x - expected_x), element))
+
+    for _distance, element in sorted(candidates, key=lambda item: item[0]):
+        try:
+            activity._tap_element_center(driver, element)
+            return True
+        except (WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _tap_ios_datetime_picker_wheel_to_target(driver: WebDriver, field: str, target: str) -> bool:
+    for _ in range(36):
+        current = _ios_datetime_picker_current_parts(driver)
+        if current is None:
+            return False
+        current_value = current.get(field)
+        if current_value == target:
+            return True
+        direction = _android_datetime_picker_step_direction(field, current_value, target)
+        if direction is None:
+            return False
+        _tap_ios_datetime_picker_wheel_step(driver, field, direction)
+        time.sleep(0.1)
+    current = _ios_datetime_picker_current_parts(driver)
+    return bool(current and current.get(field) == target)
+
+
+def _tap_ios_datetime_picker_wheel_step(driver: WebDriver, field: str, direction: str) -> None:
+    try:
+        rect = driver.get_window_rect()
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        return
+    center_x, center_y = _ios_datetime_picker_wheel_center(rect, field)
+    offset = max(30, int(rect["height"] * 0.0435))
+    start_y = center_y + offset if direction == "next" else center_y - offset
+    end_y = center_y - offset if direction == "next" else center_y + offset
+    try:
+        driver.swipe(center_x, start_y, center_x, end_y, duration=300)
+        return
+    except (WebDriverException, AttributeError):
+        pass
+    try:
+        driver.execute_script("mobile: tap", {"x": center_x, "y": start_y})
+    except WebDriverException:
+        pass
+
+
+def _ios_datetime_picker_wheel_center(rect: dict, field: str) -> tuple[int, int]:
+    x_ratio, y_ratio = {
+        "month": (0.214, 0.774),
+        "day": (0.500, 0.774),
+        "hour": (0.786, 0.774),
+    }.get(field, (0.500, 0.774))
+    return int(rect["width"] * x_ratio), int(rect["height"] * y_ratio)
+
+
+
 def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value: str) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() != "android":
@@ -623,8 +1145,8 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
         "报名截止": ["day"],
         "开始时间": ["day"],
         "活动开始": ["day"],
-        "结束时间": ["day"],
-        "活动结束": ["day"],
+        "结束时间": ["day", "hour", "minute"],
+        "活动结束": ["day", "hour", "minute"],
     }.get(keyword)
     if field_order is None:
         return False
@@ -1005,10 +1527,19 @@ def _top_approved_badge_center_y(driver: WebDriver) -> int | None:
         except (WebDriverException, AttributeError):
             continue
     badge_tops: list[tuple[int, int]] = []
+    try:
+        window_height = int(driver.get_window_rect()["height"])
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        window_height = 3000
     for element in candidates:
         try:
             rect = element.rect
-            badge_tops.append((int(rect["y"]), int(rect["y"] + rect["height"] / 2)))
+            width = int(rect["width"])
+            height = int(rect["height"])
+            y = int(rect["y"])
+            if width > 120 or height > 80 or y < 0 or y > window_height:
+                continue
+            badge_tops.append((y, int(y + height / 2)))
         except (WebDriverException, KeyError, TypeError, AttributeError):
             continue
     if not badge_tops:

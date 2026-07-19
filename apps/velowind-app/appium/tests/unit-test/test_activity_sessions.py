@@ -17,10 +17,73 @@ class FakeDriver:
     def execute_script(self, script, payload):
         self.scripts.append((script, payload))
 
+    def tap(self, positions, duration=None):
+        self.scripts.append(("w3c tap", {"positions": positions, "duration": duration}))
+
+    def swipe(self, start_x, start_y, end_x, end_y, duration=None):
+        self.scripts.append(
+            (
+                "swipe",
+                {
+                    "start_x": start_x,
+                    "start_y": start_y,
+                    "end_x": end_x,
+                    "end_y": end_y,
+                    "duration": duration,
+                },
+            )
+        )
+
 
 class FakeElement:
-    def __init__(self, rect):
+    def __init__(self, rect, *, displayed=True, name=""):
         self.rect = rect
+        self.clicked = False
+        self.displayed = displayed
+        self.name = name
+
+    def click(self):
+        self.clicked = True
+
+    def is_displayed(self):
+        return self.displayed
+
+    def get_attribute(self, name):
+        if name in {"name", "label", "value"}:
+            return self.name
+        return ""
+
+
+class FakeTextField:
+    def __init__(self, *, displayed, rect, value="搜索地点"):
+        self.displayed = displayed
+        self.rect = rect
+        self.value = value
+        self.clicked = False
+        self.cleared = False
+        self.sent_keys = []
+
+    def is_displayed(self):
+        return self.displayed
+
+    def click(self):
+        self.clicked = True
+
+    def clear(self):
+        self.cleared = True
+
+    def set_value(self, value):
+        self.sent_keys.append(("set_value", value))
+        self.value = value
+
+    def send_keys(self, value):
+        self.sent_keys.append(("send_keys", value))
+        self.value = value
+
+    def get_attribute(self, name):
+        if name in {"value", "name", "label", "placeholderValue"}:
+            return self.value
+        return ""
 
 
 class FakeWheel:
@@ -38,6 +101,71 @@ class FakeWheel:
             self.on_send_keys(value)
 
 
+class FakePickerValueElement:
+    def __init__(self, field, value, rect):
+        self.field = field
+        self.value = value
+        self.rect = rect
+
+    def is_displayed(self):
+        return True
+
+
+class FakeIosPickerDriver(FakeDriver):
+    def __init__(self, current):
+        super().__init__(width=402, height=874)
+        self.capabilities = {"platformName": "iOS"}
+        self.current = dict(current)
+        self.picker_values = []
+        for field, x in [("month", 86), ("day", 201), ("hour", 316)]:
+            upper = {"month": 12, "day": 31, "hour": 23}[field]
+            start = 0 if field == "hour" else 1
+            for value in range(start, upper + 1):
+                text = f"{value:02d}"
+                self.picker_values.append(
+                    FakePickerValueElement(
+                        field,
+                        text,
+                        {"x": x - 14, "y": 420 + value * 12, "width": 28, "height": 22},
+                    )
+                )
+
+    @property
+    def page_source(self):
+        return (
+            "报名截止时间 2026年 已选择时间 "
+            f"{int(self.current['month'])}月{int(self.current['day'])}日 {int(self.current['hour'])}点 "
+            "月 01 02 03 04 05 06 07 08 09 10 11 12 "
+            "日 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 "
+            "时 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 "
+            "取消 确认"
+        )
+
+    @page_source.setter
+    def page_source(self, value):
+        self._initial_page_source = value
+
+    def find_elements(self, by, xpath):
+        matches = []
+        for element in self.picker_values:
+            quoted = f'"{element.value}"'
+            if quoted in xpath:
+                matches.append(element)
+        return matches
+
+    def execute_script(self, script, payload):
+        super().execute_script(script, payload)
+        if script != "mobile: tap":
+            return
+        x = payload["x"]
+        y = payload["y"]
+        for element in self.picker_values:
+            rect = element.rect
+            if rect["x"] <= x <= rect["x"] + rect["width"] and rect["y"] <= y <= rect["y"] + rect["height"]:
+                self.current[element.field] = element.value
+                return
+
+
 def test_tap_session_datetime_field_prefers_the_field_container(monkeypatch):
     driver = FakeDriver("新增场次 报名截止时间 活动名额 开始时间 结束时间")
     tapped = []
@@ -51,6 +179,83 @@ def test_tap_session_datetime_field_prefers_the_field_container(monkeypatch):
     assert activity_sessions._tap_session_datetime_field(driver, "报名截止时间") is True
     assert tapped
     assert driver.scripts == [("mobile: tap", {"x": 334.5, "y": 822.0})]
+
+
+def test_tap_session_datetime_field_uses_ios_calendar_icon_coordinates(monkeypatch):
+    driver = FakeDriver("新增场次 报名截止时间 活动名额 开始时间 结束时间", width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+    container_calls = []
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [], raising=False)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_tap_session_datetime_container",
+        lambda received, keyword: container_calls.append(keyword) or True,
+    )
+    monkeypatch.setattr(
+        activity_sessions,
+        "_safe_page_source",
+        lambda received: '<XCUIElementTypePickerWheel value="7月23日"/>',
+    )
+
+    assert activity_sessions._tap_session_datetime_field(driver, "报名截止时间") is True
+
+    assert container_calls == []
+    assert driver.scripts == [
+        ("w3c tap", {"positions": [(177, 268)], "duration": 100}),
+    ]
+
+
+def test_tap_session_datetime_field_clicks_ios_small_field_element(monkeypatch):
+    driver = FakeDriver("新增场次 报名截止时间 活动名额 开始时间 结束时间", width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+    field = FakeElement({"x": 13, "y": 218, "width": 184, "height": 69})
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [field], raising=False)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_safe_page_source",
+        lambda received: '<XCUIElementTypePickerWheel value="7月23日"/>',
+    )
+
+    assert activity_sessions._tap_session_datetime_field(driver, "报名截止时间") is True
+
+    assert field.clicked is True
+    assert driver.scripts == []
+
+
+def test_tap_session_datetime_field_tries_ios_field_points_when_element_click_does_not_open_picker(monkeypatch):
+    driver = FakeDriver("新增场次 报名截止时间 活动名额 开始时间 结束时间", width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+    field = FakeElement({"x": 13, "y": 218, "width": 184, "height": 69})
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [field], raising=False)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_safe_page_source",
+        lambda received: '<XCUIElementTypePickerWheel value="7月23日"/>' if len(driver.scripts) >= 2 else "新增场次",
+    )
+    monkeypatch.setattr(activity_sessions, "_wait_until", lambda predicate, timeout=1, interval=0.2: predicate())
+
+    assert activity_sessions._tap_session_datetime_field(driver, "报名截止时间") is True
+
+    assert field.clicked is True
+    assert driver.scripts[:2] == [
+        ("w3c tap", {"positions": [(177, 268)], "duration": 100}),
+        ("w3c tap", {"positions": [(105, 268)], "duration": 100}),
+    ]
+
+
+def test_reset_session_form_to_top_skips_swipes_when_top_fields_visible(monkeypatch):
+    driver = FakeDriver("新增场次 场次展示文案 报名截止时间 活动名额 开始时间 结束时间")
+    swipes = []
+
+    monkeypatch.setattr(activity_sessions.activity, "_hide_keyboard", lambda received: None)
+    monkeypatch.setattr(activity_sessions, "swipe_vertical", lambda *args, **kwargs: swipes.append(kwargs))
+
+    activity_sessions._reset_session_form_to_top(driver)
+
+    assert swipes == []
 
 
 def test_write_android_datetime_picker_value_only_adjusts_day_and_confirms(monkeypatch):
@@ -91,6 +296,23 @@ def test_write_android_datetime_picker_value_confirms_even_when_day_readback_doe
     assert confirmed == [True]
 
 
+def test_write_android_end_time_adjusts_day_hour_and_minute(monkeypatch):
+    driver = FakeDriver("已选择时间 07.18 10:17 取消 确认 月 日 时 分 结束时间", width=1280, height=2856)
+    captured = []
+    confirmed = []
+
+    def fake_fill(received, wheel_ids, field_order, parts):
+        captured.append((field_order, parts))
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_fill_android_datetime_picker_wheels", fake_fill)
+    monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda received: confirmed.append(True))
+
+    assert activity_sessions._write_android_datetime_picker_value(driver, "结束时间", "2026-07-29 18:00") is True
+    assert captured == [(["day", "hour", "minute"], {"month": "07", "day": "29", "hour": "18", "minute": "00"})]
+    assert confirmed == [True]
+
+
 def test_android_datetime_picker_wheel_locators_try_id_then_xpath():
     locators = activity_sessions._android_datetime_picker_wheel_locators(
         "activity-session-create-deadline-picker-month-wheel"
@@ -118,6 +340,179 @@ def test_android_datetime_picker_current_parts_reads_selected_time():
         "hour": "10",
         "minute": "17",
     }
+
+
+def test_ios_datetime_picker_visible_accepts_custom_session_picker():
+    page_source = "报名截止时间 已选择时间 7月18日 22点 取消 确认 月 日 时"
+
+    assert activity_sessions._ios_datetime_picker_visible(page_source) is True
+
+
+def test_ios_datetime_picker_current_parts_reads_selected_time():
+    page_source = "报名截止时间 已选择时间 7月18日 22点 取消 确认 月 日 时"
+
+    assert activity_sessions._ios_datetime_picker_current_parts_from_source(page_source) == {
+        "month": "07",
+        "day": "18",
+        "hour": "22",
+        "minute": "00",
+    }
+
+
+def test_write_session_datetime_value_routes_ios_picker_to_ios_writer(monkeypatch):
+    driver = FakeDriver("报名截止时间 已选择时间 7月18日 22点 取消 确认 月 日 时")
+    driver.capabilities = {"platformName": "iOS"}
+    calls = []
+
+    monkeypatch.setattr(
+        activity_sessions,
+        "_write_ios_datetime_picker_value",
+        lambda received, keyword, value: calls.append((keyword, value)) or True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        activity_sessions,
+        "_write_android_datetime_picker_value",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Android writer should not run for iOS")),
+    )
+
+    assert activity_sessions._write_session_datetime_value(driver, "报名截止时间", "2026-07-23 18:00") is True
+    assert calls == [("报名截止时间", "2026-07-23 18:00")]
+
+
+def test_write_session_datetime_value_does_not_route_android_to_ios_writer(monkeypatch):
+    driver = FakeDriver("报名截止时间 已选择时间 07.18 10:17 取消 确认 月 日 时 分", width=1280, height=2856)
+    calls = []
+
+    monkeypatch.setattr(
+        activity_sessions,
+        "_write_ios_datetime_picker_value",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("iOS writer should not run for Android")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        activity_sessions,
+        "_write_android_datetime_picker_value",
+        lambda received, keyword, value: calls.append((keyword, value)) or True,
+    )
+
+    assert activity_sessions._write_session_datetime_value(driver, "报名截止时间", "2026-07-23 18:00") is True
+    assert calls == [("报名截止时间", "2026-07-23 18:00")]
+
+
+def test_search_ios_session_location_uses_visible_search_text_field(monkeypatch):
+    hidden_title_field = FakeTextField(displayed=False, rect={"x": 13, "y": 140, "width": 376, "height": 42}, value="")
+    visible_search_field = FakeTextField(displayed=True, rect={"x": 69, "y": 120, "width": 316, "height": 42})
+    driver = FakeDriver("集合地点 搜索地点")
+    driver.capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [hidden_title_field, visible_search_field], raising=False)
+
+    assert activity_sessions._search_ios_session_location(driver, "张家界景区") is True
+    assert hidden_title_field.sent_keys == []
+    assert visible_search_field.clicked is True
+    assert visible_search_field.cleared is True
+    assert visible_search_field.sent_keys == [("set_value", "张家界景区")]
+
+
+def test_tap_ios_session_location_result_taps_first_visible_result(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界国家森林公园")
+    driver.capabilities = {"platformName": "iOS"}
+    first_result = FakeElement({"x": 52, "y": 175, "width": 350, "height": 71})
+    second_result = FakeElement({"x": 52, "y": 246, "width": 350, "height": 71})
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [second_result, first_result], raising=False)
+
+    def fake_tap_element_center(received, element):
+        rect = element.rect
+        driver.execute_script(
+            "mobile: tap",
+            {"x": rect["x"] + rect["width"] / 2, "y": rect["y"] + rect["height"] / 2},
+        )
+        driver.page_source = "新增场次 集合地点 张家界国家森林公园"
+
+    monkeypatch.setattr(activity_sessions.activity, "_tap_element_center", fake_tap_element_center)
+
+    assert activity_sessions._tap_ios_session_location_result(driver, "张家界景区") is True
+    assert first_result.clicked is True
+    assert driver.scripts == [("mobile: tap", {"x": 227.0, "y": 210.5})]
+
+
+def test_tap_ios_session_location_result_tries_next_candidate_until_modal_closes(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界国家森林公园")
+    driver.capabilities = {"platformName": "iOS"}
+    first_result = FakeElement({"x": 52, "y": 175, "width": 350, "height": 71})
+    second_result = FakeElement({"x": 52, "y": 246, "width": 350, "height": 71})
+    center_taps = []
+
+    def fake_tap_element_center(received, element):
+        center_taps.append(element)
+        if element is second_result:
+            driver.page_source = "新增场次 集合地点 张家界国家森林公园"
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [first_result, second_result], raising=False)
+    monkeypatch.setattr(activity_sessions.activity, "_tap_element_center", fake_tap_element_center)
+
+    assert activity_sessions._tap_ios_session_location_result(driver, "张家界景区") is True
+    assert first_result.clicked is True
+    assert second_result.clicked is True
+    assert center_taps == [first_result, second_result]
+
+
+def test_tap_ios_session_location_result_prefers_title_match_over_address_match(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界国家森林公园")
+    driver.capabilities = {"platformName": "iOS"}
+    address_only_match = FakeElement(
+        {"x": 52, "y": 175, "width": 350, "height": 71},
+        name="武陵源风景名胜区 湖南省张家界市武陵源区军地坪",
+    )
+    title_match = FakeElement(
+        {"x": 52, "y": 246, "width": 350, "height": 71},
+        name="张家界国家森林公园 湖南省张家界市武陵源区金鞭路279号",
+    )
+    tapped = []
+
+    def fake_tap_element_center(received, element):
+        tapped.append(element)
+        driver.page_source = "新增场次 集合地点 张家界国家森林公园"
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [address_only_match, title_match], raising=False)
+    monkeypatch.setattr(activity_sessions.activity, "_tap_element_center", fake_tap_element_center)
+
+    assert activity_sessions._tap_ios_session_location_result(driver, "张家界景区") is True
+    assert tapped == [title_match]
+    assert address_only_match.clicked is False
+    assert title_match.clicked is True
+
+
+def test_write_ios_datetime_picker_value_taps_target_values_by_column():
+    driver = FakeIosPickerDriver({"month": "07", "day": "18", "hour": "22"})
+
+    assert activity_sessions._write_ios_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is True
+
+    assert driver.current == {"month": "07", "day": "23", "hour": "18"}
+    assert ("mobile: tap", {"x": 201.0, "y": 707.0}) in driver.scripts
+    assert ("mobile: tap", {"x": 316.0, "y": 647.0}) in driver.scripts
+
+
+def test_tap_ios_datetime_picker_wheel_step_swipes_between_visible_rows():
+    driver = FakeDriver(width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    activity_sessions._tap_ios_datetime_picker_wheel_step(driver, "day", "next")
+
+    assert driver.scripts == [
+        (
+            "swipe",
+            {
+                "start_x": 201,
+                "start_y": 714,
+                "end_x": 201,
+                "end_y": 638,
+                "duration": 300,
+            },
+        )
+    ]
 
 
 def test_confirm_session_picker_taps_bottom_right_confirm_area_first(monkeypatch):
@@ -178,7 +573,7 @@ def test_fill_android_datetime_picker_wheels_prefers_direct_day_set(monkeypatch)
 def test_build_activity_session_draft_uses_required_relative_dates():
     draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 17))
 
-    assert draft.signup_deadline == "2026-07-22 18:00"
+    assert draft.signup_deadline == "2026-07-21 18:00"
     assert draft.start_time == "2026-07-22 09:00"
     assert draft.end_time == "2026-07-27 18:00"
     assert draft.meeting_point == "张家界景区"
@@ -279,7 +674,7 @@ def test_fill_session_form_uses_special_datetime_helper_for_dates(monkeypatch):
     ]
 
 
-def test_fill_session_form_resets_scroll_to_top_before_filling(monkeypatch):
+def test_fill_session_form_skips_reset_swipes_when_top_fields_are_visible(monkeypatch):
     draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 17))
     events = []
 
@@ -294,10 +689,11 @@ def test_fill_session_form_resets_scroll_to_top_before_filling(monkeypatch):
 
     assert events[:4] == [
         "hide-keyboard",
-        ("swipe", "down"),
-        ("swipe", "down"),
-        ("swipe", "down"),
+        ("field", "场次展示文案"),
+        ("datetime", "报名截止时间"),
+        ("field", "活动名额"),
     ]
+    assert ("swipe", "down") not in events
 
 
 def test_fill_session_location_field_does_not_reopen_when_modal_is_visible(monkeypatch):
@@ -365,6 +761,77 @@ def test_choose_session_location_waits_for_picker_to_close_without_pressing_back
     ]
 
 
+def test_choose_session_location_retries_android_selection_before_dismissing(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区")
+    events = []
+    waits = []
+    selected_attempts = {"value": 0}
+
+    monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_session_location_selected",
+        lambda page_source: events.append("selected-check") or selected_attempts.__setitem__("value", selected_attempts["value"] + 1) or selected_attempts["value"] >= 2,
+    )
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda driver: driver.page_source)
+
+    def fake_wait_until(predicate, timeout):
+        waits.append(timeout)
+        if timeout == 5:
+            return predicate()
+        if timeout == 6:
+            return False
+        if timeout == 4:
+            return predicate() or predicate()
+        return predicate()
+
+    monkeypatch.setattr(activity_sessions, "_wait_until", fake_wait_until)
+    monkeypatch.setattr(activity_sessions, "_dismiss_session_location_modal", lambda driver: events.append("dismiss"))
+
+    assert activity_sessions._choose_session_location(driver, "张家界景区") is True
+
+    assert waits == [5, 6, 4]
+    assert events == [
+        ("search", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        "selected-check",
+        "selected-check",
+    ]
+    assert "dismiss" not in events
+
+
+def test_choose_session_location_keeps_ios_short_wait_path(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区")
+    driver.capabilities = {"platformName": "iOS"}
+    events = []
+    waits = []
+
+    monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
+    monkeypatch.setattr(activity_sessions, "_session_location_selected", lambda page_source: events.append("selected-check") or True)
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda driver: driver.page_source)
+    monkeypatch.setattr(activity_sessions, "_dismiss_session_location_modal", lambda driver: events.append("dismiss"))
+
+    def fake_wait_until(predicate, timeout):
+        waits.append(timeout)
+        return predicate()
+
+    monkeypatch.setattr(activity_sessions, "_wait_until", fake_wait_until)
+
+    assert activity_sessions._choose_session_location(driver, "张家界景区") is True
+
+    assert waits == [5, 2]
+    assert events == [
+        ("search", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        "selected-check",
+    ]
+
+
 def test_choose_session_location_dismisses_picker_when_selection_is_visible_behind_modal(monkeypatch):
     driver = FakeDriver("集合地点 搜索地点 张家界景区")
     events = []
@@ -391,6 +858,8 @@ def test_choose_session_location_dismisses_picker_when_selection_is_visible_behi
 
     assert events == [
         ("search", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        "selected-check",
         ("tap-result", "张家界景区"),
         "selected-check",
         "dismiss",
@@ -467,6 +936,80 @@ def test_tap_session_location_result_uses_second_row_coordinate_when_title_locat
     ]
 
 
+def test_tap_session_location_result_prefers_matching_title_text_over_plain_second_row(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区", width=1280, height=2856)
+
+    def fake_find_elements(by, xpath):
+        if "android.widget.TextView[1]" in xpath:
+            return [
+                FakeElement({"x": 278, "y": 390, "width": 954, "height": 66}, name="当前位置"),
+                FakeElement({"x": 278, "y": 603, "width": 954, "height": 66}, name="武陵源风景名胜区"),
+                FakeElement({"x": 278, "y": 816, "width": 954, "height": 66}, name="张家界景区"),
+            ]
+        return []
+
+    monkeypatch.setattr(driver, "find_elements", fake_find_elements, raising=False)
+
+    assert activity_sessions._tap_session_location_result(driver, "张家界景区") is True
+
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 755.0, "y": 849.0}),
+    ]
+
+
+def test_tap_session_location_result_prefers_matching_result_card_over_title_text(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区", width=1280, height=2856)
+    title = FakeElement({"x": 278, "y": 603, "width": 954, "height": 66}, name="张家界国家森林公园")
+    card = FakeElement({"x": 0, "y": 540, "width": 1280, "height": 180})
+
+    def fake_find_elements(by, xpath):
+        if "android.widget.TextView[1]" in xpath:
+            return [title]
+        return []
+
+    def fake_find_element(by, xpath):
+        if 'contains(@text, "张家界国家森林公园")' in xpath and "ancestor::android.view.ViewGroup" in xpath:
+            return card
+        raise activity_sessions.NoSuchElementException()
+
+    monkeypatch.setattr(driver, "find_elements", fake_find_elements, raising=False)
+    monkeypatch.setattr(driver, "find_element", fake_find_element, raising=False)
+
+    assert activity_sessions._tap_session_location_result(driver, "张家界景区") is True
+
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 640.0, "y": 630.0}),
+    ]
+
+
+def test_tap_session_location_result_prefers_matching_result_address_lower_hit_area(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区", width=1280, height=2856)
+    title = FakeElement({"x": 278, "y": 603, "width": 954, "height": 66}, name="张家界国家森林公园")
+    address = FakeElement({"x": 278, "y": 681, "width": 954, "height": 60}, name="湖南省张家界市武陵源区金鞭路279号")
+    card = FakeElement({"x": 230, "y": 567, "width": 1050, "height": 210})
+
+    def fake_find_elements(by, xpath):
+        if "android.widget.TextView[1]" in xpath:
+            return [title]
+        return []
+
+    def fake_find_element(by, xpath):
+        if 'contains(@text, "张家界国家森林公园")' in xpath and "following-sibling::android.widget.TextView[1]" in xpath:
+            return address
+        if 'contains(@text, "张家界国家森林公园")' in xpath and "ancestor::android.view.ViewGroup" in xpath:
+            return card
+        raise activity_sessions.NoSuchElementException()
+
+    monkeypatch.setattr(driver, "find_elements", fake_find_elements, raising=False)
+    monkeypatch.setattr(driver, "find_element", fake_find_element, raising=False)
+
+    assert activity_sessions._tap_session_location_result(driver, "张家界景区") is True
+
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 755.0, "y": 714.0}),
+    ]
+
+
 def test_submit_session_form_does_not_treat_expected_title_on_create_page_as_success(monkeypatch):
     driver = object()
     page_sources = iter([
@@ -530,3 +1073,20 @@ def test_tap_more_for_approved_activity_uses_right_side_of_top_approved_card(mon
     assert driver.scripts == [
         ("mobile: tap", {"x": 366, "y": 262}),
     ]
+
+
+def test_top_approved_badge_center_y_ignores_ios_page_container(monkeypatch):
+    driver = FakeDriver("我的活动 发布 显示下架活动 黄山 通过 未发布", width=402, height=874)
+
+    monkeypatch.setattr(
+        driver,
+        "find_elements",
+        lambda by, xpath: [
+            FakeElement({"x": 0, "y": 0, "width": 402, "height": 874}),
+            FakeElement({"x": 1, "y": 312, "width": 34, "height": 20}),
+            FakeElement({"x": 1, "y": 406, "width": 34, "height": 20}),
+        ],
+        raising=False,
+    )
+
+    assert activity_sessions._top_approved_badge_center_y(driver) == 322
