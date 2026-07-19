@@ -294,10 +294,17 @@ def _choose_session_location(driver: WebDriver, value: str) -> bool:
         if not _wait_until(lambda: _session_location_results_visible(_safe_page_source(driver)), timeout=5):
             return False
         if _tap_session_location_result(driver, value):
-            if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=2):
+            selected_timeout = 2 if _is_ios_driver(driver) else 6
+            if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=selected_timeout):
                 return True
+            if not _is_ios_driver(driver) and _tap_session_location_result(driver, value):
+                if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=4):
+                    return True
             _dismiss_session_location_modal(driver)
-            return _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=5)
+            return _wait_until(
+                lambda: _session_location_selected(_safe_page_source(driver)),
+                timeout=5 if _is_ios_driver(driver) else 8,
+            )
 
     return False
 
@@ -413,13 +420,27 @@ def _tap_session_location_result(driver: WebDriver, value: str) -> bool:
         )
     except (WebDriverException, AttributeError):
         second_row_titles = []
-    if len(second_row_titles) >= 2:
-        try:
-            activity._tap_element_center(driver, second_row_titles[1])
-            time.sleep(0.6)
-            return True
-        except (WebDriverException, AttributeError):
-            pass
+    if second_row_titles:
+        matched_title_elements = _sort_android_session_location_elements(second_row_titles, value)
+        if matched_title_elements:
+            for element in matched_title_elements:
+                title_text = _android_session_location_result_text(element)
+                if title_text and _tap_android_session_location_result_card(driver, title_text):
+                    time.sleep(0.6)
+                    return True
+                try:
+                    activity._tap_element_center(driver, element)
+                    time.sleep(0.6)
+                    return True
+                except (WebDriverException, AttributeError):
+                    continue
+        elif all(not _android_session_location_result_text(element) for element in second_row_titles):
+            try:
+                activity._tap_element_center(driver, second_row_titles[1])
+                time.sleep(0.6)
+                return True
+            except (WebDriverException, AttributeError):
+                pass
 
     try:
         rect = driver.get_window_rect()
@@ -485,8 +506,87 @@ def _tap_session_location_result(driver: WebDriver, value: str) -> bool:
     return False
 
 
+def _sort_android_session_location_elements(elements: list, value: str) -> list:
+    search_terms = _session_location_search_terms(value)
+    scored_elements = []
+    for element in elements:
+        score = _android_session_location_result_score(element, search_terms)
+        if score is None:
+            continue
+        try:
+            rect = element.rect
+            y = int(rect["y"])
+            height = int(rect["height"])
+        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+            y = 9999
+            height = 9999
+        scored_elements.append((score, y, height, element))
+    return [element for _score, _y, _height, element in sorted(scored_elements, key=lambda item: (item[0], item[1], item[2]))]
+
+
+def _tap_android_session_location_result_card(driver: WebDriver, title_text: str) -> bool:
+    escaped = title_text.replace('"', '\\"')
+    try:
+        address = driver.find_element(
+            AppiumBy.XPATH,
+            f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/following-sibling::android.widget.TextView[1])[1]',
+        )
+        rect = address.rect
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": rect["x"] + rect["width"] / 2,
+                "y": rect["y"] + min(rect["height"] * 0.55, rect["height"] - 8.0),
+            },
+        )
+        return True
+    except (NoSuchElementException, WebDriverException, KeyError, TypeError, AttributeError):
+        pass
+
+    for xpath in [
+        f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/ancestor::android.view.ViewGroup[1])[1]',
+        f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/ancestor::android.view.ViewGroup[2])[1]',
+        f'(//android.widget.ScrollView//*[contains(@text, "{escaped}")]/ancestor::android.view.ViewGroup[3])[1]',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            activity._tap_element_center(driver, element)
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _android_session_location_result_score(element, search_terms: list[str]) -> int | None:
+    text = _android_session_location_result_text(element)
+    if not text:
+        return None
+    title = text.split(" ")[0].strip()
+    for term in search_terms:
+        if term and term in title:
+            return 0
+    for term in search_terms:
+        if term and text.startswith(term):
+            return 1
+    for term in search_terms:
+        if term and term in text:
+            return 2
+    return 3
+
+
+def _android_session_location_result_text(element) -> str:
+    for attr in ["text", "content-desc", "name", "label", "value"]:
+        try:
+            text = str(element.get_attribute(attr) or "").strip()
+        except (WebDriverException, AttributeError):
+            text = ""
+        if text:
+            return text
+    return ""
+
+
 def _tap_ios_session_location_result(driver: WebDriver, value: str) -> bool:
-    search_terms = _ios_session_location_search_terms(value)
+    search_terms = _session_location_search_terms(value)
     xpaths = []
     for term in search_terms:
         term = term.strip()
@@ -546,7 +646,7 @@ def _tap_ios_session_location_result(driver: WebDriver, value: str) -> bool:
     return False
 
 
-def _ios_session_location_search_terms(value: str) -> list[str]:
+def _session_location_search_terms(value: str) -> list[str]:
     terms = []
     for term in [value, value.replace("景区", "")]:
         term = term.strip()
@@ -1045,8 +1145,8 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
         "报名截止": ["day"],
         "开始时间": ["day"],
         "活动开始": ["day"],
-        "结束时间": ["day"],
-        "活动结束": ["day"],
+        "结束时间": ["day", "hour", "minute"],
+        "活动结束": ["day", "hour", "minute"],
     }.get(keyword)
     if field_order is None:
         return False

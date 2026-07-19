@@ -14,10 +14,24 @@ These notes track platform differences for the activity session management case:
 ## Android
 
 - The approved activity overflow button can be tapped using the right side of the top approved card. Android exposes `通过` as small text nodes, so filtering by badge bounds is usually stable.
-- The session date picker exposes Android picker wheel ids such as `activity-session-create-deadline-picker-day-wheel`. The current implementation adjusts only the day wheel for relative test dates, then taps the bottom-right confirm area.
+- The session date picker exposes Android picker wheel ids such as `activity-session-create-deadline-picker-day-wheel`. The current implementation adjusts the day wheel for deadline/start time, and adjusts day/hour/minute for end time, then taps the bottom-right confirm area.
 - Android Chinese input is more reliable through clipboard paste plus keycode `279` than direct `send_keys`; direct input previously produced duplicated or partial text.
 - The location drawer may stay open after selecting a result. The script verifies that the form has the selected location after dismissing the drawer.
-- For location results, the second visible result should be selected. On Android, tapping text nodes alone may not trigger row selection; the fallback taps the second row title area.
+- As of Sunday, July 19, 2026, the activity-session location drawer on Android exposes visible result rows whose title text and parent `ViewGroup` nodes are all `clickable="false"`. Plain taps on the title center, row center, left side, right side, and even `element.click()` on the title/card did not trigger selection.
+- The stable Android location strategy is now:
+  1. search by the requested keyword through clipboard paste plus keycode `279`;
+  2. collect visible first-line result titles;
+  3. score them by title match (`张家界国家森林公园` should beat unrelated rows such as `武陵源风景名胜区`);
+  4. for the best-matching title, find the sibling address `TextView`;
+  5. tap the lower part of that address row, around `y + min(height * 0.55, height - 8)`.
+- Even after the correct Android row is tapped, the form may not reflect the selected value immediately. The code now waits longer on Android, retries the result tap once if needed, and only then dismisses the drawer; iOS keeps the shorter existing wait path.
+- Diagnostic evidence from Sunday, July 19, 2026:
+  - `张家界国家森林公园` was present in the Android result list and its row container could be found at about `x=230, y=567, width=1050, height=210`.
+  - Tapping the title center (`755,636`) failed.
+  - Tapping the row center (`755,672`) failed.
+  - Tapping the address row center (`755,711`) failed.
+  - Tapping the address row lower hit area (`755,714`) closed the drawer and produced a selected value.
+- Verified on Android emulator on Sunday, July 19, 2026: `sh ./scripts/appium-android-local.sh activity-session` passed `test_user_can_add_activity_session_from_my_approved_activity`.
 
 ## iOS Real Device
 
@@ -41,5 +55,6 @@ These notes track platform differences for the activity session management case:
 ## Shared Guardrails
 
 - Do not start filling the location search until the actual `搜索地点` drawer is visible. A generic input field with `input-type="16385"` is not enough to prove the location drawer opened.
+- Do not keep the old Android heuristic "tap the second visible result title area". On Sunday, July 19, 2026, that heuristic was proven unreliable because the correct row existed (`张家界国家森林公园`) but only the lower part of its address line triggered row selection.
 - Do not treat seeing the draft title on the create form as success. The case passes only after submit exposes a success signal or returns to session management.
 - If home recovery fails but the app is already on `我的`, retry the current-page My Activity navigation before failing.

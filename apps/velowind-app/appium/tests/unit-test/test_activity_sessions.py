@@ -296,6 +296,23 @@ def test_write_android_datetime_picker_value_confirms_even_when_day_readback_doe
     assert confirmed == [True]
 
 
+def test_write_android_end_time_adjusts_day_hour_and_minute(monkeypatch):
+    driver = FakeDriver("已选择时间 07.18 10:17 取消 确认 月 日 时 分 结束时间", width=1280, height=2856)
+    captured = []
+    confirmed = []
+
+    def fake_fill(received, wheel_ids, field_order, parts):
+        captured.append((field_order, parts))
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_fill_android_datetime_picker_wheels", fake_fill)
+    monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda received: confirmed.append(True))
+
+    assert activity_sessions._write_android_datetime_picker_value(driver, "结束时间", "2026-07-29 18:00") is True
+    assert captured == [(["day", "hour", "minute"], {"month": "07", "day": "29", "hour": "18", "minute": "00"})]
+    assert confirmed == [True]
+
+
 def test_android_datetime_picker_wheel_locators_try_id_then_xpath():
     locators = activity_sessions._android_datetime_picker_wheel_locators(
         "activity-session-create-deadline-picker-month-wheel"
@@ -744,6 +761,77 @@ def test_choose_session_location_waits_for_picker_to_close_without_pressing_back
     ]
 
 
+def test_choose_session_location_retries_android_selection_before_dismissing(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区")
+    events = []
+    waits = []
+    selected_attempts = {"value": 0}
+
+    monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_session_location_selected",
+        lambda page_source: events.append("selected-check") or selected_attempts.__setitem__("value", selected_attempts["value"] + 1) or selected_attempts["value"] >= 2,
+    )
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda driver: driver.page_source)
+
+    def fake_wait_until(predicate, timeout):
+        waits.append(timeout)
+        if timeout == 5:
+            return predicate()
+        if timeout == 6:
+            return False
+        if timeout == 4:
+            return predicate() or predicate()
+        return predicate()
+
+    monkeypatch.setattr(activity_sessions, "_wait_until", fake_wait_until)
+    monkeypatch.setattr(activity_sessions, "_dismiss_session_location_modal", lambda driver: events.append("dismiss"))
+
+    assert activity_sessions._choose_session_location(driver, "张家界景区") is True
+
+    assert waits == [5, 6, 4]
+    assert events == [
+        ("search", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        "selected-check",
+        "selected-check",
+    ]
+    assert "dismiss" not in events
+
+
+def test_choose_session_location_keeps_ios_short_wait_path(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区")
+    driver.capabilities = {"platformName": "iOS"}
+    events = []
+    waits = []
+
+    monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
+    monkeypatch.setattr(activity_sessions, "_session_location_selected", lambda page_source: events.append("selected-check") or True)
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda driver: driver.page_source)
+    monkeypatch.setattr(activity_sessions, "_dismiss_session_location_modal", lambda driver: events.append("dismiss"))
+
+    def fake_wait_until(predicate, timeout):
+        waits.append(timeout)
+        return predicate()
+
+    monkeypatch.setattr(activity_sessions, "_wait_until", fake_wait_until)
+
+    assert activity_sessions._choose_session_location(driver, "张家界景区") is True
+
+    assert waits == [5, 2]
+    assert events == [
+        ("search", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        "selected-check",
+    ]
+
+
 def test_choose_session_location_dismisses_picker_when_selection_is_visible_behind_modal(monkeypatch):
     driver = FakeDriver("集合地点 搜索地点 张家界景区")
     events = []
@@ -770,6 +858,8 @@ def test_choose_session_location_dismisses_picker_when_selection_is_visible_behi
 
     assert events == [
         ("search", "张家界景区"),
+        ("tap-result", "张家界景区"),
+        "selected-check",
         ("tap-result", "张家界景区"),
         "selected-check",
         "dismiss",
@@ -843,6 +933,80 @@ def test_tap_session_location_result_uses_second_row_coordinate_when_title_locat
 
     assert driver.scripts == [
         ("mobile: clickGesture", {"x": 755, "y": 636}),
+    ]
+
+
+def test_tap_session_location_result_prefers_matching_title_text_over_plain_second_row(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区", width=1280, height=2856)
+
+    def fake_find_elements(by, xpath):
+        if "android.widget.TextView[1]" in xpath:
+            return [
+                FakeElement({"x": 278, "y": 390, "width": 954, "height": 66}, name="当前位置"),
+                FakeElement({"x": 278, "y": 603, "width": 954, "height": 66}, name="武陵源风景名胜区"),
+                FakeElement({"x": 278, "y": 816, "width": 954, "height": 66}, name="张家界景区"),
+            ]
+        return []
+
+    monkeypatch.setattr(driver, "find_elements", fake_find_elements, raising=False)
+
+    assert activity_sessions._tap_session_location_result(driver, "张家界景区") is True
+
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 755.0, "y": 849.0}),
+    ]
+
+
+def test_tap_session_location_result_prefers_matching_result_card_over_title_text(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区", width=1280, height=2856)
+    title = FakeElement({"x": 278, "y": 603, "width": 954, "height": 66}, name="张家界国家森林公园")
+    card = FakeElement({"x": 0, "y": 540, "width": 1280, "height": 180})
+
+    def fake_find_elements(by, xpath):
+        if "android.widget.TextView[1]" in xpath:
+            return [title]
+        return []
+
+    def fake_find_element(by, xpath):
+        if 'contains(@text, "张家界国家森林公园")' in xpath and "ancestor::android.view.ViewGroup" in xpath:
+            return card
+        raise activity_sessions.NoSuchElementException()
+
+    monkeypatch.setattr(driver, "find_elements", fake_find_elements, raising=False)
+    monkeypatch.setattr(driver, "find_element", fake_find_element, raising=False)
+
+    assert activity_sessions._tap_session_location_result(driver, "张家界景区") is True
+
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 640.0, "y": 630.0}),
+    ]
+
+
+def test_tap_session_location_result_prefers_matching_result_address_lower_hit_area(monkeypatch):
+    driver = FakeDriver("集合地点 搜索地点 张家界景区", width=1280, height=2856)
+    title = FakeElement({"x": 278, "y": 603, "width": 954, "height": 66}, name="张家界国家森林公园")
+    address = FakeElement({"x": 278, "y": 681, "width": 954, "height": 60}, name="湖南省张家界市武陵源区金鞭路279号")
+    card = FakeElement({"x": 230, "y": 567, "width": 1050, "height": 210})
+
+    def fake_find_elements(by, xpath):
+        if "android.widget.TextView[1]" in xpath:
+            return [title]
+        return []
+
+    def fake_find_element(by, xpath):
+        if 'contains(@text, "张家界国家森林公园")' in xpath and "following-sibling::android.widget.TextView[1]" in xpath:
+            return address
+        if 'contains(@text, "张家界国家森林公园")' in xpath and "ancestor::android.view.ViewGroup" in xpath:
+            return card
+        raise activity_sessions.NoSuchElementException()
+
+    monkeypatch.setattr(driver, "find_elements", fake_find_elements, raising=False)
+    monkeypatch.setattr(driver, "find_element", fake_find_element, raising=False)
+
+    assert activity_sessions._tap_session_location_result(driver, "张家界景区") is True
+
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 755.0, "y": 714.0}),
     ]
 
 
