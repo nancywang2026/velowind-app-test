@@ -258,7 +258,51 @@ def test_reset_session_form_to_top_skips_swipes_when_top_fields_visible(monkeypa
     assert swipes == []
 
 
-def test_write_android_datetime_picker_value_only_adjusts_day_and_confirms(monkeypatch):
+def test_leave_stale_session_form_keeps_backing_out_until_form_is_gone(monkeypatch):
+    class StaleFormDriver(FakeDriver):
+        def __init__(self):
+            super().__init__("新增场次 场次展示文案 报名截止时间 活动名额")
+            self.back_count = 0
+
+        def press_keycode(self, keycode):
+            self.back_count += 1
+            if self.back_count >= 2:
+                self.page_source = "场次管理 自动化场次 0719"
+
+    driver = StaleFormDriver()
+    taps = []
+
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda received, text, timeout=0.5: taps.append(text) or False)
+
+    activity_sessions._leave_stale_session_form(driver)
+
+    assert driver.back_count == 2
+    assert activity_sessions._session_form_visible(driver.page_source) is False
+
+
+def test_fill_session_form_does_not_accept_stale_android_datetime_value(monkeypatch):
+    draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 20))
+    driver = FakeDriver("新增场次 场次展示文案 报名截止时间 07.08 10:38 活动名额 开始时间 结束时间")
+    events = []
+
+    monkeypatch.setattr(activity_sessions, "_reset_session_form_to_top", lambda received: None)
+    monkeypatch.setattr(activity_sessions, "_is_android_driver", lambda received: True)
+    monkeypatch.setattr(activity_sessions, "_fill_session_field", lambda *args, **kwargs: True)
+    monkeypatch.setattr(activity_sessions, "_fill_session_location_field", lambda *args, **kwargs: True)
+    monkeypatch.setattr(activity_sessions, "_fill_session_datetime_field", lambda *args, **kwargs: False)
+    monkeypatch.setattr(activity_sessions, "_dismiss_session_datetime_picker", lambda received: events.append("dismiss-picker"))
+
+    try:
+        activity_sessions.fill_session_form(driver, draft)
+    except AssertionError as error:
+        assert str(error) == "Unable to fill activity session field: 报名截止时间"
+    else:
+        raise AssertionError("fill_session_form accepted a stale Android datetime value")
+
+    assert events == ["dismiss-picker"]
+
+
+def test_write_android_datetime_picker_value_adjusts_day_hour_minute_and_confirms(monkeypatch):
     current = {"month": "07", "day": "18", "hour": "10", "minute": "17"}
     driver = FakeDriver("已选择时间 07.18 10:17 取消 确认 月 日 时 分 报名截止时间", width=1280, height=2856)
 
@@ -275,25 +319,29 @@ def test_write_android_datetime_picker_value_only_adjusts_day_and_confirms(monke
         tapped.append((field, direction))
         if field == "day":
             current["day"] = "23"
+        elif field == "hour":
+            current["hour"] = "18"
+        elif field == "minute":
+            current["minute"] = "00"
         update_page_source()
 
     monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_wheel_step", fake_tap)
-    monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda driver: confirmed.append(True))
+    monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda driver: confirmed.append(True) or True)
 
     assert activity_sessions._write_android_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is True
-    assert tapped == [("day", "next")]
+    assert tapped == [("day", "next"), ("hour", "next"), ("minute", "previous")]
     assert confirmed == [True]
 
 
-def test_write_android_datetime_picker_value_confirms_even_when_day_readback_does_not_change(monkeypatch):
+def test_write_android_datetime_picker_value_rejects_current_picker_value_when_wheel_write_fails(monkeypatch):
     driver = FakeDriver("已选择时间 07.18 10:17 取消 确认 月 日 时 分 报名截止时间", width=1280, height=2856)
-    confirmed = []
+    dismissed = []
 
     monkeypatch.setattr(activity_sessions, "_fill_android_datetime_picker_wheels", lambda *args, **kwargs: False)
-    monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda driver: confirmed.append(True))
+    monkeypatch.setattr(activity_sessions, "_dismiss_session_datetime_picker", lambda received: dismissed.append(True))
 
-    assert activity_sessions._write_android_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is True
-    assert confirmed == [True]
+    assert activity_sessions._write_android_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is False
+    assert dismissed == [True]
 
 
 def test_write_android_end_time_adjusts_day_hour_and_minute(monkeypatch):
@@ -340,6 +388,47 @@ def test_android_datetime_picker_current_parts_reads_selected_time():
         "hour": "10",
         "minute": "17",
     }
+
+
+def test_android_datetime_picker_current_parts_prefers_selected_time_over_background_form_values():
+    driver = FakeDriver("报名截止时间 07.24 22:22 开始时间 07.24 22:22 已选择时间 07.10 22:22 取消 确认 月 日 时 分")
+
+    assert activity_sessions._android_datetime_picker_current_parts(driver) == {
+        "month": "07",
+        "day": "10",
+        "hour": "22",
+        "minute": "22",
+    }
+
+
+def test_android_datetime_picker_current_parts_accepts_single_digit_selected_time():
+    driver = FakeDriver("报名截止时间 06.29 20:00 已选择时间 7.20 9:03 取消 确认 月 日 时 分")
+
+    assert activity_sessions._android_datetime_picker_current_parts(driver) == {
+        "month": "07",
+        "day": "20",
+        "hour": "09",
+        "minute": "03",
+    }
+
+
+def test_android_datetime_picker_drag_uses_calculated_step_count(monkeypatch):
+    driver = FakeDriver("报名截止时间 已选择时间 07.18 10:17 月 日 时 分", width=1280, height=2856)
+    current = {"minute": "17"}
+    drags = []
+
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", lambda received: current.copy())
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_wheel_step", lambda *args, **kwargs: None)
+
+    def fake_drag(received, field, direction, *, steps=1):
+        drags.append((field, direction, steps))
+        if (field, direction, steps) == ("minute", "down", 3):
+            current["minute"] = "00"
+
+    monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel", fake_drag)
+
+    assert activity_sessions._drag_android_datetime_picker_wheel_to_target(driver, "minute", "00") is True
+    assert drags == [("minute", "down", 3)]
 
 
 def test_ios_datetime_picker_visible_accepts_custom_session_picker():
@@ -570,12 +659,145 @@ def test_fill_android_datetime_picker_wheels_prefers_direct_day_set(monkeypatch)
     assert calls == [("activity-session-create-deadline-picker-day-wheel", "day", "23")]
 
 
+def test_fill_android_datetime_picker_wheels_uses_step_fallback_for_day(monkeypatch):
+    driver = FakeDriver("已选择时间 07.31 22:22 月 日 时 分", width=1280, height=2856)
+    calls = []
+    current = {"day": "31"}
+
+    def fake_tap(received, field, direction):
+        calls.append((field, direction))
+        current["day"] = "23"
+
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", lambda received: dict(current))
+    monkeypatch.setattr(activity_sessions, "_set_android_datetime_picker_wheel_value", lambda *args, **kwargs: False)
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_wheel_step", fake_tap)
+
+    assert activity_sessions._fill_android_datetime_picker_wheels(
+        driver,
+        {"day": "activity-session-create-deadline-picker-day-wheel"},
+        ["day"],
+        {"day": "23"},
+    ) is True
+    assert calls == [("day", "previous")]
+
+
+def test_android_datetime_picker_taps_visible_value_in_scoped_wheel(monkeypatch):
+    current = {"day": "25"}
+    driver = FakeDriver("已选择时间 07.25 22:22 月 日 时 分", width=1280, height=2856)
+    tapped = []
+
+    class VisibleValue:
+        rect = {"x": 352, "y": 2163, "width": 273, "height": 92}
+
+        def is_displayed(self):
+            return True
+
+    def fake_find_elements(by, xpath):
+        if '@resource-id="activity-session-create-deadline-picker-day-wheel"' in xpath and '@text="24"' in xpath:
+            return [VisibleValue()]
+        return []
+
+    driver.find_elements = fake_find_elements
+
+    def fake_tap_element_center(received, element):
+        tapped.append(element.rect)
+        current["day"] = "24"
+
+    monkeypatch.setattr(activity_sessions.activity, "_tap_element_center", fake_tap_element_center)
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", lambda received: dict(current))
+
+    assert activity_sessions._tap_android_datetime_picker_visible_wheel_value(
+        driver,
+        "activity-session-create-deadline-picker-day-wheel",
+        "day",
+        "24",
+    ) is True
+    assert tapped == [{"x": 352, "y": 2163, "width": 273, "height": 92}]
+
+
+def test_android_datetime_picker_taps_visible_value_from_page_source(monkeypatch):
+    current = {"day": "25"}
+    page_source = """
+    <hierarchy>
+      <android.view.ViewGroup resource-id="activity-session-create-deadline-picker-day-wheel" bounds="[352,2163][625,2481]">
+        <android.widget.TextView text="24" bounds="[352,2163][625,2255]" />
+        <android.widget.TextView text="25" bounds="[352,2256][625,2388]" />
+        <android.widget.TextView text="26" bounds="[352,2389][625,2481]" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    class TapDriver(FakeDriver):
+        def execute_script(self, script, payload):
+            super().execute_script(script, payload)
+            current["day"] = "24"
+
+    driver = TapDriver(page_source, width=1280, height=2856)
+
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", lambda received: dict(current))
+
+    assert activity_sessions._tap_android_datetime_picker_visible_wheel_value(
+        driver,
+        "activity-session-create-deadline-picker-day-wheel",
+        "day",
+        "24",
+    ) is True
+    assert driver.scripts == [("mobile: tap", {"x": 488, "y": 2209})]
+
+
+def test_drag_android_datetime_picker_wheel_moves_down_direction_toward_previous_value():
+    driver = FakeDriver(width=1280, height=2856)
+
+    activity_sessions._drag_android_datetime_picker_wheel(driver, "day", "down", steps=1)
+
+    assert driver.scripts == [
+        (
+            "swipe",
+            {
+                "start_x": 485,
+                "start_y": 2321,
+                "end_x": 485,
+                "end_y": 2463,
+                "duration": 450,
+            },
+        )
+    ]
+
+
+def test_tap_android_datetime_picker_wheel_step_uses_bottom_row_for_next_value():
+    driver = FakeDriver(width=1280, height=2856)
+
+    activity_sessions._tap_android_datetime_picker_wheel_step(driver, "hour", "next")
+
+    assert driver.scripts == [("mobile: tap", {"x": 784, "y": 2435})]
+
+
+def test_drag_android_datetime_picker_wheel_to_target_drags_when_step_does_not_change_value(monkeypatch):
+    driver = FakeDriver(width=1280, height=2856)
+    current = {"hour": "22"}
+    calls = []
+
+    def fake_drag(received, field, direction, steps=1):
+        calls.append(("drag", field, direction, steps))
+        current["hour"] = "18"
+
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", lambda received: dict(current))
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_wheel_step", lambda received, field, direction: calls.append(("tap", field, direction)))
+    monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel", fake_drag)
+
+    assert activity_sessions._drag_android_datetime_picker_wheel_to_target(driver, "hour", "18") is True
+    assert calls == [
+        ("tap", "hour", "previous"),
+        ("drag", "hour", "down", 3),
+    ]
+
+
 def test_build_activity_session_draft_uses_required_relative_dates():
     draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 17))
 
-    assert draft.signup_deadline == "2026-07-21 18:00"
-    assert draft.start_time == "2026-07-22 09:00"
-    assert draft.end_time == "2026-07-27 18:00"
+    assert draft.signup_deadline == "2026-07-22 18:00"
+    assert draft.start_time == "2026-07-23 09:00"
+    assert draft.end_time == "2026-07-23 18:00"
     assert draft.meeting_point == "张家界景区"
     assert draft.max_participants == "20"
     assert draft.fee == "0.01"

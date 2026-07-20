@@ -80,6 +80,28 @@ def test_android_activity_publish_suite_uses_platform_neutral_activity_case():
     assert suite.pytest_args == ["--maxfail=1"]
 
 
+def test_android_full_suite_contains_required_regression_cases():
+    suite_file = (
+        Path(run_android_tests.REPO_ROOT)
+        / "apps"
+        / "velowind-app"
+        / "appium"
+        / "test-suites"
+        / "android-full.yaml"
+    )
+
+    suite = run_android_tests.load_test_suite(suite_file)
+
+    assert suite.tests == [
+        "message/test_ios_search_note.py",
+        "message/test_ios_home_note_interactions.py",
+        "message/test_ios_publish_note.py",
+        "activity/test_publish_activity.py",
+        "activity/test_manage_activity_session.py",
+    ]
+    assert suite.pytest_args == ["--maxfail=1"]
+
+
 def test_android_runner_selects_android_platform(monkeypatch):
     monkeypatch.delenv("VW_APPIUM_PLATFORM", raising=False)
     monkeypatch.setattr(run_android_tests.sys, "argv", ["run_android_tests", "--all"])
