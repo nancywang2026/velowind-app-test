@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time as datetime_time, timedelta
 import re
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -33,9 +34,9 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     base_date = today or date.today()
     return ActivitySessionDraft(
         title=f"自动化场次 {base_date:%m%d}",
-        signup_deadline=_format_datetime(base_date + timedelta(days=4), datetime_time(18, 0)),
-        start_time=_format_datetime(base_date + timedelta(days=5), datetime_time(9, 0)),
-        end_time=_format_datetime(base_date + timedelta(days=10), datetime_time(18, 0)),
+        signup_deadline=_format_datetime(base_date + timedelta(days=5), datetime_time(18, 0)),
+        start_time=_format_datetime(base_date + timedelta(days=6), datetime_time(9, 0)),
+        end_time=_format_datetime(base_date + timedelta(days=6), datetime_time(18, 0)),
         meeting_point="张家界景区",
         max_participants="20",
         fee="0.01",
@@ -51,6 +52,7 @@ def _format_datetime(day: date, clock: datetime_time) -> str:
 
 def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
     dismiss_common_system_alerts(driver)
+    _leave_stale_session_form(driver)
     try:
         open_my_activity_publish_list(driver, timeout=min(timeout, 20))
     except AssertionError:
@@ -159,6 +161,8 @@ def fill_session_form(driver: WebDriver, draft: ActivitySessionDraft, timeout: i
             else _fill_session_field(driver, keywords, value)
         )
         if not filled:
+            if is_datetime and _is_android_driver(driver):
+                _dismiss_session_datetime_picker(driver)
             raise AssertionError(f"Unable to fill activity session field: {keywords[0]}")
         if is_location:
             if not _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=5):
@@ -724,6 +728,44 @@ def _dismiss_session_location_modal(driver: WebDriver) -> None:
             return
 
 
+def _leave_stale_session_form(driver: WebDriver) -> None:
+    for _ in range(4):
+        page_source = _safe_page_source(driver)
+        if "已选择时间" in page_source:
+            _dismiss_session_datetime_picker(driver)
+            page_source = _safe_page_source(driver)
+        if not _session_form_visible(page_source):
+            return
+        try:
+            driver.press_keycode(4)
+        except (WebDriverException, AttributeError):
+            try:
+                driver.back()
+            except (WebDriverException, AttributeError):
+                pass
+        time.sleep(0.5)
+        for text in ["不保存", "放弃", "确认", "确定", "离开", "取消"]:
+            if tap_text_if_present(driver, text, timeout=0.5):
+                time.sleep(0.5)
+                break
+        if not _session_form_visible(_safe_page_source(driver)):
+            return
+
+
+def _dismiss_session_datetime_picker(driver: WebDriver) -> None:
+    if "已选择时间" not in _safe_page_source(driver):
+        return
+    for text in ["取消", "关闭"]:
+        if tap_text_if_present(driver, text, timeout=0.5):
+            time.sleep(0.5)
+            return
+    try:
+        driver.press_keycode(4)
+        time.sleep(0.5)
+    except (WebDriverException, AttributeError):
+        pass
+
+
 def _session_location_selected(page_source: str) -> bool:
     return (
         _session_form_visible(page_source)
@@ -918,6 +960,11 @@ def _tap_ios_point(driver: WebDriver, x: int, y: int) -> None:
 def _is_ios_driver(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     return str(capabilities.get("platformName", "")).lower() == "ios"
+
+
+def _is_android_driver(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    return str(capabilities.get("platformName", "")).lower() == "android"
 
 
 def _ios_datetime_picker_visible(page_source: str) -> bool:
@@ -1141,10 +1188,10 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
     if not _wait_until(lambda: _android_datetime_picker_visible(_safe_page_source(driver), keyword), timeout=3):
         return False
     field_order = {
-        "报名截止时间": ["day"],
-        "报名截止": ["day"],
-        "开始时间": ["day"],
-        "活动开始": ["day"],
+        "报名截止时间": ["day", "hour", "minute"],
+        "报名截止": ["day", "hour", "minute"],
+        "开始时间": ["day", "hour", "minute"],
+        "活动开始": ["day", "hour", "minute"],
         "结束时间": ["day", "hour", "minute"],
         "活动结束": ["day", "hour", "minute"],
     }.get(keyword)
@@ -1157,7 +1204,9 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
         "hour": "activity-session-create-deadline-picker-hour-wheel",
         "minute": "activity-session-create-deadline-picker-minute-wheel",
     }
-    _fill_android_datetime_picker_wheels(driver, wheel_ids, field_order, parts)
+    if not _fill_android_datetime_picker_wheels(driver, wheel_ids, field_order, parts):
+        _dismiss_session_datetime_picker(driver)
+        return False
     _confirm_session_picker(driver)
     return True
 
@@ -1172,22 +1221,15 @@ def _fill_android_datetime_picker_wheels(
         wheel_id = wheel_ids.get(field)
         if wheel_id and _set_android_datetime_picker_wheel_value(driver, wheel_id, field, parts[field]):
             continue
-        if field == "day":
-            current = _android_datetime_picker_current_parts(driver) or {}
-            direction_and_steps = _android_datetime_picker_drag_direction_and_steps(field, current.get(field), parts[field])
-            if direction_and_steps is not None:
-                direction, steps = direction_and_steps
-                _drag_android_datetime_picker_wheel(driver, field, direction, steps=steps)
-                time.sleep(0.2)
-                current = _android_datetime_picker_current_parts(driver)
-                if current and current.get(field) == parts[field]:
-                    continue
         if not _drag_android_datetime_picker_wheel_to_target(driver, field, parts[field]):
             return False
     return True
 
 
 def _set_android_datetime_picker_wheel_value(driver: WebDriver, wheel_id: str, field: str, value: str) -> bool:
+    if _tap_android_datetime_picker_visible_wheel_value(driver, wheel_id, field, value):
+        return True
+
     wheel = None
     for locator in _android_datetime_picker_wheel_locators(wheel_id):
         for _ in range(10):
@@ -1212,6 +1254,84 @@ def _set_android_datetime_picker_wheel_value(driver: WebDriver, wheel_id: str, f
         )
     except (WebDriverException, AttributeError):
         return False
+
+
+def _tap_android_datetime_picker_visible_wheel_value(driver: WebDriver, wheel_id: str, field: str, value: str) -> bool:
+    current = _android_datetime_picker_current_parts(driver) or {}
+    if current.get(field) == value:
+        return True
+
+    for x, y in _android_datetime_picker_visible_value_points(_safe_page_source(driver), wheel_id, value):
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+        except WebDriverException:
+            continue
+        if _wait_until(
+            lambda: (_android_datetime_picker_current_parts(driver) or {}).get(field) == value,
+            timeout=1.5,
+        ):
+            return True
+
+    escaped_wheel_id = wheel_id.replace('"', '\\"')
+    escaped_value = value.replace('"', '\\"')
+    try:
+        elements = driver.find_elements(
+            AppiumBy.XPATH,
+            f'//*[@resource-id="{escaped_wheel_id}"]//*[@text="{escaped_value}"]',
+        )
+    except (WebDriverException, AttributeError):
+        elements = []
+
+    candidates = []
+    for element in elements:
+        try:
+            if not element.is_displayed():
+                continue
+            rect = element.rect
+            y = int(rect["y"])
+            height = int(rect["height"])
+        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+            continue
+        candidates.append((abs((y + height / 2) - 2322), element))
+
+    for _distance, element in sorted(candidates, key=lambda item: item[0]):
+        try:
+            activity._tap_element_center(driver, element)
+        except (WebDriverException, AttributeError):
+            continue
+        if _wait_until(
+            lambda: (_android_datetime_picker_current_parts(driver) or {}).get(field) == value,
+            timeout=1.5,
+        ):
+            return True
+    return False
+
+
+def _android_datetime_picker_visible_value_points(page_source: str, wheel_id: str, value: str) -> list[tuple[int, int]]:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    points = []
+    for wheel in root.iter():
+        if wheel.attrib.get("resource-id") != wheel_id:
+            continue
+        for element in wheel.iter():
+            if element.attrib.get("text") != value:
+                continue
+            center = _android_bounds_center(element.attrib.get("bounds", ""))
+            if center is not None:
+                points.append(center)
+    return points
+
+
+def _android_bounds_center(bounds: str) -> tuple[int, int] | None:
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", bounds)
+    if not match:
+        return None
+    left, top, right, bottom = (int(value) for value in match.groups())
+    return (left + right) // 2, (top + bottom) // 2
 
 
 def _android_datetime_picker_wheel_locators(wheel_id: str) -> list[tuple[str, str]]:
@@ -1244,6 +1364,14 @@ def _drag_android_datetime_picker_wheel_to_target(driver: WebDriver, field: str,
             return False
         _tap_android_datetime_picker_wheel_step(driver, field, step_direction)
         time.sleep(0.1)
+        after_step = _android_datetime_picker_current_parts(driver)
+        if after_step and after_step.get(field) != current_value:
+            continue
+        drag_direction = _android_datetime_picker_drag_direction(field, current_value, target)
+        if drag_direction is None:
+            return False
+        _drag_android_datetime_picker_wheel(driver, field, drag_direction, steps=1)
+        time.sleep(0.15)
 
     current = _android_datetime_picker_current_parts(driver)
     return bool(current and current.get(field) == target)
@@ -1345,10 +1473,11 @@ def _android_datetime_picker_current_parts(driver: WebDriver) -> dict[str, str] 
     page_source = _safe_page_source(driver)
     match = None
     for pattern in [
+        r"已选择时间.*?(\d{2})\.(\d{2})\s+(\d{2}):(\d{2})",
         r"(\d{2})\.(\d{2})\s+(\d{2}):(\d{2})",
         r"(\d{2})[.](\d{2})\s+(\d{2}):(\d{2})",
     ]:
-        match = re.search(pattern, page_source)
+        match = re.search(pattern, page_source, re.DOTALL)
         if match:
             break
     if not match:

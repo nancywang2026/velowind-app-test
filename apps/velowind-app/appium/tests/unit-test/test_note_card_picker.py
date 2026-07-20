@@ -92,3 +92,43 @@ def test_tap_note_card_reads_android_author_without_user_prefix():
         verify_open=lambda: bool(taps),
     ) is True
     assert taps == [("mobile: tap", {"x": 273, "y": 897})]
+
+
+def test_android_note_card_reader_accepts_tall_two_column_cards():
+    page_source = """
+    <hierarchy>
+      <android.view.ViewGroup bounds="[15,363][633,1553]">
+        <android.view.ViewGroup bounds="[15,363][633,1184]">
+          <android.widget.ImageView resource-id="image" bounds="[15,363][633,1184]" />
+        </android.view.ViewGroup>
+        <android.widget.TextView text="长白山真的有种让人瞬间安静下来的魔力" bounds="[36,1205][612,1337]" />
+        <android.widget.TextView text="#旅行日记" bounds="[63,1376][219,1418]" />
+        <android.widget.ImageView resource-id="image" bounds="[36,1468][90,1522]" />
+        <android.widget.TextView text="Nancy" bounds="[105,1471][456,1519]" />
+        <android.widget.TextView text="赞" bounds="[552,1471][591,1519]" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    assert note_card_picker._note_card_rects_from_source(page_source) == [(15, 363, 618, 1190)]
+
+
+def test_android_note_card_reader_accepts_card_with_like_icon_without_like_text():
+    page_source = """
+    <hierarchy>
+      <android.view.ViewGroup bounds="[648,363][1265,1552]">
+        <android.view.ViewGroup bounds="[648,363][1265,1183]">
+          <android.widget.ImageView resource-id="image" bounds="[648,363][1265,1183]" />
+        </android.view.ViewGroup>
+        <android.widget.TextView text="长白山真的有种让人瞬间安静下来的魔力" bounds="[669,1204][1244,1336]" />
+        <android.widget.TextView text="#长白山" bounds="[696,1375][819,1417]" />
+        <android.widget.ImageView resource-id="image" bounds="[669,1467][723,1521]" />
+        <android.widget.TextView text="Nancy" bounds="[738,1470][1105,1518]" />
+        <android.view.ViewGroup bounds="[1127,1456][1245,1531]">
+          <com.horcrux.svg.SvgView bounds="[1148,1471][1193,1516]" />
+        </android.view.ViewGroup>
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    assert note_card_picker._note_card_rects_from_source(page_source) == [(648, 363, 617, 1189)]

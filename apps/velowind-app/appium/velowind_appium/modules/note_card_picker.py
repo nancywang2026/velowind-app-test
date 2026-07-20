@@ -181,9 +181,7 @@ def _android_note_card_rects_from_source(page_source: str) -> list[tuple[int, in
             child.tag == "android.widget.ImageView" and child.attrib.get("resource-id") == "image"
             for child in descendants
         )
-        has_author = any(text.startswith("用户 ") for text in texts) or (
-            image_count >= 2 and "赞" in texts
-        )
+        has_author = any(text.startswith("用户 ") for text in texts) or image_count >= 2
         has_image = any(
             child.tag == "android.widget.ImageView" and child.attrib.get("resource-id") == "image"
             for child in descendants
@@ -198,7 +196,7 @@ def _android_note_card_rects_from_source(page_source: str) -> list[tuple[int, in
         if not rect or not (has_author and has_image and has_title):
             continue
         _, _, width, height = rect
-        if 300 <= width <= 700 and 200 <= height <= 1000:
+        if 300 <= width <= 700 and 200 <= height <= 1300:
             rects.add(rect)
     return sorted(rects, key=lambda item: (item[1], item[0]))
 

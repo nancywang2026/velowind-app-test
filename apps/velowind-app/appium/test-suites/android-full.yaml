@@ -1,0 +1,13 @@
+tests:
+  # 浏览笔记
+  - message/test_ios_search_note.py
+  # 评论笔记、收藏和点赞笔记
+  - message/test_ios_home_note_interactions.py
+  # 发布笔记
+  - message/test_ios_publish_note.py
+  # 发布活动
+  - activity/test_publish_activity.py
+  # 增加场次
+  - activity/test_manage_activity_session.py
+pytest_args:
+  - --maxfail=1
