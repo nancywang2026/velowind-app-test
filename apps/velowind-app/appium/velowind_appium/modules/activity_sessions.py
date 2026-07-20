@@ -1367,10 +1367,11 @@ def _drag_android_datetime_picker_wheel_to_target(driver: WebDriver, field: str,
         after_step = _android_datetime_picker_current_parts(driver)
         if after_step and after_step.get(field) != current_value:
             continue
-        drag_direction = _android_datetime_picker_drag_direction(field, current_value, target)
-        if drag_direction is None:
+        direction_and_steps = _android_datetime_picker_drag_direction_and_steps(field, current_value, target)
+        if direction_and_steps is None:
             return False
-        _drag_android_datetime_picker_wheel(driver, field, drag_direction, steps=1)
+        drag_direction, drag_steps = direction_and_steps
+        _drag_android_datetime_picker_wheel(driver, field, drag_direction, steps=drag_steps)
         time.sleep(0.15)
 
     current = _android_datetime_picker_current_parts(driver)
@@ -1386,6 +1387,11 @@ def _drag_android_datetime_picker_wheel(driver: WebDriver, field: str, direction
     center_x, center_y = _android_datetime_picker_wheel_center(rect, field)
     delta = max(72, int(rect["height"] * 0.05)) * max(1, min(3, steps))
     end_y = center_y - delta if direction == "up" else center_y + delta
+    try:
+        driver.swipe(center_x, center_y, center_x, end_y, duration=450)
+        return
+    except (WebDriverException, AttributeError):
+        pass
     try:
         driver.execute_script(
             "mobile: dragGesture",
@@ -1473,9 +1479,9 @@ def _android_datetime_picker_current_parts(driver: WebDriver) -> dict[str, str] 
     page_source = _safe_page_source(driver)
     match = None
     for pattern in [
-        r"已选择时间.*?(\d{2})\.(\d{2})\s+(\d{2}):(\d{2})",
-        r"(\d{2})\.(\d{2})\s+(\d{2}):(\d{2})",
-        r"(\d{2})[.](\d{2})\s+(\d{2}):(\d{2})",
+        r"已选择时间.*?(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{1,2})",
+        r"(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{1,2})",
+        r"(\d{1,2})[.](\d{1,2})\s+(\d{1,2}):(\d{1,2})",
     ]:
         match = re.search(pattern, page_source, re.DOTALL)
         if match:
@@ -1483,7 +1489,12 @@ def _android_datetime_picker_current_parts(driver: WebDriver) -> dict[str, str] 
     if not match:
         return None
     month, day, hour, minute = match.groups()
-    return {"month": month, "day": day, "hour": hour, "minute": minute}
+    return {
+        "month": f"{int(month):02d}",
+        "day": f"{int(day):02d}",
+        "hour": f"{int(hour):02d}",
+        "minute": f"{int(minute):02d}",
+    }
 
 
 def _android_datetime_picker_visible(page_source: str, keyword: str) -> bool:

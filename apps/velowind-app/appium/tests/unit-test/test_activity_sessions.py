@@ -401,6 +401,36 @@ def test_android_datetime_picker_current_parts_prefers_selected_time_over_backgr
     }
 
 
+def test_android_datetime_picker_current_parts_accepts_single_digit_selected_time():
+    driver = FakeDriver("报名截止时间 06.29 20:00 已选择时间 7.20 9:03 取消 确认 月 日 时 分")
+
+    assert activity_sessions._android_datetime_picker_current_parts(driver) == {
+        "month": "07",
+        "day": "20",
+        "hour": "09",
+        "minute": "03",
+    }
+
+
+def test_android_datetime_picker_drag_uses_calculated_step_count(monkeypatch):
+    driver = FakeDriver("报名截止时间 已选择时间 07.18 10:17 月 日 时 分", width=1280, height=2856)
+    current = {"minute": "17"}
+    drags = []
+
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", lambda received: current.copy())
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_wheel_step", lambda *args, **kwargs: None)
+
+    def fake_drag(received, field, direction, *, steps=1):
+        drags.append((field, direction, steps))
+        if (field, direction, steps) == ("minute", "down", 3):
+            current["minute"] = "00"
+
+    monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel", fake_drag)
+
+    assert activity_sessions._drag_android_datetime_picker_wheel_to_target(driver, "minute", "00") is True
+    assert drags == [("minute", "down", 3)]
+
+
 def test_ios_datetime_picker_visible_accepts_custom_session_picker():
     page_source = "报名截止时间 已选择时间 7月18日 22点 取消 确认 月 日 时"
 
@@ -722,13 +752,13 @@ def test_drag_android_datetime_picker_wheel_moves_down_direction_toward_previous
 
     assert driver.scripts == [
         (
-            "mobile: dragGesture",
+            "swipe",
             {
-                "startX": 485,
-                "startY": 2321,
-                "endX": 485,
-                "endY": 2463,
-                "speed": 1800,
+                "start_x": 485,
+                "start_y": 2321,
+                "end_x": 485,
+                "end_y": 2463,
+                "duration": 450,
             },
         )
     ]
@@ -758,7 +788,7 @@ def test_drag_android_datetime_picker_wheel_to_target_drags_when_step_does_not_c
     assert activity_sessions._drag_android_datetime_picker_wheel_to_target(driver, "hour", "18") is True
     assert calls == [
         ("tap", "hour", "previous"),
-        ("drag", "hour", "down", 1),
+        ("drag", "hour", "down", 3),
     ]
 
 
