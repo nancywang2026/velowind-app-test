@@ -513,11 +513,7 @@ def submit_message_comment(driver: WebDriver, comment_text: str, timeout: int = 
         raise AssertionError("Unable to open the comment entry point from message detail")
 
     input_box = _find_comment_input(driver, timeout=timeout)
-    try:
-        input_box.clear()
-    except WebDriverException:
-        pass
-    input_box.send_keys(comment_text)
+    _enter_comment_text(driver, input_box, comment_text)
 
     if not _tap_candidate(driver, COMMENT_SUBMIT_IDS, COMMENT_SUBMIT_TEXTS):
         input_box.send_keys("\n")
@@ -2905,6 +2901,50 @@ def _find_comment_input(driver: WebDriver, timeout: int):
         time.sleep(0.2)
 
     raise AssertionError("Unable to locate the message comment input")
+
+
+def _enter_comment_text(driver: WebDriver, input_box, comment_text: str) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+
+    try:
+        input_box.click()
+    except (AttributeError, WebDriverException):
+        pass
+    try:
+        input_box.clear()
+    except WebDriverException:
+        pass
+
+    if is_ios:
+        for enter_method in (
+            lambda: input_box.set_value(comment_text),
+            lambda: input_box.send_keys(comment_text),
+        ):
+            try:
+                enter_method()
+            except (AttributeError, WebDriverException):
+                continue
+            if _wait_until(lambda: _comment_input_contains(input_box, comment_text), timeout=2):
+                return
+            try:
+                input_box.clear()
+            except WebDriverException:
+                pass
+        raise AssertionError(f"Unable to enter the full comment text on iOS: {comment_text}")
+
+    input_box.send_keys(comment_text)
+
+
+def _comment_input_contains(input_box, expected_text: str) -> bool:
+    for attribute in ["value", "name", "label", "text"]:
+        try:
+            actual = str(input_box.get_attribute(attribute) or "")
+        except (AttributeError, WebDriverException):
+            continue
+        if expected_text in actual:
+            return True
+    return False
 
 
 def _wait_for_comment_echo(

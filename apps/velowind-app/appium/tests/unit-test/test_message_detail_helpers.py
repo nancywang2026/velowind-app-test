@@ -620,6 +620,55 @@ def test_submit_comment_uses_android_bottom_comment_action_when_entry_id_is_miss
     assert events == [("tap", 2), "clear", ("send-keys", "自动化评论"), "wait-echo"]
 
 
+def test_submit_comment_uses_ios_set_value_and_verifies_full_text(monkeypatch):
+    events = []
+    entered = {"value": ""}
+
+    class FakeInput:
+        @staticmethod
+        def click():
+            events.append("click-input")
+
+        @staticmethod
+        def clear():
+            events.append("clear")
+            entered["value"] = ""
+
+        @staticmethod
+        def set_value(value):
+            events.append(("set-value", value))
+            entered["value"] = value
+
+        @staticmethod
+        def send_keys(value):
+            events.append(("send-keys", value))
+
+        @staticmethod
+        def get_attribute(attribute):
+            return entered["value"] if attribute == "value" else ""
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"]))
+    monkeypatch.setattr(message_detail, "_tap_candidate", lambda driver, ids, texts: events.append(("tap-candidate", tuple(texts))) or True)
+    monkeypatch.setattr(message_detail, "_find_comment_input", lambda driver, timeout: FakeInput())
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_for_comment_echo", lambda *args, **kwargs: events.append("wait-echo"))
+
+    message_detail.submit_message_comment(FakeDriver(), "自动化测试留言", timeout=3)
+
+    assert events == [
+        ("tap-candidate", tuple(message_detail.COMMENT_ENTRY_TEXTS)),
+        "click-input",
+        "clear",
+        ("set-value", "自动化测试留言"),
+        ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)),
+        "wait-echo",
+    ]
+
+
 def test_find_comment_input_supports_android_edit_text():
     expected = object()
 

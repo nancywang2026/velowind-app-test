@@ -71,9 +71,23 @@ def tap_note_card_at_ordinal(
     if len(rects) < ordinal:
         return False
 
-    for x, y in _dedupe_points(_tap_points_for_card_rect(rects[ordinal - 1])):
-        if _tap_point(driver, x, y) and _opened(verify_open, timeout):
-            return True
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios" or "<XCUIElementType" in source
+    title_rects = _note_title_rects_from_source(source) if is_ios else []
+
+    tap_rects: list[tuple[int, int, int, int]] = []
+    if ordinal <= len(title_rects):
+        tap_rects.append(title_rects[ordinal - 1])
+    tap_rects.append(rects[ordinal - 1])
+
+    seen_rects: set[tuple[int, int, int, int]] = set()
+    for rect in tap_rects:
+        if rect in seen_rects:
+            continue
+        seen_rects.add(rect)
+        for x, y in _dedupe_points(_tap_points_for_card_rect(rect)):
+            if _tap_point(driver, x, y) and _opened(verify_open, timeout):
+                return True
     return False
 
 
@@ -210,6 +224,11 @@ def _android_rect_from_bounds(bounds: str) -> tuple[int, int, int, int] | None:
 
 
 def _first_note_title_rect_from_source(page_source: str) -> tuple[int, int, int, int] | None:
+    rects = _note_title_rects_from_source(page_source)
+    return rects[0] if rects else None
+
+
+def _note_title_rects_from_source(page_source: str) -> list[tuple[int, int, int, int]]:
     rects: list[tuple[int, int, int, int]] = []
     for tag in re.findall(r"<XCUIElementTypeStaticText\b[^>]*>", page_source):
         attrs = _xml_tag_attrs(tag)
@@ -220,17 +239,20 @@ def _first_note_title_rect_from_source(page_source: str) -> tuple[int, int, int,
         x, y, width, height = rect
         if _looks_like_note_title(text, x, y, width, height):
             rects.append(rect)
-    return sorted(rects, key=lambda item: (item[0], item[1]))[0] if rects else None
+    return sorted(rects, key=lambda item: (item[1], item[0]))
 
 
 def _looks_like_note_card(text: str, x: int, y: int, width: int, height: int) -> bool:
-    if y < 120 or width < 150 or width > 220 or height < 70:
+    if y < 120 or width < 150 or width > 220 or height < 70 or height > 500:
         return False
-    if not text or "用户" not in text:
+    if not text:
         return False
     if "首页 活动 消息 我的" in text or "Vertical scroll bar" in text:
         return False
     if text.startswith("用户 "):
+        return False
+    has_note_signal = "#" in text or "赞" in text or bool(re.search(r"\s\d+$", text))
+    if not ("用户" in text or has_note_signal):
         return False
     return 0 <= x <= 430
 
