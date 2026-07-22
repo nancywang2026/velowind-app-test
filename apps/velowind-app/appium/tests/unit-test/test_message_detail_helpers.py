@@ -4,6 +4,7 @@ import pytest
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 
 from velowind_appium.modules.message_detail import (
+    MessageNoteDraft,
     build_changbaishan_note_draft,
     list_message_note_use_case_ids,
     load_message_note_draft,
@@ -743,6 +744,56 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
     message_detail._upload_note_image(object(), draft)
 
     assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", 1, False, True)]
+
+
+def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypatch):
+    calls = []
+    state = {"count": 0}
+    draft = MessageNoteDraft(
+        title="title",
+        body="body",
+        topics=[],
+        location="",
+        album="云南洱海",
+        picture_index=1,
+        picture_indexes=(1, 2, 3),
+    )
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    def choose_photo_from_library(
+        driver,
+        album_name=None,
+        picture_index=1,
+        picture_indexes=(),
+        select_all_from_album=True,
+        retry_sheet_option=None,
+    ):
+        calls.append(("choose-photo", album_name, picture_index, picture_indexes, select_all_from_album))
+        if picture_indexes:
+            state["count"] = 1
+        else:
+            state["count"] += 1
+        return True
+
+    monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
+    monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: calls.append("tap-plus") or True)
+    monkeypatch.setattr(message_detail.photo_picker, "choose_photo_from_library", choose_photo_from_library)
+    monkeypatch.setattr(message_detail, "_note_selected_image_count", lambda driver: state["count"])
+    monkeypatch.setattr(message_detail, "_wait_for_note_selected_image_count", lambda driver, expected_count: state["count"] >= expected_count)
+
+    message_detail._upload_note_image(FakeDriver(), draft)
+
+    assert calls == [
+        "clear",
+        "tap-plus",
+        ("choose-photo", "云南洱海", 1, (1, 2, 3), True),
+        "tap-plus",
+        ("choose-photo", "云南洱海", 2, (), False),
+        "tap-plus",
+        ("choose-photo", "云南洱海", 3, (), False),
+    ]
 
 
 def test_android_note_image_plus_taps_first_image_slot_center():
