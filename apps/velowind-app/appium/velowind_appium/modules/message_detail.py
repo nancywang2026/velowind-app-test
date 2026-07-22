@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -23,7 +24,7 @@ from velowind_appium.actions import (
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
 import velowind_appium.modules.photo_picker as photo_picker
-from velowind_appium.modules.note_card_picker import tap_first_note_card, tap_note_card_at_ordinal
+from velowind_appium.modules.note_card_picker import tap_first_note_card
 
 
 DETAIL_READY_IDS = [
@@ -513,11 +514,7 @@ def submit_message_comment(driver: WebDriver, comment_text: str, timeout: int = 
         raise AssertionError("Unable to open the comment entry point from message detail")
 
     input_box = _find_comment_input(driver, timeout=timeout)
-    try:
-        input_box.clear()
-    except WebDriverException:
-        pass
-    input_box.send_keys(comment_text)
+    _enter_comment_text(driver, input_box, comment_text)
 
     if not _tap_candidate(driver, COMMENT_SUBMIT_IDS, COMMENT_SUBMIT_TEXTS):
         input_box.send_keys("\n")
@@ -958,26 +955,29 @@ def _tap_first_note_search_result(driver: WebDriver) -> bool:
     if str(capabilities.get("platformName", "")).lower() == "android":
         if _tap_first_android_note_search_result(driver):
             return True
-    for page_index in range(3):
-        page_source = _safe_page_source(driver)
-        if tap_first_note_card(
-            driver,
-            page_source=page_source,
-            verify_open=lambda: message_detail_is_visible(driver),
-        ):
-            return True
-        for ordinal in range(2, 7):
-            if tap_note_card_at_ordinal(
-                driver,
-                ordinal=ordinal,
-                page_source=page_source,
-                verify_open=lambda: message_detail_is_visible(driver),
-                timeout=1.2,
-            ):
-                return True
-        if page_index < 2:
-            swipe_vertical(driver, direction="up")
-            time.sleep(0.3)
+    verify_open = lambda: message_detail_is_visible(driver)
+    page_source = _safe_page_source(driver)
+    if tap_first_note_card(
+        driver,
+        page_source=page_source,
+        verify_open=verify_open,
+        timeout=0.7,
+    ):
+        return True
+    if _tap_first_note_search_result_by_coordinate(driver) and _wait_until(verify_open, timeout=0.8):
+        return True
+    swipe_vertical(driver, direction="up")
+    time.sleep(0.2)
+    page_source = _safe_page_source(driver)
+    if tap_first_note_card(
+        driver,
+        page_source=page_source,
+        verify_open=verify_open,
+        timeout=0.7,
+    ):
+        return True
+    if _tap_first_note_search_result_by_coordinate(driver) and _wait_until(verify_open, timeout=0.8):
+        return True
     for accessibility_id in NOTE_SEARCH_RESULT_IDS:
         if _tap_accessibility_id_now(driver, accessibility_id):
             return True
@@ -2774,6 +2774,8 @@ def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "android":
         return _tap_android_bottom_action_by_source(driver, action_index)
+    if _tap_ios_bottom_action_by_source(driver, action_index):
+        return True
     candidates = _find_bottom_action_elements(driver)
     if len(candidates) <= action_index:
         return False
@@ -2794,6 +2796,76 @@ def _tap_android_bottom_action_by_source(driver: WebDriver, action_index: int) -
         return True
     except (AttributeError, WebDriverException):
         return False
+
+
+def _tap_ios_bottom_action_by_source(driver: WebDriver, action_index: int) -> bool:
+    entries = _ios_bottom_action_entries(_safe_page_source(driver))
+    if len(entries) <= action_index:
+        return False
+    _, left, top, _right, bottom = entries[action_index]
+    icon_size = max(1, bottom - top)
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": left + icon_size // 2, "y": top + icon_size // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
+
+
+def _ios_bottom_action_entries(page_source: str) -> list[tuple[str, int, int, int, int]]:
+    if "<XCUIElementType" not in page_source:
+        return []
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    rows: dict[int, list[tuple[str, int, int, int, int]]] = {}
+    for element in root.iter():
+        attributes = element.attrib
+        if attributes.get("visible") == "false" or attributes.get("enabled") == "false":
+            continue
+        text = _source_element_text(attributes)
+        if not text.isdigit():
+            continue
+        rect = _source_element_rect(attributes)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        width = right - left
+        height = bottom - top
+        if not (45 <= width <= 85 and 20 <= height <= 36 and top >= 700):
+            continue
+        rows.setdefault(top, []).append((text, left, top, right, bottom))
+
+    candidate_rows = [entries for entries in rows.values() if len(entries) >= 3]
+    if not candidate_rows:
+        return []
+    bottom_row = max(candidate_rows, key=lambda entries: entries[0][2])
+    return sorted(bottom_row, key=lambda entry: entry[1])[:3]
+
+
+def _source_element_text(attributes: dict[str, str]) -> str:
+    for attribute in ("text", "name", "label", "value"):
+        value = re.sub(r"\s+", " ", attributes.get(attribute, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _source_element_rect(attributes: dict[str, str]) -> tuple[int, int, int, int] | None:
+    try:
+        left = int(float(attributes.get("x", "")))
+        top = int(float(attributes.get("y", "")))
+        width = int(float(attributes.get("width", "")))
+        height = int(float(attributes.get("height", "")))
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (left, top, left + width, top + height)
 
 
 def _find_bottom_action_elements(driver: WebDriver) -> list:
@@ -2902,6 +2974,50 @@ def _find_comment_input(driver: WebDriver, timeout: int):
         time.sleep(0.2)
 
     raise AssertionError("Unable to locate the message comment input")
+
+
+def _enter_comment_text(driver: WebDriver, input_box, comment_text: str) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+
+    try:
+        input_box.click()
+    except (AttributeError, WebDriverException):
+        pass
+    try:
+        input_box.clear()
+    except WebDriverException:
+        pass
+
+    if is_ios:
+        for enter_method in (
+            lambda: input_box.set_value(comment_text),
+            lambda: input_box.send_keys(comment_text),
+        ):
+            try:
+                enter_method()
+            except (AttributeError, WebDriverException):
+                continue
+            if _wait_until(lambda: _comment_input_contains(input_box, comment_text), timeout=2):
+                return
+            try:
+                input_box.clear()
+            except WebDriverException:
+                pass
+        raise AssertionError(f"Unable to enter the full comment text on iOS: {comment_text}")
+
+    input_box.send_keys(comment_text)
+
+
+def _comment_input_contains(input_box, expected_text: str) -> bool:
+    for attribute in ["value", "name", "label", "text"]:
+        try:
+            actual = str(input_box.get_attribute(attribute) or "")
+        except (AttributeError, WebDriverException):
+            continue
+        if expected_text in actual:
+            return True
+    return False
 
 
 def _wait_for_comment_echo(

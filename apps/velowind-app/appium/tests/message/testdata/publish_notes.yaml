@@ -11,7 +11,7 @@ use_cases:
         - "#治愈系风景"
         - "#长白山天池"
         - "#东北旅行"
-      location: 黑龙江
+      location: 长白山
       allow_comments: true
 #  - id: publish-note-changbaishan-no-location
 #    description: 发布笔记 - 长白山（不选地点）

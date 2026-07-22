@@ -39,7 +39,7 @@ def test_user_can_comment_on_first_home_note(driver, ios_config, step):
     snapshot = _open_home_note(driver, ios_config, step, ordinal=1)
     assert snapshot.title, "Expected the first home note detail to expose a title"
 
-    comment_text = f"自动化评论{datetime.now():%m%d%H%M%S}"
+    comment_text = f"这条笔记不错！！ {datetime.now():%m%d%H%M%S}"
     step("add-note-comment", lambda: submit_message_comment(driver, comment_text, timeout=20))
 
 

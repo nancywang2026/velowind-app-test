@@ -25,6 +25,47 @@ def test_tap_note_card_at_ordinal_selects_second_unique_card():
     assert taps == [("mobile: tap", {"x": 300, "y": 341})]
 
 
+def test_tap_note_card_at_ordinal_accepts_ios_author_without_user_prefix():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="骑行在云海中 #骑行 不要再吃辣 1" x="4" y="125" width="195" height="338" />
+      <XCUIElementTypeStaticText name="骑行在云海中" x="10" y="376" width="183" height="21" />
+      <XCUIElementTypeOther name="周六有人一起骑焦溪岭嘛！！！ #骑行 不要再吃辣 赞" x="4" y="467" width="195" height="358" />
+      <XCUIElementTypeStaticText name="周六有人一起骑焦溪岭嘛！！！" x="10" y="718" width="183" height="42" />
+      <XCUIElementTypeOther name="大熊猫，小熊猫，我们的猫 瓜瓜 赞" x="203" y="125" width="195" height="209" />
+    </AppiumAUT>
+    """
+    taps = []
+
+    class FakeDriver:
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert note_card_picker.tap_note_card_at_ordinal(
+        FakeDriver(),
+        ordinal=1,
+        page_source=page_source,
+        verify_open=lambda: bool(taps),
+    ) is True
+    assert taps == [("mobile: tap", {"x": 101, "y": 389})]
+
+
+def test_ios_note_card_reader_ignores_page_spanning_container():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="骑行在云海中 #骑行 不要再吃辣 1 来大围山骑车溜达溜达吧～ #大围山 不要再吃辣 1 周六有人一起骑焦溪岭嘛！！！ #骑行 不要再吃辣 赞 夏天当然要去玩水 爱骑车的菜腿丁教练 赞 首页 活动 消息 我的" x="4" y="125" width="394" height="1057" />
+      <XCUIElementTypeOther name="骑行在云海中 #骑行 不要再吃辣 1 来大围山骑车溜达溜达吧～ #大围山 不要再吃辣 1" x="4" y="125" width="195" height="1057" />
+      <XCUIElementTypeOther name="骑行在云海中 #骑行 不要再吃辣 1" x="4" y="125" width="195" height="338" />
+      <XCUIElementTypeOther name="周六有人一起骑焦溪岭嘛！！！ #骑行 不要再吃辣 赞" x="203" y="125" width="195" height="358" />
+    </AppiumAUT>
+    """
+
+    assert note_card_picker._note_card_rects_from_source(page_source) == [
+        (4, 125, 195, 338),
+        (203, 125, 195, 358),
+    ]
+
+
 def test_tap_note_card_at_ordinal_rejects_non_positive_ordinal():
     try:
         note_card_picker.tap_note_card_at_ordinal(object(), ordinal=0)

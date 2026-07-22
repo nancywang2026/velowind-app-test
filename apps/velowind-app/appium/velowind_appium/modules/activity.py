@@ -1021,7 +1021,7 @@ def _open_advanced_settings(driver: WebDriver, advanced_values: list[tuple[list[
                 time.sleep(0.5)
                 if _advanced_field_visible(_safe_page_source(driver), advanced_values):
                     return True
-        if _tap_advanced_settings_row(driver):
+        if _tap_advanced_settings_row(driver, page_source=page_source):
             time.sleep(0.5)
             if _advanced_field_visible(_safe_page_source(driver), advanced_values):
                 return True
@@ -1034,7 +1034,11 @@ def _advanced_field_visible(page_source: str, advanced_values: list[tuple[list[s
     return any(keyword in page_source for keywords, _ in advanced_values for keyword in keywords)
 
 
-def _tap_advanced_settings_row(driver: WebDriver) -> bool:
+def _tap_advanced_settings_row(driver: WebDriver, *, page_source: str | None = None) -> bool:
+    page_source = page_source if page_source is not None else _safe_page_source(driver)
+    if "<XCUIElementType" in page_source:
+        return _tap_ios_advanced_settings_row(driver)
+
     for text in ["高级选项", "高级设置"]:
         try:
             element = driver.find_element(
@@ -1052,6 +1056,47 @@ def _tap_advanced_settings_row(driver: WebDriver) -> bool:
             )
             return True
         except (NoSuchElementException, WebDriverException, AttributeError, KeyError, TypeError):
+            continue
+    return False
+
+
+def _tap_ios_advanced_settings_row(driver: WebDriver) -> bool:
+    for text in ["高级选项", "高级设置"]:
+        try:
+            elements = driver.find_elements(
+                AppiumBy.XPATH,
+                f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
+            )
+        except (WebDriverException, AttributeError):
+            elements = []
+
+        candidates = []
+        for element in elements:
+            try:
+                rect = element.rect
+                width = int(rect.get("width", 0))
+                height = int(rect.get("height", 0))
+                y = int(rect.get("y", 0))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if width <= 0 or height <= 0 or height > 120 or y < 100:
+                continue
+            candidates.append((width, height, y, rect))
+
+        if not candidates:
+            continue
+
+        _, _, _, rect = max(candidates, key=lambda item: (item[0], item[1]))
+        try:
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": int(rect["x"] + rect["width"] - min(28, max(12, rect["width"] * 0.08))),
+                    "y": int(rect["y"] + rect["height"] / 2),
+                },
+            )
+            return True
+        except (WebDriverException, KeyError, TypeError, ValueError):
             continue
     return False
 

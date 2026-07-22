@@ -53,6 +53,55 @@ def tap_by_text_containing(driver: WebDriver, keywords: list[str], timeout: int 
     return False
 
 
+def tap_visible_text_hit_point(driver: WebDriver, keywords: list[str], timeout: int = 2) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        for x, y in visible_text_hit_points(safe_page_source(driver), keywords):
+            try:
+                driver.execute_script("mobile: tap", {"x": x, "y": y})
+                time.sleep(0.4)
+                return True
+            except WebDriverException:
+                continue
+        time.sleep(0.2)
+    return False
+
+
+def visible_text_hit_points(page_source: str, keywords: list[str]) -> list[tuple[int, int]]:
+    if not page_source:
+        return []
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    matches: list[tuple[int, int, int]] = []
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        values = [
+            normalize_text(element.attrib.get(attribute, ""))
+            for attribute in ("text", "name", "label", "value", "content-desc")
+        ]
+        if not any(value in keywords for value in values if value):
+            continue
+        hit_point = _element_center(element.attrib)
+        if hit_point is None:
+            continue
+        x, y, area = hit_point
+        matches.append((area, x, y))
+
+    hit_points: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for _, x, y in sorted(matches):
+        point = (x, y)
+        if point in seen:
+            continue
+        hit_points.append(point)
+        seen.add(point)
+    return hit_points
+
+
 def tap_by_coordinate_ratios(driver: WebDriver, ratios: list[tuple[float, float]]) -> bool:
     try:
         rect = driver.get_window_rect()
@@ -163,6 +212,28 @@ def extract_visible_texts(page_source: str) -> list[str]:
 
 def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _element_center(attributes: dict[str, str]) -> tuple[int, int, int] | None:
+    bounds = attributes.get("bounds", "")
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", bounds)
+    if match:
+        left, top, right, bottom = (int(value) for value in match.groups())
+        width = right - left
+        height = bottom - top
+        if width > 0 and height > 0:
+            return (left + width // 2, top + height // 2, width * height)
+
+    try:
+        x = int(float(attributes.get("x", "")))
+        y = int(float(attributes.get("y", "")))
+        width = int(float(attributes.get("width", "")))
+        height = int(float(attributes.get("height", "")))
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (x + width // 2, y + height // 2, width * height)
 
 
 def _extract_texts_from_plain_source(page_source: str) -> list[str]:

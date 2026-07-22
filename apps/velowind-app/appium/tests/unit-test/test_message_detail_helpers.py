@@ -4,6 +4,7 @@ import pytest
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 
 from velowind_appium.modules.message_detail import (
+    MessageNoteDraft,
     build_changbaishan_note_draft,
     list_message_note_use_case_ids,
     load_message_note_draft,
@@ -144,29 +145,30 @@ def test_android_note_search_results_accept_hidden_keyword_matches():
 
 def test_tap_note_search_result_tries_next_card_when_first_does_not_open(monkeypatch):
     events = []
+    state = {"page": "search-results"}
 
     class FakeDriver:
         def find_element(self, by, value):
             raise message_detail.NoSuchElementException("missing")
 
-    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "search-results")
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: state["page"])
     monkeypatch.setattr(
         message_detail,
         "tap_first_note_card",
-        lambda driver, page_source, verify_open, timeout=1.2: events.append("first") or False,
-    )
-    monkeypatch.setattr(
-        message_detail,
-        "tap_note_card_at_ordinal",
-        lambda driver, ordinal, page_source, verify_open, timeout=1.2: events.append(ordinal) or ordinal == 2,
-        raising=False,
+        lambda driver, page_source, verify_open, timeout=1.2: events.append(page_source) or page_source == "page-2",
     )
     monkeypatch.setattr(message_detail, "_tap_accessibility_id_now", lambda driver, value: False)
     monkeypatch.setattr(message_detail, "_tap_first_visible_note_search_result", lambda driver: False)
     monkeypatch.setattr(message_detail, "_tap_first_note_search_result_by_coordinate", lambda driver: False)
+    monkeypatch.setattr(
+        message_detail,
+        "swipe_vertical",
+        lambda driver, direction="up": events.append(("swipe", direction)) or state.update(page="page-2"),
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
 
     assert message_detail._tap_first_note_search_result(FakeDriver()) is True
-    assert events == ["first", 2]
+    assert events == ["search-results", ("swipe", "up"), "page-2"]
 
 
 def test_tap_note_search_result_scrolls_to_next_result_page(monkeypatch):
@@ -179,11 +181,6 @@ def test_tap_note_search_result_scrolls_to_next_result_page(monkeypatch):
         "tap_first_note_card",
         lambda driver, page_source, verify_open, timeout=1.2: events.append(("first", page_source))
         or page_source == "page-2",
-    )
-    monkeypatch.setattr(
-        message_detail,
-        "tap_note_card_at_ordinal",
-        lambda driver, ordinal, page_source, verify_open, timeout=1.2: events.append((ordinal, page_source)) or False,
     )
     monkeypatch.setattr(
         message_detail,
@@ -598,6 +595,40 @@ def test_android_bottom_action_taps_count_center_by_index():
     assert taps == [("mobile: tap", {"x": 1011, "y": 2299})]
 
 
+def test_ios_bottom_action_taps_icon_center_by_index_from_source():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = """
+        <AppiumAUT>
+          <XCUIElementTypeOther name="不要再吃辣 1 1 1" visible="true" x="0" y="804" width="402" height="70">
+            <XCUIElementTypeOther name="1 1 1" visible="true" x="204" y="813" width="185" height="26">
+              <XCUIElementTypeOther name="1" visible="true" x="204" y="813" width="55" height="26">
+                <XCUIElementTypeOther visible="true" x="204" y="813" width="26" height="26" />
+                <XCUIElementTypeStaticText value="1" name="1" visible="true" x="232" y="814" width="27" height="24" />
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther name="1" visible="true" x="269" y="813" width="55" height="26">
+                <XCUIElementTypeOther visible="true" x="269" y="813" width="26" height="26" />
+                <XCUIElementTypeStaticText value="1" name="1" visible="true" x="297" y="814" width="27" height="24" />
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther name="1" visible="true" x="334" y="813" width="55" height="26">
+                <XCUIElementTypeOther visible="true" x="334" y="813" width="26" height="26" />
+                <XCUIElementTypeStaticText value="1" name="1" visible="true" x="362" y="814" width="27" height="24" />
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </AppiumAUT>
+        """
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_bottom_action_at_index(FakeDriver(), 0) is True
+    assert taps == [("mobile: tap", {"x": 217, "y": 826})]
+
+
 def test_submit_comment_uses_android_bottom_comment_action_when_entry_id_is_missing(monkeypatch):
     events = []
 
@@ -621,6 +652,55 @@ def test_submit_comment_uses_android_bottom_comment_action_when_entry_id_is_miss
     message_detail.submit_message_comment(object(), "自动化评论", timeout=3)
 
     assert events == [("tap", 2), "clear", ("send-keys", "自动化评论"), "wait-echo"]
+
+
+def test_submit_comment_uses_ios_set_value_and_verifies_full_text(monkeypatch):
+    events = []
+    entered = {"value": ""}
+
+    class FakeInput:
+        @staticmethod
+        def click():
+            events.append("click-input")
+
+        @staticmethod
+        def clear():
+            events.append("clear")
+            entered["value"] = ""
+
+        @staticmethod
+        def set_value(value):
+            events.append(("set-value", value))
+            entered["value"] = value
+
+        @staticmethod
+        def send_keys(value):
+            events.append(("send-keys", value))
+
+        @staticmethod
+        def get_attribute(attribute):
+            return entered["value"] if attribute == "value" else ""
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"]))
+    monkeypatch.setattr(message_detail, "_tap_candidate", lambda driver, ids, texts: events.append(("tap-candidate", tuple(texts))) or True)
+    monkeypatch.setattr(message_detail, "_find_comment_input", lambda driver, timeout: FakeInput())
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_for_comment_echo", lambda *args, **kwargs: events.append("wait-echo"))
+
+    message_detail.submit_message_comment(FakeDriver(), "自动化测试留言", timeout=3)
+
+    assert events == [
+        ("tap-candidate", tuple(message_detail.COMMENT_ENTRY_TEXTS)),
+        "click-input",
+        "clear",
+        ("set-value", "自动化测试留言"),
+        ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)),
+        "wait-echo",
+    ]
 
 
 def test_find_comment_input_supports_android_edit_text():
@@ -743,6 +823,56 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
     message_detail._upload_note_image(object(), draft)
 
     assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", 1, False, True)]
+
+
+def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypatch):
+    calls = []
+    state = {"count": 0}
+    draft = MessageNoteDraft(
+        title="title",
+        body="body",
+        topics=[],
+        location="",
+        album="云南洱海",
+        picture_index=1,
+        picture_indexes=(1, 2, 3),
+    )
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    def choose_photo_from_library(
+        driver,
+        album_name=None,
+        picture_index=1,
+        picture_indexes=(),
+        select_all_from_album=True,
+        retry_sheet_option=None,
+    ):
+        calls.append(("choose-photo", album_name, picture_index, picture_indexes, select_all_from_album))
+        if picture_indexes:
+            state["count"] = 1
+        else:
+            state["count"] += 1
+        return True
+
+    monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
+    monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: calls.append("tap-plus") or True)
+    monkeypatch.setattr(message_detail.photo_picker, "choose_photo_from_library", choose_photo_from_library)
+    monkeypatch.setattr(message_detail, "_note_selected_image_count", lambda driver: state["count"])
+    monkeypatch.setattr(message_detail, "_wait_for_note_selected_image_count", lambda driver, expected_count: state["count"] >= expected_count)
+
+    message_detail._upload_note_image(FakeDriver(), draft)
+
+    assert calls == [
+        "clear",
+        "tap-plus",
+        ("choose-photo", "云南洱海", 1, (1, 2, 3), True),
+        "tap-plus",
+        ("choose-photo", "云南洱海", 2, (), False),
+        "tap-plus",
+        ("choose-photo", "云南洱海", 3, (), False),
+    ]
 
 
 def test_android_note_image_plus_taps_first_image_slot_center():

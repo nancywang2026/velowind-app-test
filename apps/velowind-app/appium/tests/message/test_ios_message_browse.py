@@ -11,7 +11,7 @@ from velowind_appium.modules import (
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 
 
-TEST_COMMENT_TEXT = "自动化测试留言"
+TEST_COMMENT_TEXT = "不错"
 
 
 @pytest.mark.full

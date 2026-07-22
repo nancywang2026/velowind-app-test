@@ -175,10 +175,77 @@ def test_tap_session_datetime_field_prefers_the_field_container(monkeypatch):
         return FakeElement({"x": 42, "y": 753, "width": 585, "height": 138})
 
     monkeypatch.setattr(driver, "find_element", fake_find_element, raising=False)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_safe_page_source",
+        lambda received: "已选择时间 取消 确认 月 日 时 分",
+    )
 
     assert activity_sessions._tap_session_datetime_field(driver, "报名截止时间") is True
     assert tapped
     assert driver.scripts == [("mobile: tap", {"x": 334.5, "y": 822.0})]
+
+
+def test_android_session_datetime_field_point_uses_value_container_below_label():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="报名截止时间*" bounds="[42,666][627,732]" displayed="true" />
+      <android.widget.TextView text="活动名额*" bounds="[654,666][1238,732]" displayed="true" />
+      <android.view.ViewGroup bounds="[42,753][627,891]" displayed="true">
+        <android.widget.TextView text="例如：06.29 20:00" bounds="[84,789][537,855]" displayed="true" />
+      </android.view.ViewGroup>
+      <android.view.ViewGroup bounds="[654,753][1238,891]" displayed="true">
+        <android.widget.EditText text="例如：10" bounds="[696,780][1196,864]" displayed="true" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    assert activity_sessions._android_session_datetime_field_point(page_source, "报名截止时间") == (334, 822)
+
+
+def test_android_session_datetime_field_point_uses_start_time_value_container():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="开始时间*" bounds="[42,933][627,999]" displayed="true" />
+      <android.widget.TextView text="结束时间*" bounds="[654,933][1238,999]" displayed="true" />
+      <android.view.ViewGroup bounds="[42,1020][627,1158]" displayed="true">
+        <android.widget.TextView text="例如：06.30 06:45" bounds="[84,1056][537,1122]" displayed="true" />
+        <com.horcrux.svg.SvgView bounds="[537,1065][585,1113]" displayed="true" />
+      </android.view.ViewGroup>
+      <android.view.ViewGroup bounds="[654,1020][1238,1158]" displayed="true">
+        <android.widget.TextView text="例如：06.30 10:30" bounds="[696,1056][1148,1122]" displayed="true" />
+        <com.horcrux.svg.SvgView bounds="[1149,1065][1197,1113]" displayed="true" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    assert activity_sessions._android_session_datetime_field_point(page_source, "开始时间") == (561, 1089)
+    assert activity_sessions._android_session_datetime_field_point(page_source, "结束时间") == (1173, 1089)
+
+
+def test_tap_session_datetime_field_continues_when_container_tap_does_not_open_picker(monkeypatch):
+    driver = FakeDriver("新增场次 报名截止时间 活动名额 开始时间 结束时间")
+    field = FakeElement({"x": 42, "y": 753, "width": 585, "height": 138})
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="报名截止时间*" bounds="[42,666][627,732]" displayed="true" />
+      <android.view.ViewGroup bounds="[42,753][627,891]" displayed="true" />
+    </hierarchy>
+    """
+
+    monkeypatch.setattr(driver, "find_element", lambda *args: field, raising=False)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_safe_page_source",
+        lambda received: "已选择时间 取消 确认 月 日 时 分" if len(driver.scripts) >= 2 else page_source,
+    )
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda seconds: None)
+
+    assert activity_sessions._tap_session_datetime_field(driver, "报名截止时间") is True
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 334.5, "y": 822.0}),
+        ("mobile: clickGesture", {"x": 334, "y": 822}),
+    ]
 
 
 def test_tap_session_datetime_field_uses_ios_calendar_icon_coordinates(monkeypatch):
@@ -361,6 +428,32 @@ def test_write_android_end_time_adjusts_day_hour_and_minute(monkeypatch):
     assert confirmed == [True]
 
 
+def test_write_android_start_time_uses_start_time_picker_wheel_ids(monkeypatch):
+    driver = FakeDriver("开始时间 已选择时间 07.22 22:15 取消 确认 月 日 时 分", width=1280, height=2856)
+    captured = []
+
+    def fake_fill(received, wheel_ids, field_order, parts):
+        captured.append((wheel_ids, field_order, parts))
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_fill_android_datetime_picker_wheels", fake_fill)
+    monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda received: True)
+
+    assert activity_sessions._write_android_datetime_picker_value(driver, "开始时间", "2026-07-28 09:00") is True
+    assert captured == [
+        (
+            {
+                "month": "activity-session-create-start-time-picker-month-wheel",
+                "day": "activity-session-create-start-time-picker-day-wheel",
+                "hour": "activity-session-create-start-time-picker-hour-wheel",
+                "minute": "activity-session-create-start-time-picker-minute-wheel",
+            },
+            ["day", "hour", "minute"],
+            {"month": "07", "day": "28", "hour": "09", "minute": "00"},
+        )
+    ]
+
+
 def test_android_datetime_picker_wheel_locators_try_id_then_xpath():
     locators = activity_sessions._android_datetime_picker_wheel_locators(
         "activity-session-create-deadline-picker-month-wheel"
@@ -429,6 +522,11 @@ def test_android_datetime_picker_drag_uses_calculated_step_count(monkeypatch):
 
     assert activity_sessions._drag_android_datetime_picker_wheel_to_target(driver, "minute", "00") is True
     assert drags == [("minute", "down", 3)]
+
+
+def test_android_datetime_picker_drag_direction_does_not_wrap_hour_wheel():
+    assert activity_sessions._android_datetime_picker_drag_direction_and_steps("hour", "22", "09") == ("down", 3)
+    assert activity_sessions._android_datetime_picker_drag_direction_and_steps("hour", "08", "09") == ("up", 1)
 
 
 def test_ios_datetime_picker_visible_accepts_custom_session_picker():

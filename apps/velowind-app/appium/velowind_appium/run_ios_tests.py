@@ -104,6 +104,7 @@ def build_pytest_command(cli_args: list[str]) -> list[str]:
         "pytest",
         str(TEST_PATH),
         "-q",
+        "-s",
         *_allure_pytest_args(),
     ]
 

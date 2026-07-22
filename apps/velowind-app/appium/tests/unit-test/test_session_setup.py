@@ -310,12 +310,35 @@ def test_home_and_publish_entry_reject_my_notes_overlay():
     assert session._publish_entry_ready(driver) is False
 
 
+def test_home_and_publish_entry_reject_rental_page_overlay():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="首页" />
+      <XCUIElementTypeStaticText name="活动" />
+      <XCUIElementTypeStaticText name="消息" />
+      <XCUIElementTypeStaticText name="我的" />
+      <XCUIElementTypeOther name="rent-page-shell" />
+      <XCUIElementTypeStaticText name="租车" />
+      <XCUIElementTypeStaticText name="立即选车" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
 def test_home_and_publish_entry_reject_note_search_overlay():
     page_source = """
     <AppiumAUT>
       <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
       <XCUIElementTypeTextField
-        value="骑行的"
+        value="骑行"
         placeholderValue="请输入内容"
         visible="true"
       />

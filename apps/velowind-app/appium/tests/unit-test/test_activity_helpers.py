@@ -696,7 +696,7 @@ def test_choose_specific_overlay_option_keeps_scrolling_until_later_province_app
 def test_open_advanced_settings_taps_android_row_arrow(monkeypatch):
     taps = []
     advanced_values = [(["总里程"], "128")]
-    sources = iter(["发布活动 高级选项", "发布活动 总里程"])
+    sources = iter(["发布活动 高级选项", "发布活动 总里程", "发布活动 总里程"])
 
     class FakeElement:
         rect = {"x": 87, "y": 2313, "width": 192, "height": 66}
@@ -716,12 +716,45 @@ def test_open_advanced_settings_taps_android_row_arrow(monkeypatch):
         def execute_script(script, payload):
             taps.append((script, payload))
 
-    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(sources))
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(sources, "发布活动 总里程"))
     monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: False)
     monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
 
     assert activity._open_advanced_settings(FakeDriver(), advanced_values) is True
     assert taps == [("mobile: tap", {"x": 1164, "y": 2346})]
+
+
+def test_open_advanced_settings_taps_exact_ios_row_instead_of_page_container(monkeypatch):
+    taps = []
+    advanced_values = [(["总里程"], "128")]
+    sources = iter(["<XCUIElementTypeOther name='发布活动 高级选项'>", "发布活动 总里程", "发布活动 总里程"])
+
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    class FakeDriver:
+        @staticmethod
+        def find_elements(by, value):
+            assert "contains" not in value
+            if "高级选项" in value:
+                return [
+                    FakeElement({"x": 0, "y": 0, "width": 402, "height": 874}),
+                    FakeElement({"x": 13, "y": 699, "width": 376, "height": 43}),
+                    FakeElement({"x": 27, "y": 710, "width": 61, "height": 21}),
+                ]
+            return []
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(sources, "发布活动 总里程"))
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
+
+    assert activity._open_advanced_settings(FakeDriver(), advanced_values) is True
+    assert taps == [("mobile: tap", {"x": 361, "y": 720})]
 
 
 def test_close_editor_dismisses_keyboard_like_note_before_bottom_done(monkeypatch):

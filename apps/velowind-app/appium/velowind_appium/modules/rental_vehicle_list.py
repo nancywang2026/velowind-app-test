@@ -13,6 +13,7 @@ from velowind_appium.modules.rental_common import (
     tap_by_coordinate_ratios,
     tap_by_text_containing,
     tap_first_available,
+    tap_visible_text_hit_point,
     wait_for_rental_page,
 )
 from velowind_appium.modules.rental_vehicle_detail import wait_for_vehicle_detail_page
@@ -59,6 +60,12 @@ def open_selected_vehicle_detail(driver: WebDriver, timeout: int = 20) -> None:
             except TimeoutException:
                 pass
         if tap_by_text_containing(driver, ["车辆详情", "查看详情"], timeout=1):
+            try:
+                wait_for_vehicle_detail_page(driver, timeout=8)
+                return
+            except TimeoutException:
+                pass
+        if tap_visible_text_hit_point(driver, VEHICLE_DETAIL_TEXTS, timeout=1):
             try:
                 wait_for_vehicle_detail_page(driver, timeout=8)
                 return

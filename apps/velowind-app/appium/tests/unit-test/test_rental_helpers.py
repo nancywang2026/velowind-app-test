@@ -1,4 +1,5 @@
 from velowind_appium.modules import rental_orders
+from velowind_appium.modules.rental_common import visible_text_hit_points
 
 
 def test_extract_rental_order_summary_from_ios_source():
@@ -65,3 +66,30 @@ def test_summary_is_complete_requires_all_order_fields():
     summary = rental_orders.extract_rental_order_summary(page_source)
 
     assert summary.is_complete() is False
+
+
+def test_visible_text_hit_points_uses_ios_container_center_for_matching_label():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="车辆详情 立即预定" label="车辆详情 立即预定" visible="true" x="17" y="704" width="368" height="75">
+        <XCUIElementTypeOther name="车辆详情" label="车辆详情" visible="true" x="30" y="717" width="168" height="49">
+          <XCUIElementTypeStaticText value="车辆详情" name="车辆详情" label="车辆详情" visible="true" x="83" y="731" width="62" height="21" />
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther name="立即预定" label="立即预定" visible="true" x="206" y="717" width="166" height="49" />
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+
+    assert visible_text_hit_points(page_source, ["车辆详情"]) == [(114, 741)]
+
+
+def test_visible_text_hit_points_uses_android_bounds_center_for_matching_text():
+    page_source = """
+    <hierarchy>
+      <android.view.View text="车辆详情" displayed="true" bounds="[30,717][198,766]" />
+      <android.widget.TextView text="车辆详情" displayed="true" bounds="[83,731][145,752]" />
+      <android.view.View text="车辆详情" displayed="false" bounds="[10,10][20,20]" />
+    </hierarchy>
+    """
+
+    assert visible_text_hit_points(page_source, ["车辆详情"]) == [(114, 741)]
