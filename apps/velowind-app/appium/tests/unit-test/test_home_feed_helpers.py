@@ -186,13 +186,13 @@ def test_note_feed_contains_type_results_requires_card_content():
     <AppiumAUT>
       <XCUIElementTypeStaticText name="全国" />
       <XCUIElementTypeStaticText name="徒步" />
-      <XCUIElementTypeOther name="莫干山山间徒步很舒服 用户 abc 赞" />
+      <XCUIElementTypeOther name="莫干山山间徒步很舒服 #徒步 用户 abc 赞" />
     </AppiumAUT>
     """
 
     assert home_feed.note_feed_contains_type_results(page_source, "徒步") is True
     assert home_feed.note_feed_type_result_texts(page_source, "徒步") == [
-        "莫干山山间徒步很舒服 用户 abc 赞"
+        "莫干山山间徒步很舒服 #徒步 用户 abc 赞"
     ]
 
 
@@ -207,6 +207,31 @@ def test_note_feed_contains_type_results_does_not_require_interaction_text():
     assert home_feed.note_feed_contains_type_results(page_source, "骑行") is True
     assert home_feed.note_feed_type_result_texts(page_source, "骑行") == [
         "【API复测】沿途有风 0714-1205 #骑行 用户 admin"
+    ]
+
+
+def test_note_feed_contains_type_results_requires_matching_topic():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="骑行" />
+      <XCUIElementTypeOther name="城市骑行路线记录 #大理旅行 用户 admin 赞" />
+    </AppiumAUT>
+    """
+
+    assert home_feed.note_feed_contains_type_results(page_source, "骑行") is False
+
+
+def test_note_feed_contains_type_results_accepts_topic_without_user_marker():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="骑行" />
+      <XCUIElementTypeOther name="周六有人一起骑焦溪岭嘛！！！ #骑行 不要再吃辣 赞" />
+    </AppiumAUT>
+    """
+
+    assert home_feed.note_feed_contains_type_results(page_source, "骑行") is True
+    assert home_feed.note_feed_type_result_texts(page_source, "骑行") == [
+        "周六有人一起骑焦溪岭嘛！！！ #骑行 不要再吃辣 赞"
     ]
 
 
@@ -225,7 +250,7 @@ def test_note_feed_contains_type_results_rejects_navigation_only():
 def test_note_feed_all_results_match_type_rejects_mixed_visible_cards():
     page_source = """
     <AppiumAUT>
-      <XCUIElementTypeOther name="莫干山山间徒步很舒服 用户 abc 赞" />
+      <XCUIElementTypeOther name="莫干山山间徒步很舒服 #徒步 用户 abc 赞" />
       <XCUIElementTypeOther name="良渚古城遛娃太好逛了 用户 def 赞" />
     </AppiumAUT>
     """
@@ -239,8 +264,8 @@ def test_note_feed_all_results_match_type_rejects_mixed_visible_cards():
 def test_note_feed_all_results_match_type_accepts_all_visible_cards():
     page_source = """
     <AppiumAUT>
-      <XCUIElementTypeOther name="莫干山山间徒步很舒服 用户 abc 赞" />
-      <XCUIElementTypeOther name="断桥附近散步路线记录 用户 def 浏览" />
+      <XCUIElementTypeOther name="莫干山山间徒步很舒服 #徒步 用户 abc 赞" />
+      <XCUIElementTypeOther name="断桥附近散步路线记录 #徒步 用户 def 浏览" />
     </AppiumAUT>
     """
 
@@ -250,9 +275,9 @@ def test_note_feed_all_results_match_type_accepts_all_visible_cards():
 def test_note_feed_all_results_match_type_ignores_container_and_user_rows():
     page_source = """
     <AppiumAUT>
-      <XCUIElementTypeOther name="徒步的一天 用户 abc 赞 良渚古城遛娃太好逛了 用户 def 赞" />
+      <XCUIElementTypeOther name="徒步的一天 #徒步 用户 abc 赞 良渚古城遛娃太好逛了 用户 def 赞" />
       <XCUIElementTypeOther name="用户 abc 赞" />
-      <XCUIElementTypeOther name="徒步的一天 用户 abc 赞" />
+      <XCUIElementTypeOther name="徒步的一天 #徒步 用户 abc 赞" />
     </AppiumAUT>
     """
 
@@ -261,7 +286,7 @@ def test_note_feed_all_results_match_type_ignores_container_and_user_rows():
 
 def test_select_note_type_waits_for_type_results(monkeypatch):
     events = []
-    page_states = iter(["首页 全国 推荐 徒步", "首页 全国 推荐 徒步 莫干山徒步 用户 abc 赞"])
+    page_states = iter(["首页 全国 推荐 徒步", "首页 全国 推荐 徒步 莫干山徒步 #徒步 用户 abc 赞"])
 
     monkeypatch.setattr(home_feed, "_tap_note_type", lambda driver, type_name: events.append(type_name) or True)
     monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: next(page_states))

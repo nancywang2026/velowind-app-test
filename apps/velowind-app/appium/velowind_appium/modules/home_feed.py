@@ -22,9 +22,6 @@ HOME_READY_IDS = [
 ]
 HOME_READY_TEXTS = ["首页", "全国", "推荐"]
 NOTE_TYPE_NAV_TEXTS = ["全国", "推荐", "骑行", "徒步", "登山", "跑步"]
-NOTE_TYPE_RELATED_KEYWORDS = {
-    "徒步": ["徒步", "散步", "步道", "爬山", "登山", "山间", "路线", "户外"],
-}
 HOME_BLOCKING_TEXTS = [
     "发布活动",
     "提交审核",
@@ -125,7 +122,10 @@ def note_feed_type_result_texts(page_source: str, type_name: str) -> list[str]:
     card_texts = _extract_visible_note_card_texts(page_source)
     if _android_selected_note_type_visible(page_source, type_name):
         return card_texts
-    return [text for text in card_texts if _note_card_matches_type(text, type_name)]
+    matched_cards = [text for text in card_texts if _note_card_matches_type(text, type_name)]
+    if matched_cards:
+        return matched_cards
+    return _extract_visible_topic_texts(page_source, type_name)
 
 
 def note_feed_all_results_match_type(page_source: str, type_name: str) -> tuple[bool, list[str]]:
@@ -211,6 +211,38 @@ def _extract_note_card_texts_from_plain_source(page_source: str) -> list[str]:
     ]
 
 
+def _extract_visible_topic_texts(page_source: str, type_name: str) -> list[str]:
+    topic = f"#{type_name}"
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return [
+            line.strip()
+            for line in page_source.splitlines()
+            if topic in line
+        ]
+
+    texts: list[str] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        text = (
+            element.attrib.get("name", "")
+            or element.attrib.get("label", "")
+            or element.attrib.get("value", "")
+            or element.attrib.get("text", "")
+        ).strip()
+        if topic not in text:
+            continue
+        normalized = " ".join(text.split())
+        if normalized in seen:
+            continue
+        texts.append(normalized)
+        seen.add(normalized)
+    return texts
+
+
 def _looks_like_note_card_text(text: str) -> bool:
     if not text:
         return False
@@ -224,8 +256,7 @@ def _looks_like_note_card_text(text: str) -> bool:
 
 
 def _note_card_matches_type(text: str, type_name: str) -> bool:
-    related_keywords = NOTE_TYPE_RELATED_KEYWORDS.get(type_name, [type_name])
-    return any(keyword in text for keyword in related_keywords)
+    return f"#{type_name}" in text
 
 
 def _android_selected_note_type_visible(page_source: str, type_name: str) -> bool:

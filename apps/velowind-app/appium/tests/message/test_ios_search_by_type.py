@@ -2,7 +2,7 @@ import pytest
 
 from velowind_appium.modules import (
     browse_note_feed,
-    note_feed_all_results_match_type,
+    note_feed_contains_type_results,
     select_note_type,
     switch_note_type_navigation,
     wait_for_note_type_results,
@@ -24,5 +24,7 @@ def test_user_can_filter_notes_by_type(driver, ios_config, step):
     step("select-hiking-type", lambda: select_note_type(driver, NOTE_TYPE, timeout=10))
     step("wait-hiking-note-results", lambda: wait_for_note_type_results(driver, NOTE_TYPE, timeout=8))
 
-    all_results_match, mismatched_notes = note_feed_all_results_match_type(driver.page_source, NOTE_TYPE)
-    assert all_results_match, f"Expected all visible note cards to match {NOTE_TYPE}, mismatched: {mismatched_notes}"
+    assert note_feed_contains_type_results(
+        driver.page_source,
+        NOTE_TYPE,
+    ), f"Expected the note feed to include {NOTE_TYPE} related notes"

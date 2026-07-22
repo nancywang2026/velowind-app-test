@@ -338,7 +338,7 @@ def test_home_and_publish_entry_reject_note_search_overlay():
     <AppiumAUT>
       <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
       <XCUIElementTypeTextField
-        value="骑行的"
+        value="骑行"
         placeholderValue="请输入内容"
         visible="true"
       />

@@ -145,29 +145,30 @@ def test_android_note_search_results_accept_hidden_keyword_matches():
 
 def test_tap_note_search_result_tries_next_card_when_first_does_not_open(monkeypatch):
     events = []
+    state = {"page": "search-results"}
 
     class FakeDriver:
         def find_element(self, by, value):
             raise message_detail.NoSuchElementException("missing")
 
-    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "search-results")
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: state["page"])
     monkeypatch.setattr(
         message_detail,
         "tap_first_note_card",
-        lambda driver, page_source, verify_open, timeout=1.2: events.append("first") or False,
-    )
-    monkeypatch.setattr(
-        message_detail,
-        "tap_note_card_at_ordinal",
-        lambda driver, ordinal, page_source, verify_open, timeout=1.2: events.append(ordinal) or ordinal == 2,
-        raising=False,
+        lambda driver, page_source, verify_open, timeout=1.2: events.append(page_source) or page_source == "page-2",
     )
     monkeypatch.setattr(message_detail, "_tap_accessibility_id_now", lambda driver, value: False)
     monkeypatch.setattr(message_detail, "_tap_first_visible_note_search_result", lambda driver: False)
     monkeypatch.setattr(message_detail, "_tap_first_note_search_result_by_coordinate", lambda driver: False)
+    monkeypatch.setattr(
+        message_detail,
+        "swipe_vertical",
+        lambda driver, direction="up": events.append(("swipe", direction)) or state.update(page="page-2"),
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
 
     assert message_detail._tap_first_note_search_result(FakeDriver()) is True
-    assert events == ["first", 2]
+    assert events == ["search-results", ("swipe", "up"), "page-2"]
 
 
 def test_tap_note_search_result_scrolls_to_next_result_page(monkeypatch):
@@ -180,11 +181,6 @@ def test_tap_note_search_result_scrolls_to_next_result_page(monkeypatch):
         "tap_first_note_card",
         lambda driver, page_source, verify_open, timeout=1.2: events.append(("first", page_source))
         or page_source == "page-2",
-    )
-    monkeypatch.setattr(
-        message_detail,
-        "tap_note_card_at_ordinal",
-        lambda driver, ordinal, page_source, verify_open, timeout=1.2: events.append((ordinal, page_source)) or False,
     )
     monkeypatch.setattr(
         message_detail,

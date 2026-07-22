@@ -23,7 +23,7 @@ from velowind_appium.actions import (
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
 import velowind_appium.modules.photo_picker as photo_picker
-from velowind_appium.modules.note_card_picker import tap_first_note_card, tap_note_card_at_ordinal
+from velowind_appium.modules.note_card_picker import tap_first_note_card
 
 
 DETAIL_READY_IDS = [
@@ -958,26 +958,29 @@ def _tap_first_note_search_result(driver: WebDriver) -> bool:
     if str(capabilities.get("platformName", "")).lower() == "android":
         if _tap_first_android_note_search_result(driver):
             return True
-    for page_index in range(3):
-        page_source = _safe_page_source(driver)
-        if tap_first_note_card(
-            driver,
-            page_source=page_source,
-            verify_open=lambda: message_detail_is_visible(driver),
-        ):
-            return True
-        for ordinal in range(2, 7):
-            if tap_note_card_at_ordinal(
-                driver,
-                ordinal=ordinal,
-                page_source=page_source,
-                verify_open=lambda: message_detail_is_visible(driver),
-                timeout=1.2,
-            ):
-                return True
-        if page_index < 2:
-            swipe_vertical(driver, direction="up")
-            time.sleep(0.3)
+    verify_open = lambda: message_detail_is_visible(driver)
+    page_source = _safe_page_source(driver)
+    if tap_first_note_card(
+        driver,
+        page_source=page_source,
+        verify_open=verify_open,
+        timeout=0.7,
+    ):
+        return True
+    if _tap_first_note_search_result_by_coordinate(driver) and _wait_until(verify_open, timeout=0.8):
+        return True
+    swipe_vertical(driver, direction="up")
+    time.sleep(0.2)
+    page_source = _safe_page_source(driver)
+    if tap_first_note_card(
+        driver,
+        page_source=page_source,
+        verify_open=verify_open,
+        timeout=0.7,
+    ):
+        return True
+    if _tap_first_note_search_result_by_coordinate(driver) and _wait_until(verify_open, timeout=0.8):
+        return True
     for accessibility_id in NOTE_SEARCH_RESULT_IDS:
         if _tap_accessibility_id_now(driver, accessibility_id):
             return True
