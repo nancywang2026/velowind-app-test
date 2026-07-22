@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -2773,6 +2774,8 @@ def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "android":
         return _tap_android_bottom_action_by_source(driver, action_index)
+    if _tap_ios_bottom_action_by_source(driver, action_index):
+        return True
     candidates = _find_bottom_action_elements(driver)
     if len(candidates) <= action_index:
         return False
@@ -2793,6 +2796,76 @@ def _tap_android_bottom_action_by_source(driver: WebDriver, action_index: int) -
         return True
     except (AttributeError, WebDriverException):
         return False
+
+
+def _tap_ios_bottom_action_by_source(driver: WebDriver, action_index: int) -> bool:
+    entries = _ios_bottom_action_entries(_safe_page_source(driver))
+    if len(entries) <= action_index:
+        return False
+    _, left, top, _right, bottom = entries[action_index]
+    icon_size = max(1, bottom - top)
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": left + icon_size // 2, "y": top + icon_size // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
+
+
+def _ios_bottom_action_entries(page_source: str) -> list[tuple[str, int, int, int, int]]:
+    if "<XCUIElementType" not in page_source:
+        return []
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    rows: dict[int, list[tuple[str, int, int, int, int]]] = {}
+    for element in root.iter():
+        attributes = element.attrib
+        if attributes.get("visible") == "false" or attributes.get("enabled") == "false":
+            continue
+        text = _source_element_text(attributes)
+        if not text.isdigit():
+            continue
+        rect = _source_element_rect(attributes)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        width = right - left
+        height = bottom - top
+        if not (45 <= width <= 85 and 20 <= height <= 36 and top >= 700):
+            continue
+        rows.setdefault(top, []).append((text, left, top, right, bottom))
+
+    candidate_rows = [entries for entries in rows.values() if len(entries) >= 3]
+    if not candidate_rows:
+        return []
+    bottom_row = max(candidate_rows, key=lambda entries: entries[0][2])
+    return sorted(bottom_row, key=lambda entry: entry[1])[:3]
+
+
+def _source_element_text(attributes: dict[str, str]) -> str:
+    for attribute in ("text", "name", "label", "value"):
+        value = re.sub(r"\s+", " ", attributes.get(attribute, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _source_element_rect(attributes: dict[str, str]) -> tuple[int, int, int, int] | None:
+    try:
+        left = int(float(attributes.get("x", "")))
+        top = int(float(attributes.get("y", "")))
+        width = int(float(attributes.get("width", "")))
+        height = int(float(attributes.get("height", "")))
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (left, top, left + width, top + height)
 
 
 def _find_bottom_action_elements(driver: WebDriver) -> list:

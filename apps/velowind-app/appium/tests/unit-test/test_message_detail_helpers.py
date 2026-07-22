@@ -595,6 +595,40 @@ def test_android_bottom_action_taps_count_center_by_index():
     assert taps == [("mobile: tap", {"x": 1011, "y": 2299})]
 
 
+def test_ios_bottom_action_taps_icon_center_by_index_from_source():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = """
+        <AppiumAUT>
+          <XCUIElementTypeOther name="不要再吃辣 1 1 1" visible="true" x="0" y="804" width="402" height="70">
+            <XCUIElementTypeOther name="1 1 1" visible="true" x="204" y="813" width="185" height="26">
+              <XCUIElementTypeOther name="1" visible="true" x="204" y="813" width="55" height="26">
+                <XCUIElementTypeOther visible="true" x="204" y="813" width="26" height="26" />
+                <XCUIElementTypeStaticText value="1" name="1" visible="true" x="232" y="814" width="27" height="24" />
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther name="1" visible="true" x="269" y="813" width="55" height="26">
+                <XCUIElementTypeOther visible="true" x="269" y="813" width="26" height="26" />
+                <XCUIElementTypeStaticText value="1" name="1" visible="true" x="297" y="814" width="27" height="24" />
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther name="1" visible="true" x="334" y="813" width="55" height="26">
+                <XCUIElementTypeOther visible="true" x="334" y="813" width="26" height="26" />
+                <XCUIElementTypeStaticText value="1" name="1" visible="true" x="362" y="814" width="27" height="24" />
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </AppiumAUT>
+        """
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_bottom_action_at_index(FakeDriver(), 0) is True
+    assert taps == [("mobile: tap", {"x": 217, "y": 826})]
+
+
 def test_submit_comment_uses_android_bottom_comment_action_when_entry_id_is_missing(monkeypatch):
     events = []
 
