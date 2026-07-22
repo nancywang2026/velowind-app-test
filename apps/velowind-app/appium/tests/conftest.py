@@ -1,5 +1,6 @@
 import pytest
 import os
+import time
 from pathlib import Path
 from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
 
@@ -20,6 +21,18 @@ WALKTHROUGH_TEST_FILE = "smoke/test_ios_feature_walkthrough.py"
 
 def should_capture_each_step() -> bool:
     return os.environ.get("VW_APPIUM_CAPTURE_EACH_STEP", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _progress(message: str) -> None:
+    print(f"[appium-test] {message}", flush=True)
+
+
+def _is_android_smoke_nodeid(nodeid: str) -> bool:
+    return "/android_smoke/" in nodeid or "::android_smoke/" in nodeid
+
+
+def _should_log_progress(nodeid: str) -> bool:
+    return "/unit-test/" not in nodeid and not _is_android_smoke_nodeid(nodeid)
 
 
 @pytest.fixture(scope="session")
@@ -96,9 +109,19 @@ def step(capture_page):
     def _step(label: str, action=None, capture: bool = False):
         counter["value"] += 1
         step_label = f"{counter['value']:02d}-{label}"
+        started_at = time.monotonic()
+        _progress(f"STEP START {step_label}")
         with allure.step(step_label):
             try:
-                return action() if action is not None else None
+                result = action() if action is not None else None
+                _progress(f"STEP PASS  {step_label} ({time.monotonic() - started_at:.1f}s)")
+                return result
+            except Exception as exc:
+                _progress(
+                    f"STEP FAIL  {step_label} ({time.monotonic() - started_at:.1f}s): "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                raise
             finally:
                 if capture or should_capture_each_step():
                     capture_page(step_label)
@@ -106,10 +129,24 @@ def step(capture_page):
     return _step
 
 
+def pytest_runtest_logstart(nodeid, location):
+    if not _should_log_progress(nodeid):
+        return
+    _progress(f"CASE START {nodeid}")
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
+    nodeid = getattr(item, "nodeid", "")
+    if nodeid and not _should_log_progress(nodeid):
+        return
+    if report.when == "call":
+        outcome = getattr(report, "outcome", None)
+        if outcome is None:
+            outcome = "passed" if getattr(report, "passed", False) else "failed"
+        _progress(f"CASE {str(outcome).upper()} {nodeid or getattr(item, 'name', '<unknown>')}")
     if report.when != "call":
         return
 

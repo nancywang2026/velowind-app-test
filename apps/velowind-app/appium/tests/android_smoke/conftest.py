@@ -1,4 +1,5 @@
 import os
+import time
 
 import pytest
 from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
@@ -12,6 +13,10 @@ from .test_android_feature_walkthrough import prepare_android_home
 
 def should_capture_each_step() -> bool:
     return os.environ.get("VW_APPIUM_CAPTURE_EACH_STEP", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _progress(message: str) -> None:
+    print(f"[appium-test] {message}", flush=True)
 
 
 @pytest.fixture(scope="session")
@@ -56,9 +61,19 @@ def step(capture_page):
     def _step(label: str, action=None, capture: bool = False):
         counter["value"] += 1
         step_label = f"{counter['value']:02d}-{label}"
+        started_at = time.monotonic()
+        _progress(f"STEP START {step_label}")
         with allure.step(step_label):
             try:
-                return action() if action is not None else None
+                result = action() if action is not None else None
+                _progress(f"STEP PASS  {step_label} ({time.monotonic() - started_at:.1f}s)")
+                return result
+            except Exception as exc:
+                _progress(
+                    f"STEP FAIL  {step_label} ({time.monotonic() - started_at:.1f}s): "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                raise
             finally:
                 if capture or should_capture_each_step():
                     capture_page(step_label)
@@ -66,10 +81,16 @@ def step(capture_page):
     return _step
 
 
+def pytest_runtest_logstart(nodeid, location):
+    _progress(f"CASE START {nodeid}")
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
+    if report.when == "call":
+        _progress(f"CASE {report.outcome.upper()} {item.nodeid}")
     if report.when != "call":
         return
 
