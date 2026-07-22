@@ -812,7 +812,13 @@ def _tap_session_datetime_field(driver: WebDriver, keyword: str) -> bool:
 
     if _tap_session_datetime_container(driver, keyword):
         time.sleep(0.3)
-        return True
+        if _android_datetime_picker_visible(_safe_page_source(driver), keyword):
+            return True
+
+    if _tap_android_session_datetime_field_by_source(driver, keyword):
+        time.sleep(0.3)
+        if _android_datetime_picker_visible(_safe_page_source(driver), keyword):
+            return True
 
     try:
         rect = driver.get_window_rect()
@@ -831,8 +837,9 @@ def _tap_session_datetime_field(driver: WebDriver, keyword: str) -> bool:
                 },
             )
             time.sleep(0.15)
+            if _android_datetime_picker_visible(_safe_page_source(driver), keyword):
+                return True
         time.sleep(0.3)
-        return True
     except (WebDriverException, KeyError, TypeError):
         pass
 
@@ -847,9 +854,94 @@ def _tap_session_datetime_field(driver: WebDriver, keyword: str) -> bool:
     for placeholder in placeholders.get(keyword, []):
         if tap_text_if_present(driver, placeholder, timeout=0.5):
             time.sleep(0.3)
-            return True
+            if _android_datetime_picker_visible(_safe_page_source(driver), keyword):
+                return True
 
     return False
+
+
+def _tap_android_session_datetime_field_by_source(driver: WebDriver, keyword: str) -> bool:
+    point = _android_session_datetime_field_point(_safe_page_source(driver), keyword)
+    if point is None:
+        return False
+    x, y = point
+    try:
+        driver.execute_script("mobile: clickGesture", {"x": x, "y": y})
+        return True
+    except (WebDriverException, AttributeError):
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+            return True
+        except (WebDriverException, AttributeError):
+            return False
+
+
+def _android_session_datetime_field_point(page_source: str, keyword: str) -> tuple[int, int] | None:
+    if "<android." not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    elements = list(root.iter())
+    for index, element in enumerate(elements):
+        attributes = element.attrib
+        if attributes.get("displayed") == "false":
+            continue
+        if keyword not in attributes.get("text", ""):
+            continue
+        label_bounds = _android_bounds_rect(attributes.get("bounds", ""))
+        if label_bounds is None:
+            continue
+        value_point = _next_android_datetime_value_point(elements[index + 1 :], label_bounds)
+        if value_point is None:
+            continue
+        return value_point
+    return None
+
+
+def _next_android_datetime_value_point(elements: list[ElementTree.Element], label_bounds: tuple[int, int, int, int]) -> tuple[int, int] | None:
+    label_left, _label_top, label_right, label_bottom = label_bounds
+    label_center_x = (label_left + label_right) // 2
+    for element in elements:
+        attributes = element.attrib
+        if attributes.get("displayed") == "false":
+            continue
+        if attributes.get("class") != "android.view.ViewGroup" and not element.tag.endswith("ViewGroup"):
+            continue
+        bounds = _android_bounds_rect(attributes.get("bounds", ""))
+        if bounds is None:
+            continue
+        left, top, right, bottom = bounds
+        width = right - left
+        height = bottom - top
+        if not (top >= label_bottom and top - label_bottom <= 80 and width >= 200 and 70 <= height <= 180):
+            continue
+        if left <= label_center_x <= right:
+            icon_center = _android_datetime_value_icon_center(element, bounds)
+            if icon_center is not None:
+                return icon_center
+            return (left + right) // 2, (top + bottom) // 2
+    return None
+
+
+def _android_datetime_value_icon_center(element: ElementTree.Element, container_bounds: tuple[int, int, int, int]) -> tuple[int, int] | None:
+    container_left, container_top, container_right, container_bottom = container_bounds
+    for child in element.iter():
+        attributes = child.attrib
+        if attributes.get("displayed") == "false":
+            continue
+        child_class = attributes.get("class", "")
+        if child_class != "com.horcrux.svg.SvgView" and not child.tag.endswith("SvgView"):
+            continue
+        bounds = _android_bounds_rect(attributes.get("bounds", ""))
+        if bounds is None:
+            continue
+        left, top, right, bottom = bounds
+        if container_left <= left <= right <= container_right and container_top <= top <= bottom <= container_bottom:
+            return (left + right) // 2, (top + bottom) // 2
+    return None
 
 
 def _tap_ios_session_datetime_field(driver: WebDriver, keyword: str) -> bool:
@@ -1198,17 +1290,30 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
     if field_order is None:
         return False
 
+    wheel_id_prefix = _android_datetime_picker_wheel_id_prefix(keyword)
+    if wheel_id_prefix is None:
+        return False
     wheel_ids = {
-        "month": "activity-session-create-deadline-picker-month-wheel",
-        "day": "activity-session-create-deadline-picker-day-wheel",
-        "hour": "activity-session-create-deadline-picker-hour-wheel",
-        "minute": "activity-session-create-deadline-picker-minute-wheel",
+        "month": f"{wheel_id_prefix}-month-wheel",
+        "day": f"{wheel_id_prefix}-day-wheel",
+        "hour": f"{wheel_id_prefix}-hour-wheel",
+        "minute": f"{wheel_id_prefix}-minute-wheel",
     }
     if not _fill_android_datetime_picker_wheels(driver, wheel_ids, field_order, parts):
         _dismiss_session_datetime_picker(driver)
         return False
     _confirm_session_picker(driver)
     return True
+
+
+def _android_datetime_picker_wheel_id_prefix(keyword: str) -> str | None:
+    if keyword in {"报名截止时间", "报名截止"}:
+        return "activity-session-create-deadline-picker"
+    if keyword in {"开始时间", "活动开始"}:
+        return "activity-session-create-start-time-picker"
+    if keyword in {"结束时间", "活动结束"}:
+        return "activity-session-create-end-time-picker"
+    return None
 
 
 def _fill_android_datetime_picker_wheels(
@@ -1327,11 +1432,19 @@ def _android_datetime_picker_visible_value_points(page_source: str, wheel_id: st
 
 
 def _android_bounds_center(bounds: str) -> tuple[int, int] | None:
+    rect = _android_bounds_rect(bounds)
+    if rect is None:
+        return None
+    left, top, right, bottom = rect
+    return (left + right) // 2, (top + bottom) // 2
+
+
+def _android_bounds_rect(bounds: str) -> tuple[int, int, int, int] | None:
     match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", bounds)
     if not match:
         return None
     left, top, right, bottom = (int(value) for value in match.groups())
-    return (left + right) // 2, (top + bottom) // 2
+    return left, top, right, bottom
 
 
 def _android_datetime_picker_wheel_locators(wheel_id: str) -> list[tuple[str, str]]:
@@ -1456,23 +1569,13 @@ def _android_datetime_picker_drag_direction_and_steps(field: str, current: str |
     except (TypeError, ValueError):
         return None
 
-    ranges = {
-        "month": 12,
-        "day": 31,
-        "hour": 24,
-        "minute": 60,
-    }
-    cycle = ranges.get(field)
-    if cycle is None:
+    if field not in {"month", "day", "hour", "minute"}:
         return None
     if current_int == target_int:
         return None
 
-    forward = (target_int - current_int) % cycle
-    backward = (current_int - target_int) % cycle
-    if forward <= backward:
-        return "up", max(1, min(3, forward))
-    return "down", max(1, min(3, backward))
+    direction = "up" if target_int > current_int else "down"
+    return direction, max(1, min(3, abs(target_int - current_int)))
 
 
 def _android_datetime_picker_current_parts(driver: WebDriver) -> dict[str, str] | None:
