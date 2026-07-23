@@ -1,4 +1,5 @@
 from velowind_appium.modules import rental_orders
+from velowind_appium.modules import rental_home_entry
 from velowind_appium.modules.rental_common import visible_text_hit_points
 
 
@@ -93,3 +94,20 @@ def test_visible_text_hit_points_uses_android_bounds_center_for_matching_text():
     """
 
     assert visible_text_hit_points(page_source, ["车辆详情"]) == [(114, 741)]
+
+
+class _FakeRentalDriver:
+    def __init__(self, page_source: str):
+        self.page_source = page_source
+
+
+def test_rental_home_visible_rejects_post_detail_overlay():
+    driver = _FakeRentalDriver(
+        '推荐 post-home-feed-category-pager post-detail-banner-pager 活动 消息 我的'
+    )
+
+    assert rental_home_entry._home_visible(driver) is False
+
+
+def test_rental_entry_ids_include_android_floating_rent_entry():
+    assert "floating-rent-entry" in rental_home_entry.RENTAL_ENTRY_IDS
