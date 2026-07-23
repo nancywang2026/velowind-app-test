@@ -33,6 +33,7 @@ def choose_photo_from_library(
     *,
     album_name: str | None = None,
     picture_index: int = 1,
+    picture_indexes: tuple[int, ...] = (),
     select_all_from_album: bool = True,
     prefer_retry_sheet_option_first: bool = False,
     retry_sheet_option: RetrySheetOption | None = None,
@@ -68,13 +69,15 @@ def choose_photo_from_library(
     if not visible:
         return False
 
+    choose_kwargs = {
+        "album_name": album_name,
+        "picture_index": picture_index,
+        "select_all_from_album": select_all_from_album,
+    }
+    if picture_indexes:
+        choose_kwargs["picture_indexes"] = picture_indexes
     with _photo_picker_profile("choose-local-photo-primary"):
-        primary_chosen = choose_local_photo(
-            driver,
-            album_name=album_name,
-            picture_index=picture_index,
-            select_all_from_album=select_all_from_album,
-        )
+        primary_chosen = choose_local_photo(driver, **choose_kwargs)
     if primary_chosen:
         return True
 
@@ -83,12 +86,7 @@ def choose_photo_from_library(
     if not fallback_opened:
         return False
     with _photo_picker_profile("choose-local-photo-fallback"):
-        return choose_local_photo(
-            driver,
-            album_name=album_name,
-            picture_index=picture_index,
-            select_all_from_album=select_all_from_album,
-        )
+        return choose_local_photo(driver, **choose_kwargs)
 
 
 def dismiss_photo_permission_alerts(driver: WebDriver) -> None:
@@ -147,13 +145,22 @@ def choose_local_photo(
     driver: WebDriver,
     *,
     picture_index: int = 1,
+    picture_indexes: tuple[int, ...] = (),
     album_name: str | None = None,
     select_all_from_album: bool = True,
 ) -> bool:
     normalized_index = max(1, picture_index)
+    normalized_indexes = _normalize_picture_indexes(picture_indexes)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
     if _is_android_gallery3d_picker(driver):
+        if normalized_indexes:
+            return _choose_local_photo_from_android_gallery3d(
+                driver,
+                preferred_album_name=album_name,
+                picture_index=normalized_index,
+                picture_indexes=normalized_indexes,
+            )
         return _choose_local_photo_from_android_gallery3d(
             driver,
             preferred_album_name=album_name,
@@ -167,7 +174,12 @@ def choose_local_photo(
         if is_ios and not _ensure_ios_photo_album_active(driver, album_name):
             return False
     if album_name:
-        if select_all_from_album:
+        if normalized_indexes:
+            with _photo_picker_profile("tap-photo-grid-candidates"):
+                all_selected = tap_photo_grid_candidates(driver, normalized_indexes)
+            if not all_selected:
+                return False
+        elif select_all_from_album:
             with _photo_picker_profile("select-all-album-photos"):
                 all_selected = select_all_album_photos(driver)
             if not all_selected:
@@ -179,6 +191,13 @@ def choose_local_photo(
                 return False
         with _photo_picker_profile("confirm-system-selection"):
             return confirm_system_photo_picker_selection(driver)
+    if normalized_indexes:
+        with _photo_picker_profile("tap-photo-grid-candidates"):
+            candidates_tapped = tap_photo_grid_candidates(driver, normalized_indexes)
+        if candidates_tapped:
+            with _photo_picker_profile("confirm-system-selection"):
+                return confirm_system_photo_picker_selection(driver)
+        return False
     with _photo_picker_profile("tap-photo-grid-candidate"):
         candidate_tapped = tap_photo_grid_candidate(driver, normalized_index)
     if candidate_tapped:
@@ -188,6 +207,30 @@ def choose_local_photo(
         with _photo_picker_profile("confirm-system-selection"):
             return confirm_system_photo_picker_selection(driver)
     return False
+
+
+def tap_photo_grid_candidates(driver: WebDriver, picture_indexes: tuple[int, ...]) -> bool:
+    tapped_any = False
+    for index in _normalize_picture_indexes(picture_indexes):
+        if tap_photo_grid_candidate(driver, index):
+            tapped_any = True
+            time.sleep(0.2)
+    return tapped_any
+
+
+def _normalize_picture_indexes(picture_indexes: tuple[int, ...]) -> tuple[int, ...]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for value in picture_indexes or ():
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if index < 1 or index in seen:
+            continue
+        normalized.append(index)
+        seen.add(index)
+    return tuple(normalized)
 
 
 def open_photo_album(driver: WebDriver, album_name: str) -> bool:
@@ -911,6 +954,7 @@ def _choose_local_photo_from_android_gallery3d(
     *,
     preferred_album_name: str | None = None,
     picture_index: int = 1,
+    picture_indexes: tuple[int, ...] = (),
 ) -> bool:
     size = _safe_window_size(driver)
     if size is None:
@@ -927,8 +971,12 @@ def _choose_local_photo_from_android_gallery3d(
                 time.sleep(1)
 
     tap_order = _android_gallery3d_photo_positions()
-    preferred_index = min(max(1, picture_index), len(tap_order)) - 1
-    ordered_taps = [tap_order[preferred_index], *tap_order[:preferred_index], *tap_order[preferred_index + 1 :]]
+    normalized_indexes = _normalize_picture_indexes(picture_indexes)
+    if normalized_indexes:
+        ordered_taps = [tap_order[min(index, len(tap_order)) - 1] for index in normalized_indexes]
+    else:
+        preferred_index = min(max(1, picture_index), len(tap_order)) - 1
+        ordered_taps = [tap_order[preferred_index], *tap_order[:preferred_index], *tap_order[preferred_index + 1 :]]
 
     for x_ratio, y_ratio in ordered_taps:
         current_page = _safe_page_source(driver)

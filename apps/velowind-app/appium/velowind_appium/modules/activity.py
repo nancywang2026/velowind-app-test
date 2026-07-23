@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import time
+from xml.etree import ElementTree as ET
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -567,6 +568,15 @@ def _fill_input_near_label(
     if keyword not in page_source:
         return False
 
+    if "<XCUIElementType" in page_source:
+        return _fill_ios_input_near_visible_label(
+            driver,
+            keyword,
+            value,
+            prefer_text_view=prefer_text_view,
+            overwrite_existing=overwrite_existing,
+        )
+
     element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField", "android.widget.EditText"]
     if prefer_text_view:
         element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField", "android.widget.EditText"]
@@ -592,6 +602,91 @@ def _fill_input_near_label(
             except (NoSuchElementException, WebDriverException, AttributeError):
                 continue
     return False
+
+
+def _fill_ios_input_near_visible_label(
+    driver: WebDriver,
+    keyword: str,
+    value: str,
+    *,
+    prefer_text_view: bool = False,
+    overwrite_existing: bool = True,
+) -> bool:
+    label_elements = _find_ios_visible_elements_containing(driver, keyword)
+    if not label_elements:
+        return False
+
+    type_order = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"] if prefer_text_view else [
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeTextView",
+    ]
+    input_elements = []
+    for element_type in type_order:
+        try:
+            input_elements.extend(driver.find_elements(AppiumBy.XPATH, f"//{element_type}[@visible='true']"))
+        except WebDriverException:
+            continue
+
+    candidates = []
+    for label in label_elements:
+        label_rect = getattr(label, "rect", {}) or {}
+        for field in input_elements:
+            field_rect = getattr(field, "rect", {}) or {}
+            distance = _ios_input_label_distance(label_rect, field_rect)
+            if distance is None:
+                continue
+            candidates.append((distance, field))
+
+    for _, field in sorted(candidates, key=lambda item: item[0]):
+        try:
+            if not overwrite_existing and _field_has_user_value(field):
+                return True
+            _replace_text(field, value)
+            _hide_keyboard(driver)
+            return True
+        except (WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _find_ios_visible_elements_containing(driver: WebDriver, keyword: str):
+    xpath = (
+        f'//*[@visible="true" and (contains(@name, "{keyword}") '
+        f'or contains(@label, "{keyword}") or contains(@value, "{keyword}"))]'
+    )
+    try:
+        return [
+            element
+            for element in driver.find_elements(AppiumBy.XPATH, xpath)
+            if _element_is_visible(element)
+        ]
+    except WebDriverException:
+        return []
+
+
+def _ios_input_label_distance(label_rect: dict, field_rect: dict) -> float | None:
+    try:
+        label_x = float(label_rect.get("x", 0))
+        label_y = float(label_rect.get("y", 0))
+        label_width = float(label_rect.get("width", 0))
+        label_height = float(label_rect.get("height", 0))
+        field_x = float(field_rect.get("x", 0))
+        field_y = float(field_rect.get("y", 0))
+        field_width = float(field_rect.get("width", 0))
+        field_height = float(field_rect.get("height", 0))
+    except (TypeError, ValueError):
+        return None
+    if min(label_width, label_height, field_width, field_height) <= 0:
+        return None
+
+    vertical_gap = field_y - (label_y + label_height)
+    same_column = field_x <= label_x + label_width + 80 and field_x + field_width >= label_x - 80
+    right_of_label = field_x >= label_x + label_width - 20 and abs(field_y - label_y) <= 80
+    if same_column and -8 <= vertical_gap <= 140:
+        return abs(vertical_gap) + abs(field_x - label_x) * 0.05
+    if right_of_label:
+        return abs(field_x - (label_x + label_width)) + abs(field_y - label_y)
+    return None
 
 
 def _fill_first_empty_input(driver: WebDriver, value: str) -> None:
@@ -982,27 +1077,31 @@ def _normalize_string_list(raw_value) -> list[str]:
 
 def _fill_advanced_settings(driver: WebDriver, draft: ActivityDraft) -> None:
     advanced_values = [
-        (["参考时长", "活动时长", "时长"], draft.reference_duration),
-        (["总里程", "里程"], draft.total_mileage),
-        (["最高海拔", "海拔"], draft.max_altitude),
-        (["累计爬升", "爬升"], draft.elevation_gain),
-        (["风景标签", "景色标签", "风景"], "，".join(draft.scenery_tags)),
-        (["沿途景点", "途经景点", "景点"], "，".join(draft.scenic_spots)),
+        (["参考时长", "活动时长", "时长"], draft.reference_duration, ["2天1晚", "例如：2天1晚"]),
+        (["总里程", "里程"], draft.total_mileage, ["例如：68km"]),
+        (["最高海拔", "海拔"], draft.max_altitude, ["例如：812m"]),
+        (["累计爬升", "爬升"], draft.elevation_gain, ["例如：1260m"]),
+        (["风景标签", "景色标签", "风景"], "，".join(draft.scenery_tags), ["例如：山景、湖景、日落"]),
+        (["沿途景点", "途经景点", "景点"], "，".join(draft.scenic_spots), ["例如：龙井村、十里琅珰、九溪烟树"]),
     ]
-    advanced_values = [(keywords, value) for keywords, value in advanced_values if value]
+    advanced_values = [(keywords, value, placeholders) for keywords, value, placeholders in advanced_values if value]
     if not advanced_values:
         return
 
     if not _open_advanced_settings(driver, advanced_values):
         raise AssertionError("Unable to open activity advanced settings")
 
-    for keywords, value in advanced_values:
-        if not _fill_advanced_field(driver, keywords, value):
+    for keywords, value, placeholders in advanced_values:
+        if not _fill_advanced_field(driver, keywords, value, placeholders):
             raise AssertionError(f"Unable to fill advanced activity field: {keywords[0]}")
 
 
-def _fill_advanced_field(driver: WebDriver, keywords: list[str], value: str) -> bool:
+def _fill_advanced_field(driver: WebDriver, keywords: list[str], value: str, placeholders: list[str] | None = None) -> bool:
     for _ in range(4):
+        if placeholders:
+            for placeholder in placeholders:
+                if _fill_input_by_placeholder(driver, placeholder, value):
+                    return True
         for keyword in keywords:
             if _fill_input_near_label(driver, keyword, value):
                 return True
@@ -1011,7 +1110,26 @@ def _fill_advanced_field(driver: WebDriver, keywords: list[str], value: str) -> 
     return False
 
 
-def _open_advanced_settings(driver: WebDriver, advanced_values: list[tuple[list[str], str]]) -> bool:
+def _fill_input_by_placeholder(driver: WebDriver, placeholder: str, value: str) -> bool:
+    xpaths = [
+        f'//XCUIElementTypeTextField[@placeholderValue="{placeholder}" or @value="{placeholder}"]',
+        f'//XCUIElementTypeTextView[@placeholderValue="{placeholder}" or @value="{placeholder}"]',
+        f'//android.widget.EditText[@hint="{placeholder}" or @text="{placeholder}"]',
+    ]
+    for xpath in xpaths:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            if not _element_is_visible(element):
+                continue
+            _replace_text(element, value)
+            _hide_keyboard(driver)
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _open_advanced_settings(driver: WebDriver, advanced_values: list[tuple[list[str], str, list[str]]]) -> bool:
     for _ in range(5):
         page_source = _safe_page_source(driver)
         if _advanced_field_visible(page_source, advanced_values):
@@ -1030,8 +1148,33 @@ def _open_advanced_settings(driver: WebDriver, advanced_values: list[tuple[list[
     return _advanced_field_visible(_safe_page_source(driver), advanced_values)
 
 
-def _advanced_field_visible(page_source: str, advanced_values: list[tuple[list[str], str]]) -> bool:
-    return any(keyword in page_source for keywords, _ in advanced_values for keyword in keywords)
+def _advanced_field_visible(page_source: str, advanced_values: list[tuple]) -> bool:
+    if not page_source:
+        return False
+    if "<XCUIElementType" in page_source:
+        return _ios_advanced_field_visible(page_source, advanced_values)
+    return any(keyword in page_source for item in advanced_values for keyword in item[0])
+
+
+def _ios_advanced_field_visible(page_source: str, advanced_values: list[tuple]) -> bool:
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return False
+    keywords = [keyword for item in advanced_values for keyword in item[0]]
+    for element in root.iter():
+        if element.attrib.get("visible") != "true":
+            continue
+        text = _element_text(element)
+        if not any(keyword in text for keyword in keywords):
+            continue
+        try:
+            y = int(float(element.attrib.get("y", "0")))
+        except ValueError:
+            y = 0
+        if y > 120:
+            return True
+    return False
 
 
 def _tap_advanced_settings_row(driver: WebDriver, *, page_source: str | None = None) -> bool:
@@ -1522,6 +1665,14 @@ def _extract_strings(page_source: str) -> list[str]:
         seen.add(text)
         cleaned.append(text)
     return cleaned
+
+
+def _element_text(element) -> str:
+    return " ".join(
+        html.unescape(element.attrib.get(attribute, "")).strip()
+        for attribute in ("text", "name", "label", "value")
+        if element.attrib.get(attribute, "").strip()
+    )
 
 
 def _safe_page_source(driver: WebDriver) -> str:
