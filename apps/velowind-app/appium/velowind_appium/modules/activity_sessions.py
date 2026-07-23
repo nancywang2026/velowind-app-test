@@ -76,28 +76,23 @@ def open_my_activity_publish_list(driver: WebDriver, timeout: int = 30) -> None:
             return
         if _my_activity_list_visible(page_source):
             _tap_publish_tab(driver)
-            _toggle_show_delisted(driver)
             return
         if tap_text_if_present(driver, "我的活动", timeout=1):
             if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
                 _tap_publish_tab(driver)
-                _toggle_show_delisted(driver)
                 return
         if _tap_my_activity_entry(driver):
             if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
                 _tap_publish_tab(driver)
-                _toggle_show_delisted(driver)
                 return
         _tap_me_tab(driver)
         if tap_text_if_present(driver, "我的活动", timeout=1):
             if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
                 _tap_publish_tab(driver)
-                _toggle_show_delisted(driver)
                 return
         if _tap_my_activity_entry(driver):
             if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
                 _tap_publish_tab(driver)
-                _toggle_show_delisted(driver)
                 return
         time.sleep(0.5)
     raise AssertionError("Unable to open My Activity publish list")
@@ -116,7 +111,7 @@ def open_manage_sessions_for_approved_activity(driver: WebDriver, timeout: int =
             if _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=5):
                 if tap_text_if_present(driver, "管理场次", timeout=1):
                     return
-        _scroll_my_activity_list(driver)
+        _scroll_my_activity_list_toward_approved_activity(driver)
         time.sleep(0.5)
     raise AssertionError("Unable to open Manage Sessions for an approved activity")
 
@@ -1188,7 +1183,7 @@ def _tap_ios_datetime_picker_value(driver: WebDriver, field: str, value: str) ->
     escaped = value.replace('"', '\\"')
     try:
         rect = driver.get_window_rect()
-        expected_x, _expected_y = _ios_datetime_picker_wheel_center(rect, field)
+        expected_x, _expected_y = _ios_datetime_picker_wheel_center(driver, rect, field)
         min_y = int(rect["height"] * 0.52)
         max_y = int(rect["height"] * 0.92)
     except (WebDriverException, KeyError, TypeError, AttributeError):
@@ -1245,7 +1240,7 @@ def _tap_ios_datetime_picker_wheel_step(driver: WebDriver, field: str, direction
         rect = driver.get_window_rect()
     except (WebDriverException, KeyError, TypeError, AttributeError):
         return
-    center_x, center_y = _ios_datetime_picker_wheel_center(rect, field)
+    center_x, center_y = _ios_datetime_picker_wheel_center(driver, rect, field)
     offset = max(30, int(rect["height"] * 0.0435))
     start_y = center_y + offset if direction == "next" else center_y - offset
     end_y = center_y - offset if direction == "next" else center_y + offset
@@ -1260,13 +1255,46 @@ def _tap_ios_datetime_picker_wheel_step(driver: WebDriver, field: str, direction
         pass
 
 
-def _ios_datetime_picker_wheel_center(rect: dict, field: str) -> tuple[int, int]:
+def _ios_datetime_picker_wheel_center(driver: WebDriver, rect: dict, field: str) -> tuple[int, int]:
+    element_center = _ios_datetime_picker_wheel_element_center(driver, field)
+    if element_center is not None:
+        return element_center
     x_ratio, y_ratio = {
         "month": (0.214, 0.774),
         "day": (0.500, 0.774),
         "hour": (0.786, 0.774),
     }.get(field, (0.500, 0.774))
     return int(rect["width"] * x_ratio), int(rect["height"] * y_ratio)
+
+
+def _ios_datetime_picker_wheel_element_center(driver: WebDriver, field: str) -> tuple[int, int] | None:
+    escaped = field.replace('"', '\\"')
+    try:
+        elements = driver.find_elements(
+            AppiumBy.XPATH,
+            f'//*[contains(@name, "-{escaped}-wheel") or contains(@label, "-{escaped}-wheel") or contains(@value, "-{escaped}-wheel")]',
+        )
+    except (WebDriverException, AttributeError):
+        return None
+    candidates = []
+    for element in elements:
+        try:
+            if not element.is_displayed():
+                continue
+            element_rect = element.rect
+            x = int(element_rect["x"])
+            y = int(element_rect["y"])
+            width = int(element_rect["width"])
+            height = int(element_rect["height"])
+        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        candidates.append((y, height, x + int(width / 2), y + int(height / 2)))
+    if not candidates:
+        return None
+    _y, _height, center_x, center_y = sorted(candidates)[0]
+    return center_x, center_y
 
 
 
@@ -1324,17 +1352,17 @@ def _fill_android_datetime_picker_wheels(
 ) -> bool:
     for field in field_order:
         wheel_id = wheel_ids.get(field)
+        if wheel_id and _tap_android_datetime_picker_visible_wheel_value(driver, wheel_id, field, parts[field]):
+            continue
+        if _drag_android_datetime_picker_wheel_to_target(driver, field, parts[field]):
+            continue
         if wheel_id and _set_android_datetime_picker_wheel_value(driver, wheel_id, field, parts[field]):
             continue
-        if not _drag_android_datetime_picker_wheel_to_target(driver, field, parts[field]):
-            return False
+        return False
     return True
 
 
 def _set_android_datetime_picker_wheel_value(driver: WebDriver, wheel_id: str, field: str, value: str) -> bool:
-    if _tap_android_datetime_picker_visible_wheel_value(driver, wheel_id, field, value):
-        return True
-
     wheel = None
     for locator in _android_datetime_picker_wheel_locators(wheel_id):
         for _ in range(10):
@@ -1582,6 +1610,7 @@ def _android_datetime_picker_current_parts(driver: WebDriver) -> dict[str, str] 
     page_source = _safe_page_source(driver)
     match = None
     for pattern in [
+        r"已选择时间.*?(\d{1,2})月(\d{1,2})日\s*(\d{1,2})点(\d{1,2})分",
         r"已选择时间.*?(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{1,2})",
         r"(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{1,2})",
         r"(\d{1,2})[.](\d{1,2})\s+(\d{1,2}):(\d{1,2})",
@@ -1724,8 +1753,20 @@ def _toggle_show_delisted(driver: WebDriver) -> bool:
 
 def _tap_more_for_approved_activity(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
-    if "通过" in page_source and _tap_right_side_of_top_approved_card(driver):
-        return True
+    if "通过" in page_source:
+        tapped_any_approved_card = False
+        center_ys = _approved_badge_center_ys(driver)
+        for y in center_ys:
+            if _tap_right_side_of_approved_card_at_y(driver, y):
+                tapped_any_approved_card = True
+                if _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=1):
+                    return True
+        if not center_ys and "<XCUIElementType" in page_source:
+            return False
+        if not center_ys and _tap_right_side_of_approved_card_at_y(driver, None):
+            tapped_any_approved_card = True
+        if tapped_any_approved_card:
+            return True
     for text in ["...", "…", "更多"]:
         if tap_text_if_present(driver, text, timeout=0.5):
             return True
@@ -1744,6 +1785,10 @@ def _tap_more_for_approved_activity(driver: WebDriver) -> bool:
 
 def _tap_right_side_of_top_approved_card(driver: WebDriver) -> bool:
     y = _top_approved_badge_center_y(driver)
+    return _tap_right_side_of_approved_card_at_y(driver, y)
+
+
+def _tap_right_side_of_approved_card_at_y(driver: WebDriver, y: int | None) -> bool:
     try:
         rect = driver.get_window_rect()
         tap_y = y if y is not None else int(rect["height"] * 0.30)
@@ -1760,21 +1805,17 @@ def _tap_right_side_of_top_approved_card(driver: WebDriver) -> bool:
 
 
 def _top_approved_badge_center_y(driver: WebDriver) -> int | None:
-    candidates = []
-    for xpath in [
-        '//*[contains(@text, "通过")]',
-        '//*[contains(@name, "通过") or contains(@label, "通过") or contains(@value, "通过")]',
-    ]:
-        try:
-            candidates.extend(driver.find_elements(AppiumBy.XPATH, xpath))
-        except (WebDriverException, AttributeError):
-            continue
+    center_ys = _approved_badge_center_ys(driver)
+    return center_ys[0] if center_ys else None
+
+
+def _approved_badge_center_ys(driver: WebDriver) -> list[int]:
     badge_tops: list[tuple[int, int]] = []
     try:
         window_height = int(driver.get_window_rect()["height"])
     except (WebDriverException, KeyError, TypeError, AttributeError):
         window_height = 3000
-    for element in candidates:
+    for element in _approved_badge_elements(driver):
         try:
             rect = element.rect
             width = int(rect["width"])
@@ -1786,8 +1827,21 @@ def _top_approved_badge_center_y(driver: WebDriver) -> int | None:
         except (WebDriverException, KeyError, TypeError, AttributeError):
             continue
     if not badge_tops:
-        return None
-    return sorted(badge_tops)[0][1]
+        return []
+    return [center_y for _y, center_y in sorted(set(badge_tops))]
+
+
+def _approved_badge_elements(driver: WebDriver) -> list:
+    candidates = []
+    for xpath in [
+        '//*[contains(@text, "通过")]',
+        '//*[contains(@name, "通过") or contains(@label, "通过") or contains(@value, "通过")]',
+    ]:
+        try:
+            candidates.extend(driver.find_elements(AppiumBy.XPATH, xpath))
+        except (WebDriverException, AttributeError):
+            continue
+    return candidates
 
 
 def _tap_top_right_plus(driver: WebDriver) -> bool:
@@ -1833,6 +1887,36 @@ def _scroll_my_activity_list(driver: WebDriver) -> bool:
             return False
 
 
+def _scroll_my_activity_list_toward_approved_activity(driver: WebDriver) -> bool:
+    if _approved_activity_is_above_visible_view(driver):
+        try:
+            swipe_vertical(driver, direction="down")
+            return True
+        except (WebDriverException, AttributeError):
+            return False
+    return _scroll_my_activity_list(driver)
+
+
+def _approved_activity_is_above_visible_view(driver: WebDriver) -> bool:
+    try:
+        window_height = int(driver.get_window_rect()["height"])
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        window_height = 3000
+    for element in _approved_badge_elements(driver):
+        try:
+            rect = element.rect
+            width = int(rect["width"])
+            height = int(rect["height"])
+            y = int(rect["y"])
+        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if width > 120 or height > 80 or y > window_height:
+            continue
+        if y < 0:
+            return True
+    return False
+
+
 def _my_activity_list_visible(page_source: str) -> bool:
     return "我的活动" in page_source and any(token in page_source for token in ["发布", "报名", "下架", "审核", "通过"])
 
@@ -1846,7 +1930,12 @@ def _session_flow_is_already_open(page_source: str) -> bool:
 
 
 def _session_form_visible(page_source: str) -> bool:
-    return any(token in page_source for token in ["场次名称", "场次展示文案", "报名截止", "开始时间", "结束时间", "新增场次", "编辑场次"])
+    primary_fields = ["场次名称", "场次展示文案", "报名截止", "开始时间", "结束时间"]
+    if any(token in page_source for token in primary_fields):
+        return True
+    form_title_visible = any(token in page_source for token in ["新增场次", "编辑场次"])
+    supporting_fields = ["活动名额", "集合地点", "金额", "配套服务", "确认创建", "保存"]
+    return form_title_visible and any(token in page_source for token in supporting_fields)
 
 
 def _wait_until(predicate, timeout: int | float) -> bool:
