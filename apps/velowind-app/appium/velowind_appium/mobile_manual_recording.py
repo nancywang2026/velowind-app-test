@@ -106,6 +106,11 @@ def capture_bug_snapshot(driver: WebDriver, artifact_dir: Path, label: str) -> S
     except WebDriverException as error:
         capture_error = capture_error or f"{type(error).__name__}: {error}"
 
+    if capture_error is None:
+        missing_artifacts = [artifact_type for artifact_type in ("PNG", "XML") if artifact_type not in artifacts]
+        if missing_artifacts:
+            capture_error = f"Missing capture artifacts: {', '.join(missing_artifacts)}"
+
     visible_ids, visible_texts = extract_visible_identifiers(page_source)
     return SnapshotSummary(
         screenshot_path=str(artifacts["PNG"]) if "PNG" in artifacts else None,
@@ -130,12 +135,15 @@ def write_bug_recording_outputs(recording: BugRecording, artifact_dir: Path) -> 
     return {"recording": recording_path, "bug_report": bug_report_path, "taiga_issue": taiga_issue_path}
 
 
-def _prompt(message: str) -> str:
+def _prompt(message: str) -> str | None:
     import sys
 
     sys.stdout.write(message)
     sys.stdout.flush()
-    return sys.stdin.readline().strip()
+    line = sys.stdin.readline()
+    if line == "":
+        return None
+    return line.strip()
 
 
 def _default_session_name(platform: str) -> str:
@@ -148,7 +156,9 @@ def _review_recording(recording: BugRecording) -> BugRecording:
         print("Captured steps:")
         for capture in current.captures:
             print(f"{capture.index}. {capture.description}")
-        raw_command = _prompt("review> ").strip()
+        raw_command = _prompt("review> ")
+        if raw_command is None:
+            return current
         if not raw_command or raw_command == "keep":
             return current
         try:
@@ -176,6 +186,8 @@ def record_bug_journey(args: argparse.Namespace, runtime: PlatformRuntime) -> in
 
         while True:
             raw_command = _prompt("bug> ")
+            if raw_command is None:
+                break
             try:
                 command = parse_bug_command(raw_command)
             except ValueError as error:
@@ -210,7 +222,7 @@ def record_bug_journey(args: argparse.Namespace, runtime: PlatformRuntime) -> in
             expected_result=expected_result,
             actual_result=actual_result,
             notes=notes,
-            captures=[capture for capture in captures if capture.index != 0],
+            captures=captures,
         )
         reviewed = _review_recording(recording)
         paths = write_bug_recording_outputs(reviewed, artifact_dir)

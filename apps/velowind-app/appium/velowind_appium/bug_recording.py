@@ -114,8 +114,18 @@ def apply_review_command(recording: BugRecording, raw_command: str) -> BugRecord
         target = _parse_review_index(tokens[1])
         if not any(capture.index == target for capture in recording.captures):
             raise ValueError(f"No capture found with index {target}")
+        has_initial_capture = any(capture.index == 0 for capture in recording.captures)
+        if has_initial_capture and target == 0:
+            raise ValueError("Initial capture 0 cannot be deleted")
         remaining = [capture for capture in recording.captures if capture.index != target]
-        reindexed = [replace(capture, index=index) for index, capture in enumerate(remaining, start=1)]
+        if has_initial_capture:
+            initial_captures = [capture for capture in remaining if capture.index == 0]
+            reviewed_captures = [capture for capture in remaining if capture.index != 0]
+            reindexed = initial_captures + [
+                replace(capture, index=index) for index, capture in enumerate(reviewed_captures, start=1)
+            ]
+        else:
+            reindexed = [replace(capture, index=index) for index, capture in enumerate(remaining, start=1)]
         return replace(recording, captures=reindexed)
 
     raise ValueError(_REVIEW_USAGE)
