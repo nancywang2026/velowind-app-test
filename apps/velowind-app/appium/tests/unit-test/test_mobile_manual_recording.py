@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from velowind_appium.bug_recording import BugCommand
 from velowind_appium.mobile_manual_recording import (
     PlatformRuntime,
     build_environment_metadata,
@@ -94,7 +95,14 @@ def test_build_parser_accepts_taiga_project():
 
 
 def test_bug_mode_returns_without_starting_driver(monkeypatch):
+    calls = {"parse_bug_command": [], "create_driver": 0}
+
+    def fake_parse_bug_command(raw_command):
+        calls["parse_bug_command"].append(raw_command)
+        return BugCommand(kind="capture")
+
     def fail_create_driver(config):
+        calls["create_driver"] += 1
         raise AssertionError("bug mode must not create an Appium driver")
 
     fake_runtime = PlatformRuntime(
@@ -107,5 +115,8 @@ def test_bug_mode_returns_without_starting_driver(monkeypatch):
         "velowind_appium.mobile_manual_recording.resolve_platform_runtime",
         lambda platform: fake_runtime,
     )
+    monkeypatch.setattr("velowind_appium.bug_recording.parse_bug_command", fake_parse_bug_command)
 
     assert main(["--platform", "ios", "--mode", "bug"]) == 0
+    assert calls["parse_bug_command"] == ["capture"]
+    assert calls["create_driver"] == 0
