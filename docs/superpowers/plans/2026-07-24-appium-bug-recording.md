@@ -880,7 +880,7 @@ git commit -m "feat: record bug evidence and reports"
 - Modify: `apps/velowind-app/appium/README.md`
 - Modify: `docs/ios-manual-recording.md`
 
-- [ ] **Step 1: Update package scripts**
+- [x] **Step 1: Update package scripts**
 
 Change scripts to:
 
@@ -892,7 +892,7 @@ Change scripts to:
 
 Keep all other scripts unchanged.
 
-- [ ] **Step 2: Update docs with cross-platform bug-mode examples**
+- [x] **Step 2: Update docs with cross-platform bug-mode examples**
 
 Add this section to `apps/velowind-app/appium/README.md` after the iOS recording commands:
 
@@ -922,7 +922,7 @@ done
 
 Rename `docs/ios-manual-recording.md` to `docs/appium-manual-recording.md` if no external link depends on the old name. If keeping the old file, replace its title with `# Appium 手动录制与 Bug 录制` and add both iOS and Android bug examples.
 
-- [ ] **Step 3: Run JSON and focused unit validation**
+- [x] **Step 3: Run JSON and focused unit validation**
 
 Run:
 
@@ -933,7 +933,7 @@ PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m pytest apps/velowind-a
 
 Expected: `package.json ok` and pytest PASS.
 
-- [ ] **Step 4: Commit Task 4**
+- [x] **Step 4: Commit Task 4**
 
 ```bash
 git add package.json apps/velowind-app/appium/README.md docs/ios-manual-recording.md docs/appium-manual-recording.md

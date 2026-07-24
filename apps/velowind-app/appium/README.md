@@ -242,6 +242,28 @@ export VW_APPIUM_AUTO_OPEN_REPORT=true
 .tmp/appium-ios/
 ```
 
+## Bug 录制
+
+Bug 录制支持 iOS 真机和 Android 真机/模拟器。你在手机上正常操作 App，只在关键状态出现时在终端输入 `capture`。
+
+```bash
+pnpm appium:ios:record -- --mode bug --session-name search-loading
+pnpm appium:android:record -- --mode bug --session-name search-loading
+```
+
+常用命令：
+
+```text
+capture
+capture 打开搜索页
+actual 页面一直加载中
+expected 应展示搜索结果或错误态
+note 偶发，第二次复跑通过
+done
+```
+
+产物写入 `.tmp/appium-<platform>/recordings/<session-name>/`，其中 `bug-report.md` 用于人工确认，`taiga-issue.md` 可通过 Codex 的 Taiga MCP 创建 issue。当前 Taiga MCP 不支持附件上传，因此截图以本地路径形式写入 issue 描述。
+
 ## Allure 报告
 
 测试运行后会自动生成 Allure raw results：
