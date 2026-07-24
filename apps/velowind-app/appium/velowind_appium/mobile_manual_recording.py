@@ -92,6 +92,7 @@ def build_parser(default_platform: str | None = None) -> argparse.ArgumentParser
     parser.add_argument("--session-name", help="Session name used for artifact and test file names.")
     parser.add_argument("--test-name", help="Pytest test function name to generate later.")
     parser.add_argument("--module-name", help="Target pytest module filename to generate later.")
+    parser.add_argument("--taiga-project", help="Taiga project slug or identifier for bug report handoff.")
     parser.add_argument(
         "--output-dir",
         help="Directory for recording artifacts. Defaults to a platform-specific .tmp directory.",

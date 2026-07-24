@@ -3,8 +3,11 @@ from pathlib import Path
 import pytest
 
 from velowind_appium.mobile_manual_recording import (
+    PlatformRuntime,
     build_environment_metadata,
+    build_parser,
     default_recording_dir,
+    main,
     resolve_platform_runtime,
 )
 
@@ -80,3 +83,29 @@ def test_resolve_platform_runtime_rejects_unsupported_platform():
 def test_resolve_platform_runtime_returns_supported_runtime_names():
     assert resolve_platform_runtime("ios").platform == "ios"
     assert resolve_platform_runtime("android").platform == "android"
+
+
+def test_build_parser_accepts_taiga_project():
+    parser = build_parser()
+
+    args = parser.parse_args(["--platform", "ios", "--taiga-project", "velowind"])
+
+    assert args.taiga_project == "velowind"
+
+
+def test_bug_mode_returns_without_starting_driver(monkeypatch):
+    def fail_create_driver(config):
+        raise AssertionError("bug mode must not create an Appium driver")
+
+    fake_runtime = PlatformRuntime(
+        platform="ios",
+        load_config=lambda: object(),
+        create_driver=fail_create_driver,
+    )
+
+    monkeypatch.setattr(
+        "velowind_appium.mobile_manual_recording.resolve_platform_runtime",
+        lambda platform: fake_runtime,
+    )
+
+    assert main(["--platform", "ios", "--mode", "bug"]) == 0
