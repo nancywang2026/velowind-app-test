@@ -9,6 +9,9 @@ from typing import Any
 from .artifacts import safe_name
 
 
+_REVIEW_USAGE = "Usage: keep | no-op | rename <index> <text> | delete <index>"
+
+
 @dataclass(frozen=True)
 class BugCommand:
     kind: str
@@ -96,7 +99,9 @@ def apply_review_command(recording: BugRecording, raw_command: str) -> BugRecord
     command = tokens[0].lower()
 
     if command == "rename" and len(tokens) == 3:
-        target = int(tokens[1])
+        target = _parse_review_index(tokens[1])
+        if not any(capture.index == target for capture in recording.captures):
+            raise ValueError(f"No capture found with index {target}")
         updated = [
             replace(capture, label=safe_name(tokens[2]), description=tokens[2], user_description=tokens[2])
             if capture.index == target
@@ -106,12 +111,14 @@ def apply_review_command(recording: BugRecording, raw_command: str) -> BugRecord
         return replace(recording, captures=updated)
 
     if command == "delete" and len(tokens) == 2:
-        target = int(tokens[1])
+        target = _parse_review_index(tokens[1])
+        if not any(capture.index == target for capture in recording.captures):
+            raise ValueError(f"No capture found with index {target}")
         remaining = [capture for capture in recording.captures if capture.index != target]
         reindexed = [replace(capture, index=index) for index, capture in enumerate(remaining, start=1)]
         return replace(recording, captures=reindexed)
 
-    raise ValueError("Usage: keep | no-op | rename <index> <text> | delete <index>")
+    raise ValueError(_REVIEW_USAGE)
 
 
 def build_bug_recording_payload(recording: BugRecording, output_dir: Path) -> dict[str, Any]:
@@ -200,6 +207,13 @@ def _platform_label(platform: str) -> str:
     if normalized == "android":
         return "Android"
     return platform
+
+
+def _parse_review_index(raw_index: str) -> int:
+    try:
+        return int(raw_index)
+    except ValueError as exc:
+        raise ValueError(_REVIEW_USAGE) from exc
 
 
 def _environment_lines(environment: dict[str, Any]) -> list[str]:

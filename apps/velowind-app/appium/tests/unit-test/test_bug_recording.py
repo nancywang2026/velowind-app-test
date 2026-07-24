@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from velowind_appium.bug_recording import (
     BugCapture,
     BugCommand,
@@ -82,6 +84,48 @@ def test_apply_review_command_keeps_renames_and_deletes_steps():
     deleted = apply_review_command(renamed, "delete 1")
     assert [capture.index for capture in deleted.captures] == [1]
     assert deleted.captures[0].description == "搜索结果持续加载不结束"
+
+
+def test_apply_review_command_rejects_missing_indexes():
+    recording = BugRecording(
+        session_name="search-loading",
+        platform="ios",
+        title="search-loading",
+        environment={"platform": "ios"},
+        expected_result="",
+        actual_result="",
+        notes=[],
+        captures=[
+            BugCapture(1, "open-search", "打开搜索页", None, "2026-07-24T10:00:00", SnapshotSummary(None, None, "a", [], [], None)),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="No capture found with index 2"):
+        apply_review_command(recording, "rename 2 新描述")
+
+    with pytest.raises(ValueError, match="No capture found with index 2"):
+        apply_review_command(recording, "delete 2")
+
+
+def test_apply_review_command_rejects_invalid_numeric_input_with_usage_error():
+    recording = BugRecording(
+        session_name="search-loading",
+        platform="ios",
+        title="search-loading",
+        environment={"platform": "ios"},
+        expected_result="",
+        actual_result="",
+        notes=[],
+        captures=[
+            BugCapture(1, "open-search", "打开搜索页", None, "2026-07-24T10:00:00", SnapshotSummary(None, None, "a", [], [], None)),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Usage: keep"):
+        apply_review_command(recording, "rename abc 新描述")
+
+    with pytest.raises(ValueError, match="Usage: keep"):
+        apply_review_command(recording, "delete abc")
 
 
 def test_render_bug_report_and_taiga_issue_include_platform_and_evidence():
