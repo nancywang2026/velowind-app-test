@@ -78,7 +78,8 @@ def _yaml_bool(data: Dict[str, object], path: str, default: bool) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def discover_first_online_android_udid(adb_devices_output: str) -> Optional[str]:
+def _online_android_udids(adb_devices_output: str) -> list[str]:
+    udids: list[str] = []
     for raw_line in adb_devices_output.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("List of devices"):
@@ -88,11 +89,27 @@ def discover_first_online_android_udid(adb_devices_output: str) -> Optional[str]
             continue
         udid, state = parts[0], parts[1]
         if state == "device":
-            return udid
-    return None
+            udids.append(udid)
+    return udids
 
 
-def auto_detect_online_android_udid() -> Optional[str]:
+def discover_first_online_android_udid(adb_devices_output: str) -> Optional[str]:
+    udids = _online_android_udids(adb_devices_output)
+    return udids[0] if udids else None
+
+
+def discover_first_online_android_udid_for_target(adb_devices_output: str, target: str) -> Optional[str]:
+    udids = _online_android_udids(adb_devices_output)
+    if target == "android_studio":
+        return next((udid for udid in udids if udid.startswith("emulator-")), None)
+    if target == "physical":
+        return next((udid for udid in udids if not udid.startswith("emulator-") and ":" not in udid), None)
+    if target == "mumu":
+        return next((udid for udid in udids if ":" in udid), None)
+    return udids[0] if udids else None
+
+
+def auto_detect_online_android_udid(target: Optional[str] = None) -> Optional[str]:
     try:
         result = subprocess.run(
             ["adb", "devices"],
@@ -103,6 +120,8 @@ def auto_detect_online_android_udid() -> Optional[str]:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
+    if target:
+        return discover_first_online_android_udid_for_target(result.stdout, target)
     return discover_first_online_android_udid(result.stdout)
 
 
@@ -111,12 +130,11 @@ def load_android_config() -> AndroidAppiumConfig:
     target = _env_text("VW_ANDROID_TARGET") or _yaml_text(yaml_config, "target") or DEFAULT_TARGET
     explicit_udid = _env_text("VW_ANDROID_UDID")
     target_udid = _yaml_text(yaml_config, target, "udid")
-    target_config = yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}
 
     return AndroidAppiumConfig(
         target=target,
         server_url=os.environ.get("VW_APPIUM_SERVER_URL", DEFAULT_SERVER_URL).strip() or DEFAULT_SERVER_URL,
-        udid=explicit_udid or target_udid or auto_detect_online_android_udid(),
+        udid=explicit_udid or target_udid or auto_detect_online_android_udid(target),
         device_name=_env_text("VW_ANDROID_DEVICE_NAME")
         or _yaml_text(yaml_config, target, "device_name")
         or DEFAULT_DEVICE_NAME,
@@ -148,6 +166,7 @@ def build_android_capabilities(config: AndroidAppiumConfig) -> Dict[str, object]
         "appium:udid": config.udid,
         "appium:deviceName": config.device_name or DEFAULT_DEVICE_NAME,
         "appium:noReset": config.no_reset,
+        "appium:forceAppLaunch": True,
         "appium:autoGrantPermissions": config.auto_grant_permissions,
         "appium:newCommandTimeout": 180,
     }

@@ -69,11 +69,15 @@ def _adb(*args: str, udid: str) -> subprocess.CompletedProcess[str]:
 def sync_media_to_android_device(*, udid: str, media_assets: list[MediaAsset]) -> tuple[int, list[str]]:
     messages: list[str] = []
     prepared_dirs: set[str] = set()
+    physical_device = is_physical_android_device_udid(udid)
 
-    cleanup_exit_code, cleanup_messages = clear_synced_media_from_android_device(udid=udid)
-    messages.extend(cleanup_messages)
-    if cleanup_exit_code != 0:
-        return cleanup_exit_code, messages
+    if physical_device:
+        messages.append(f"Android media cleanup skipped for physical device: {udid}")
+    else:
+        cleanup_exit_code, cleanup_messages = clear_synced_media_from_android_device(udid=udid)
+        messages.extend(cleanup_messages)
+        if cleanup_exit_code != 0:
+            return cleanup_exit_code, messages
 
     for asset in media_assets:
         for target_dir in _target_dirs_for_asset(asset):
@@ -83,6 +87,11 @@ def sync_media_to_android_device(*, udid: str, media_assets: list[MediaAsset]) -
                     messages.append(mkdir_result.stderr.strip() or f"Unable to create Android media directory: {target_dir}")
                     return mkdir_result.returncode or 1, messages
                 prepared_dirs.add(target_dir)
+
+            target_path = f"{target_dir}/{asset.source_path.name}"
+            if is_physical_android_device_udid(udid) and android_media_file_exists(udid=udid, target_path=target_path):
+                messages.append(f"Android media already present: {target_path}")
+                continue
 
             push_result = _adb("push", str(asset.source_path), f"{target_dir}/", udid=udid)
             if push_result.returncode != 0:
@@ -97,7 +106,7 @@ def sync_media_to_android_device(*, udid: str, media_assets: list[MediaAsset]) -
                 "-a",
                 "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
                 "-d",
-                f"file://{target_dir}/{asset.source_path.name}",
+                f"file://{target_path}",
                 udid=udid,
             )
             if scan_result.returncode != 0:
@@ -167,6 +176,15 @@ def clear_synced_media_from_android_device(*, udid: str) -> tuple[int, list[str]
             return result.returncode or 1, messages
     messages.append("Android media cleanup: completed")
     return 0, messages
+
+
+def is_physical_android_device_udid(udid: str) -> bool:
+    return bool(udid.strip()) and not udid.startswith("emulator-") and ":" not in udid
+
+
+def android_media_file_exists(*, udid: str, target_path: str) -> bool:
+    result = _adb("shell", f"test -e '{target_path}'", udid=udid)
+    return result.returncode == 0
 
 
 def _target_dirs_for_asset(asset: MediaAsset) -> list[str]:

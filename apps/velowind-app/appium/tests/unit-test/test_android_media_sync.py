@@ -61,6 +61,15 @@ def test_target_dirs_for_root_asset_only_include_camera(tmp_path):
     assert android_media_sync._target_dirs_for_asset(asset) == [android_media_sync.DEVICE_CAMERA_DIR]
 
 
+def test_target_dirs_for_physical_device_album_asset_include_album_and_camera(tmp_path):
+    asset = android_media_sync.MediaAsset(source_path=tmp_path / "a.jpg", relative_dir=Path("云南洱海"))
+
+    assert android_media_sync._target_dirs_for_asset(asset) == [
+        "/sdcard/Pictures/云南洱海",
+        android_media_sync.DEVICE_CAMERA_DIR,
+    ]
+
+
 def test_clear_synced_media_from_android_device_removes_camera_and_album_dirs(monkeypatch):
     calls = []
 
@@ -84,6 +93,90 @@ def test_clear_synced_media_from_android_device_removes_camera_and_album_dirs(mo
         (("shell", f"find {android_media_sync.DEVICE_PICTURES_DIR} -mindepth 1 -maxdepth 1 ! -name '.thumbnails' -exec rm -rf {{}} +"), "127.0.0.1:16385"),
     ]
     assert messages == ["Android media cleanup: completed"]
+
+
+def test_sync_media_to_physical_device_only_pushes_missing_files(monkeypatch, tmp_path):
+    media_file = tmp_path / "root.png"
+    media_file.write_text("png", encoding="utf-8")
+    asset = android_media_sync.MediaAsset(source_path=media_file, relative_dir=Path("."))
+    calls = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_adb(*args, udid):
+        calls.append((args, udid))
+        if args == ("shell", "test -e '/sdcard/DCIM/Camera/root.png'"):
+            return Result(returncode=1)
+        return Result(stdout="ok")
+
+    monkeypatch.setattr(android_media_sync, "_adb", fake_adb)
+    monkeypatch.setattr(android_media_sync, "refresh_android_gallery_cache", lambda *, udid: (0, ["refreshed"]))
+
+    exit_code, messages = android_media_sync.sync_media_to_android_device(
+        udid="YHK7EERSGAPZX87X",
+        media_assets=[asset],
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (("shell", "mkdir -p '/sdcard/DCIM/Camera'"), "YHK7EERSGAPZX87X"),
+        (("shell", "test -e '/sdcard/DCIM/Camera/root.png'"), "YHK7EERSGAPZX87X"),
+        (("push", str(media_file), "/sdcard/DCIM/Camera/"), "YHK7EERSGAPZX87X"),
+        (
+            (
+                "shell",
+                "am",
+                "broadcast",
+                "-a",
+                "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+                "-d",
+                "file:///sdcard/DCIM/Camera/root.png",
+            ),
+            "YHK7EERSGAPZX87X",
+        ),
+    ]
+    assert "Android media cleanup skipped for physical device: YHK7EERSGAPZX87X" in messages
+    assert any(message.startswith("ok") for message in messages)
+
+
+def test_sync_media_to_physical_device_skips_existing_files(monkeypatch, tmp_path):
+    media_file = tmp_path / "root.png"
+    media_file.write_text("png", encoding="utf-8")
+    asset = android_media_sync.MediaAsset(source_path=media_file, relative_dir=Path("."))
+    calls = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_adb(*args, udid):
+        calls.append((args, udid))
+        return Result(stdout="ok")
+
+    monkeypatch.setattr(android_media_sync, "_adb", fake_adb)
+    monkeypatch.setattr(android_media_sync, "refresh_android_gallery_cache", lambda *, udid: (0, ["refreshed"]))
+
+    exit_code, messages = android_media_sync.sync_media_to_android_device(
+        udid="YHK7EERSGAPZX87X",
+        media_assets=[asset],
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (("shell", "mkdir -p '/sdcard/DCIM/Camera'"), "YHK7EERSGAPZX87X"),
+        (("shell", "test -e '/sdcard/DCIM/Camera/root.png'"), "YHK7EERSGAPZX87X"),
+    ]
+    assert messages == [
+        "Android media cleanup skipped for physical device: YHK7EERSGAPZX87X",
+        "Android media already present: /sdcard/DCIM/Camera/root.png",
+        "refreshed",
+    ]
 
 
 def test_refresh_android_gallery_cache_restarts_gallery(monkeypatch):

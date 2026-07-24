@@ -4,6 +4,7 @@ import pytest
 
 from velowind_appium.android_config import (
     build_android_capabilities,
+    discover_first_online_android_udid_for_target,
     discover_first_online_android_udid,
     load_android_config,
 )
@@ -20,8 +21,30 @@ emulator-5556	device
     assert discover_first_online_android_udid(adb_output) == "R5CN12345"
 
 
+def test_discover_first_online_android_udid_for_target_filters_android_studio_emulators():
+    adb_output = """
+List of devices attached
+R5CN12345	device
+emulator-5554	device
+127.0.0.1:16385	device
+"""
+
+    assert discover_first_online_android_udid_for_target(adb_output, "android_studio") == "emulator-5554"
+
+
+def test_discover_first_online_android_udid_for_target_filters_physical_devices():
+    adb_output = """
+List of devices attached
+emulator-5554	device
+YHK7EERSGAPZX87X	device
+127.0.0.1:16385	device
+"""
+
+    assert discover_first_online_android_udid_for_target(adb_output, "physical") == "YHK7EERSGAPZX87X"
+
+
 def test_load_android_config_uses_safe_defaults(monkeypatch):
-    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda: None)
+    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda target=None: None)
     monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-android-appium.yaml")
     for key in [
         "VW_APPIUM_SERVER_URL",
@@ -52,6 +75,70 @@ def test_load_android_config_uses_safe_defaults(monkeypatch):
     assert config.auto_grant_permissions is True
 
 
+def test_load_android_config_reads_physical_target_from_yaml(tmp_path, monkeypatch):
+    config_file = tmp_path / "android-appium.yaml"
+    config_file.write_text(
+        """
+target: physical
+app_package: com.example.demo
+app_activity: .MainActivity
+physical:
+  udid: YHK7EERSGAPZX87X
+  device_name: Xiaomi 25060RK16C
+  platform_version: "16"
+  app_path: /tmp/physical.apk
+android_studio:
+  udid: emulator-5554
+  device_name: Android Emulator
+  app_path: /tmp/emulator.apk
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("VW_ANDROID_TARGET", raising=False)
+    monkeypatch.delenv("VW_ANDROID_UDID", raising=False)
+    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda target=None: None)
+
+    config = load_android_config()
+
+    assert config.target == "physical"
+    assert config.udid == "YHK7EERSGAPZX87X"
+    assert config.device_name == "Xiaomi 25060RK16C"
+    assert config.platform_version == "16"
+    assert config.app_path == "/tmp/physical.apk"
+
+
+def test_load_android_config_env_target_selects_matching_yaml_section(tmp_path, monkeypatch):
+    config_file = tmp_path / "android-appium.yaml"
+    config_file.write_text(
+        """
+target: android_studio
+app_package: com.example.demo
+app_activity: .MainActivity
+physical:
+  udid: YHK7EERSGAPZX87X
+  device_name: Xiaomi 25060RK16C
+  app_path: /tmp/physical.apk
+android_studio:
+  udid: emulator-5554
+  device_name: Android Emulator
+  app_path: /tmp/emulator.apk
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.setenv("VW_ANDROID_TARGET", "physical")
+    monkeypatch.delenv("VW_ANDROID_UDID", raising=False)
+    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda target=None: None)
+
+    config = load_android_config()
+
+    assert config.target == "physical"
+    assert config.udid == "YHK7EERSGAPZX87X"
+    assert config.device_name == "Xiaomi 25060RK16C"
+    assert config.app_path == "/tmp/physical.apk"
+
+
 def test_load_android_config_reads_yaml_and_login(tmp_path, monkeypatch):
     config_file = tmp_path / "android-appium.yaml"
     config_file.write_text(
@@ -74,7 +161,7 @@ android_studio:
     )
     monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
     monkeypatch.delenv("VW_ANDROID_UDID", raising=False)
-    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda: None)
+    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda target=None: None)
 
     config = load_android_config()
 
@@ -149,12 +236,13 @@ def test_build_android_capabilities_uses_installed_app_when_no_apk(monkeypatch):
     assert capabilities["appium:appPackage"] == "com.example.demo"
     assert capabilities["appium:appActivity"] == ".MainActivity"
     assert capabilities["appium:autoGrantPermissions"] is True
+    assert capabilities["appium:forceAppLaunch"] is True
 
 
 def test_build_android_capabilities_requires_udid(monkeypatch):
     monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-android-appium.yaml")
     monkeypatch.delenv("VW_ANDROID_UDID", raising=False)
-    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda: None)
+    monkeypatch.setattr("velowind_appium.android_config.auto_detect_online_android_udid", lambda target=None: None)
 
     with pytest.raises(RuntimeError, match="No online Android device"):
         build_android_capabilities(load_android_config())

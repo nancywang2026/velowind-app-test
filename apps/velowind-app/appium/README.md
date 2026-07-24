@@ -89,6 +89,8 @@ pnpm appium:android:test:local --avd velowind_api35
 pnpm appium:android:test:local:publish --avd velowind_api35
 pnpm appium:android:test:local --target mumu
 pnpm appium:android:test:local:publish --target mumu
+pnpm appium:android:test:local --target physical
+pnpm appium:android:test:local:publish --target physical
 ```
 
 也仍然兼容环境变量写法：
@@ -96,6 +98,7 @@ pnpm appium:android:test:local:publish --target mumu
 ```bash
 VW_ANDROID_UDID=emulator-5554 pnpm appium:android:test:local
 VW_ANDROID_TARGET=mumu pnpm appium:android:test:local
+VW_ANDROID_TARGET=physical pnpm appium:android:test:local
 ```
 
 按 suite 文件运行：

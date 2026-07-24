@@ -54,6 +54,38 @@ def test_choose_photo_from_library_retries_sheet_option_before_selecting_album(m
     ]
 
 
+def test_photo_library_sheet_fallback_does_not_tap_xiaomi_quicksearch(monkeypatch):
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+        page_source = 'package="com.android.quicksearchbox" text="应用推荐"'
+
+        def get_window_size(self):
+            raise AssertionError("quicksearch search bar must not be tapped")
+
+    assert photo_picker._tap_photo_library_sheet_option(FakeDriver()) is False
+
+
+def test_tap_named_element_center_supports_android_content_desc():
+    taps = []
+
+    class FakeElement:
+        rect = {"x": 63, "y": 1698, "width": 359, "height": 487}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == '//*[@content-desc="其他相册"]':
+                return FakeElement()
+            raise photo_picker.NoSuchElementException()
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert photo_picker._tap_named_element_center(FakeDriver(), "其他相册") is True
+    assert taps == [("mobile: tap", {"x": 242.5, "y": 1941.5})]
+
+
 def test_open_photo_album_goes_back_before_switching_from_other_album(monkeypatch):
     events = []
     titles = iter(["云南洱海", None, None, "长白山", "长白山", "长白山"])
@@ -191,6 +223,184 @@ def test_find_photo_grid_candidates_supports_android_google_photos():
             return []
 
     assert photo_picker.find_photo_grid_candidates(FakeDriver()) == [candidate]
+
+
+def test_find_photo_grid_candidates_supports_miui_gallery_picker():
+    class FakeElement:
+        rect = {"x": 0, "y": 639, "width": 317, "height": 317}
+
+    candidate = FakeElement()
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+        page_source = 'package="com.miui.gallery" resource-id="com.miui.gallery:id/micro_thumb"'
+
+        def find_elements(self, by, value):
+            if value == '//android.widget.ImageView[@resource-id="com.miui.gallery:id/micro_thumb"]':
+                return [candidate]
+            return []
+
+    assert photo_picker.find_photo_grid_candidates(FakeDriver()) == [candidate]
+
+
+def test_find_photo_grid_selection_badges_supports_miui_gallery_checkboxes():
+    class FakeElement:
+        rect = {"x": 236, "y": 875, "width": 70, "height": 70}
+
+    badge = FakeElement()
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+        page_source = 'package="com.miui.gallery" resource-id="com.miui.gallery:id/micro_thumb"'
+
+        def find_elements(self, by, value):
+            if value == '//android.widget.CheckBox[@resource-id="android:id/checkbox" and @clickable="true"]':
+                return [badge]
+            return []
+
+    assert photo_picker.find_photo_grid_selection_badges(FakeDriver()) == [badge]
+
+
+def test_miui_gallery_picker_is_treated_as_android_photo_picker(monkeypatch):
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+
+    monkeypatch.setattr(
+        photo_picker,
+        "_safe_page_source",
+        lambda driver: 'package="com.miui.gallery" resource-id="com.miui.gallery:id/micro_thumb" text="请选择项目"',
+    )
+
+    assert photo_picker._is_android_gallery3d_picker(FakeDriver()) is True
+
+
+def test_miui_gallery_picker_is_ignored_on_android_emulator(monkeypatch):
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "emulator-5554", "appium:deviceName": "Android Emulator"}
+
+    monkeypatch.setattr(
+        photo_picker,
+        "_safe_page_source",
+        lambda driver: 'package="com.miui.gallery" resource-id="com.miui.gallery:id/micro_thumb" text="请选择项目"',
+    )
+
+    assert photo_picker._is_android_gallery3d_picker(FakeDriver()) is False
+
+
+def test_choose_local_photo_from_miui_gallery_opens_target_album_before_selecting(monkeypatch):
+    events = []
+
+    class FakeBadge:
+        rect = {"x": 236, "y": 875, "width": 70, "height": 70}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+
+        def get_window_size(self):
+            return {"width": 1280, "height": 2772}
+
+    monkeypatch.setattr(
+        photo_picker,
+        "_safe_page_source",
+        lambda driver: 'package="com.miui.gallery" resource-id="com.miui.gallery:id/micro_thumb" text="请选择项目"',
+    )
+    monkeypatch.setattr(photo_picker, "_open_miui_gallery_target_album", lambda driver, album_name: events.append(("album", album_name)) or True)
+    monkeypatch.setattr(photo_picker, "find_photo_grid_selection_badges", lambda driver: [FakeBadge()])
+    monkeypatch.setattr(photo_picker, "_tap_rect_center", lambda driver, rect: events.append(("badge", rect)) or True)
+    monkeypatch.setattr(photo_picker, "_tap_photo_picker_done_button", lambda driver: events.append("confirm") or True)
+    monkeypatch.setattr(photo_picker, "_photo_picker_transition_completed", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+
+    assert photo_picker._choose_local_photo_from_android_gallery3d(FakeDriver(), preferred_album_name="长白山") is True
+    assert events == [
+        ("album", "长白山"),
+        ("badge", {"x": 236.0, "y": 875.0, "width": 70.0, "height": 70.0}),
+        "confirm",
+    ]
+
+
+def test_open_miui_gallery_target_album_uses_other_albums_fallback(monkeypatch):
+    events = []
+    visible_sources = [
+        'package="com.miui.gallery" text="照片" text="影集" text="其他相册"',
+        'package="com.miui.gallery" text="照片" text="影集" text="其他相册"',
+        'package="com.miui.gallery" text="影集" text="其他相册"',
+        'package="com.miui.gallery" text="其他相册" text="长白山"',
+    ]
+    source_index = {"value": 0}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+
+    def fake_page_source(driver):
+        index = min(source_index["value"], len(visible_sources) - 1)
+        source_index["value"] += 1
+        return visible_sources[index]
+
+    monkeypatch.setattr(photo_picker, "_safe_page_source", fake_page_source)
+    monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("tap", text)) or text in {"影集", "其他相册", "长白山"})
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+
+    assert photo_picker._open_miui_gallery_target_album(FakeDriver(), "长白山") is True
+    assert events == [
+        ("tap", "影集"),
+        ("tap", "其他相册"),
+        ("tap", "长白山"),
+    ]
+
+
+def test_open_miui_gallery_target_album_accepts_map_album_prompt(monkeypatch):
+    events = []
+    page_sources = [
+        'package="com.miui.gallery" text="地图相册服务" text="同意"',
+        'package="com.miui.gallery" text="照片" text="影集" text="长白山"',
+        'package="com.miui.gallery" text="影集" text="长白山"',
+    ]
+    source_index = {"value": 0}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+
+    def fake_page_source(driver):
+        index = min(source_index["value"], len(page_sources) - 1)
+        source_index["value"] += 1
+        return page_sources[index]
+
+    monkeypatch.setattr(photo_picker, "_safe_page_source", fake_page_source)
+    monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("tap", text)) or text in {"同意", "影集", "长白山"})
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+
+    assert photo_picker._open_miui_gallery_target_album(FakeDriver(), "长白山") is True
+    assert events == [
+        ("tap", "同意"),
+        ("tap", "影集"),
+        ("tap", "长白山"),
+    ]
+
+
+def test_choose_local_photo_from_miui_gallery_does_not_select_when_album_missing(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
+
+        def get_window_size(self):
+            return {"width": 1280, "height": 2772}
+
+    monkeypatch.setattr(
+        photo_picker,
+        "_safe_page_source",
+        lambda driver: 'package="com.miui.gallery" resource-id="com.miui.gallery:id/micro_thumb" text="请选择项目"',
+    )
+    monkeypatch.setattr(photo_picker, "_open_miui_gallery_target_album", lambda driver, album_name: events.append(("album", album_name)) or False)
+    monkeypatch.setattr(photo_picker, "_tap_android_photo_selection_badges", lambda driver, indexes: events.append(("select", indexes)) or True)
+    monkeypatch.setattr(photo_picker, "confirm_system_photo_picker_selection", lambda driver: events.append("confirm") or True)
+
+    assert photo_picker._choose_local_photo_from_android_gallery3d(FakeDriver(), preferred_album_name="长白山") is False
+    assert events == [("album", "长白山")]
 
 
 def test_tap_photo_grid_candidate_clicks_ios_photo_and_waits_for_done_enable(monkeypatch):
