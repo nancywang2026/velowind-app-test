@@ -797,6 +797,58 @@ def test_fill_android_datetime_picker_wheels_prefers_drag_before_direct_set(monk
     assert calls == [("drag", "day", "23")]
 
 
+def test_fill_android_datetime_picker_wheels_prefers_physical_visible_row_alignment(monkeypatch):
+    driver = FakeDriver("已选择时间 07.25 22:16 月 日 时 分", width=1280, height=2856)
+    driver.capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+    calls = []
+
+    def fake_physical(received, wheel_id, field, value):
+        calls.append(("physical", wheel_id, field, value))
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_adjust_physical_android_datetime_picker_wheel_to_target", fake_physical, raising=False)
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_visible_wheel_value", lambda *args, **kwargs: calls.append(("tap-visible",)) or False)
+    monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel_to_target", lambda *args, **kwargs: calls.append(("generic-drag",)) or True)
+    monkeypatch.setattr(activity_sessions, "_set_android_datetime_picker_wheel_value", lambda *args, **kwargs: calls.append(("set",)) or True)
+
+    assert activity_sessions._fill_android_datetime_picker_wheels(
+        driver,
+        {"minute": "activity-session-create-deadline-picker-minute-wheel"},
+        ["minute"],
+        {"minute": "18"},
+    ) is True
+    assert calls == [
+        ("physical", "activity-session-create-deadline-picker-minute-wheel", "minute", "18"),
+    ]
+
+
+def test_fill_android_datetime_picker_wheels_does_not_use_physical_alignment_on_emulator(monkeypatch):
+    driver = FakeDriver("已选择时间 07.25 22:16 月 日 时 分", width=1280, height=2856)
+    driver.capabilities = {"platformName": "Android", "appium:udid": "emulator-5554"}
+    calls = []
+
+    monkeypatch.setattr(
+        activity_sessions,
+        "_adjust_physical_android_datetime_picker_wheel_to_target",
+        lambda *args, **kwargs: calls.append(("physical",)) or True,
+        raising=False,
+    )
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_visible_wheel_value", lambda *args, **kwargs: calls.append(("tap-visible",)) or False)
+    monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel_to_target", lambda *args, **kwargs: calls.append(("generic-drag",)) or True)
+    monkeypatch.setattr(activity_sessions, "_set_android_datetime_picker_wheel_value", lambda *args, **kwargs: calls.append(("set",)) or True)
+
+    assert activity_sessions._fill_android_datetime_picker_wheels(
+        driver,
+        {"minute": "activity-session-create-deadline-picker-minute-wheel"},
+        ["minute"],
+        {"minute": "18"},
+    ) is True
+    assert calls == [
+        ("tap-visible",),
+        ("generic-drag",),
+    ]
+
+
 def test_fill_android_datetime_picker_wheels_uses_step_fallback_for_day(monkeypatch):
     driver = FakeDriver("已选择时间 07.31 22:22 月 日 时 分", width=1280, height=2856)
     calls = []
@@ -883,6 +935,54 @@ def test_android_datetime_picker_taps_visible_value_from_page_source(monkeypatch
     assert driver.scripts == [("mobile: tap", {"x": 488, "y": 2209})]
 
 
+def test_android_datetime_picker_visible_value_uses_adb_tap_only_on_physical_android(monkeypatch):
+    current = {"day": "25"}
+    page_source = """
+    <hierarchy>
+      <android.view.ViewGroup resource-id="activity-session-create-deadline-picker-day-wheel" bounds="[352,2163][625,2481]">
+        <android.widget.TextView text="24" bounds="[352,2163][625,2255]" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+    adb_taps = []
+
+    def fake_adb_tap(received, *, x, y):
+        adb_taps.append((x, y))
+        current["day"] = "24"
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", lambda received: dict(current))
+    monkeypatch.setattr(activity_sessions, "_tap_physical_android_device", fake_adb_tap, raising=False)
+
+    physical_driver = FakeDriver(page_source, width=1280, height=2856)
+    physical_driver.capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+    assert activity_sessions._tap_android_datetime_picker_visible_wheel_value(
+        physical_driver,
+        "activity-session-create-deadline-picker-day-wheel",
+        "day",
+        "24",
+    ) is True
+    assert adb_taps == [(488, 2209)]
+
+    for capabilities in [
+        {"platformName": "Android", "appium:udid": "emulator-5554"},
+        {"platformName": "iOS", "appium:udid": "00008150-0006799C2693401C"},
+    ]:
+        current["day"] = "25"
+        adb_taps.clear()
+        driver = FakeDriver(page_source, width=1280, height=2856)
+        driver.capabilities = capabilities
+
+        assert activity_sessions._tap_android_datetime_picker_visible_wheel_value(
+            driver,
+            "activity-session-create-deadline-picker-day-wheel",
+            "day",
+            "24",
+        ) is False
+        assert adb_taps == []
+
+
 def test_drag_android_datetime_picker_wheel_moves_down_direction_toward_previous_value():
     driver = FakeDriver(width=1280, height=2856)
 
@@ -910,6 +1010,37 @@ def test_tap_android_datetime_picker_wheel_step_uses_bottom_row_for_next_value()
     assert driver.scripts == [("mobile: tap", {"x": 784, "y": 2435})]
 
 
+def test_tap_android_datetime_picker_wheel_step_swipes_between_visible_rows_only_on_physical_android(monkeypatch):
+    swipes = []
+
+    def fake_adb_swipe(received, *, start_x, start_y, end_x, end_y, duration_ms):
+        swipes.append((start_x, start_y, end_x, end_y, duration_ms))
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_swipe_physical_android_device", fake_adb_swipe, raising=False)
+
+    physical_driver = FakeDriver(width=1280, height=2856)
+    physical_driver.capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+    activity_sessions._tap_android_datetime_picker_wheel_step(physical_driver, "minute", "next")
+
+    assert swipes == [(1084, 2435, 1084, 2207, 280)]
+    assert physical_driver.scripts == []
+
+    for capabilities in [
+        {"platformName": "Android", "appium:udid": "emulator-5554"},
+        {"platformName": "iOS", "appium:udid": "00008150-0006799C2693401C"},
+    ]:
+        swipes.clear()
+        driver = FakeDriver(width=1280, height=2856)
+        driver.capabilities = capabilities
+
+        activity_sessions._tap_android_datetime_picker_wheel_step(driver, "minute", "next")
+
+        assert swipes == []
+        assert driver.scripts == [("mobile: tap", {"x": 1084, "y": 2435})]
+
+
 def test_drag_android_datetime_picker_wheel_to_target_drags_when_step_does_not_change_value(monkeypatch):
     driver = FakeDriver(width=1280, height=2856)
     current = {"hour": "22"}
@@ -927,6 +1058,31 @@ def test_drag_android_datetime_picker_wheel_to_target_drags_when_step_does_not_c
     assert calls == [
         ("tap", "hour", "previous"),
         ("drag", "hour", "down", 3),
+    ]
+
+
+def test_drag_android_datetime_picker_wheel_to_target_does_not_use_generic_drag_on_physical_android(monkeypatch):
+    driver = FakeDriver(width=1280, height=2856)
+    driver.capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+    current = {"day": "24"}
+    calls = []
+
+    def fake_current(received):
+        return dict(current)
+
+    def fake_step(received, field, direction):
+        calls.append(("step", field, direction))
+        current[field] = "29"
+
+    monkeypatch.setattr(activity_sessions, "_android_datetime_picker_current_parts", fake_current)
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_wheel_step", fake_step)
+    monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel", lambda *args, **kwargs: calls.append(("generic-drag",)))
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+
+    assert activity_sessions._drag_android_datetime_picker_wheel_to_target(driver, "day", "29") is True
+    assert calls == [
+        ("step", "day", "next"),
+        ("sleep", 0.45),
     ]
 
 

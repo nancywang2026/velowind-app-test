@@ -41,6 +41,8 @@ ANDROID_HOME_BLOCKING_TEXTS = [
     "浏览",
     "评论",
 ]
+ANDROID_APP_PACKAGE = os.environ.get("VW_ANDROID_APP_PACKAGE", "com.velowind.rider")
+ANDROID_APP_ACTIVITY = os.environ.get("VW_ANDROID_APP_ACTIVITY", ".MainActivity")
 
 
 def prepare_android_home(android_driver, step) -> bool:
@@ -57,6 +59,7 @@ def prepare_android_home(android_driver, step) -> bool:
 
 def _recover_android_home(android_driver) -> bool:
     for _ in range(6):
+        _activate_android_app_if_needed(android_driver)
         if _android_home_ready(android_driver):
             return True
         page_source = _safe_page_source(android_driver)
@@ -115,6 +118,8 @@ def _wait_android_home_ready(android_driver, timeout: int = 30) -> bool:
 
 def _android_home_ready(android_driver) -> bool:
     page_source = _safe_page_source(android_driver)
+    if ANDROID_APP_PACKAGE not in page_source:
+        return False
     if any(text in page_source for text in ANDROID_HOME_BLOCKING_TEXTS):
         return False
     return (
@@ -122,6 +127,36 @@ def _android_home_ready(android_driver) -> bool:
         or "post-home-feed-category-pager" in page_source
         or ("首页" in page_source and "活动" in page_source and "消息" in page_source and "我的" in page_source)
     )
+
+
+def _activate_android_app_if_needed(android_driver) -> bool:
+    page_source = _safe_page_source(android_driver)
+    if ANDROID_APP_PACKAGE in page_source:
+        return True
+    try:
+        android_driver.activate_app(ANDROID_APP_PACKAGE)
+        time.sleep(0.5)
+        if ANDROID_APP_PACKAGE in _safe_page_source(android_driver):
+            return True
+    except Exception:
+        pass
+    capabilities = getattr(android_driver, "capabilities", {}) or {}
+    udid = str(capabilities.get("appium:udid") or capabilities.get("udid") or os.environ.get("VW_ANDROID_UDID", "")).strip()
+    if not udid:
+        return False
+    component = f"{ANDROID_APP_PACKAGE}/{ANDROID_APP_ACTIVITY}"
+    try:
+        subprocess.run(
+            ["adb", "-s", udid, "shell", "am", "start", "-n", component],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        time.sleep(0.8)
+        return ANDROID_APP_PACKAGE in _safe_page_source(android_driver)
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _tap_android_top_back(android_driver) -> bool:

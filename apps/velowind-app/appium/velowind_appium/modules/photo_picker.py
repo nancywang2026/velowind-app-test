@@ -323,7 +323,15 @@ def _tap_all_photo_grid_selection_badges(driver: WebDriver) -> bool:
 def find_photo_grid_selection_badges(driver: WebDriver) -> list:
     badges = []
     seen: set[tuple[float, float, float, float]] = set()
+    is_android = _is_android_driver(driver)
+    is_xiaomi_physical = _is_xiaomi_physical_android_driver(driver)
+    android_xpaths = []
+    if is_xiaomi_physical:
+        android_xpaths = [
+            '//android.widget.CheckBox[@resource-id="android:id/checkbox" and @clickable="true"]',
+        ]
     for xpath in [
+        *android_xpaths,
         "//XCUIElementTypeOther",
         "//XCUIElementTypeButton",
         "//XCUIElementTypeImage",
@@ -338,10 +346,14 @@ def find_photo_grid_selection_badges(driver: WebDriver) -> list:
             y = float(rect.get("y", 0) or 0)
             width = float(rect.get("width", 0) or 0)
             height = float(rect.get("height", 0) or 0)
-            if not (12 <= width <= 24 and 12 <= height <= 24):
-                continue
-            if not (90 <= x <= 390 and 120 <= y <= 220):
-                continue
+            if is_android:
+                if not (24 <= width <= 100 and 24 <= height <= 100):
+                    continue
+            else:
+                if not (12 <= width <= 24 and 12 <= height <= 24):
+                    continue
+                if not (90 <= x <= 390 and 120 <= y <= 220):
+                    continue
             key = (x, y, width, height)
             if key in seen:
                 continue
@@ -370,8 +382,14 @@ def _tap_all_photo_grid_candidates(driver: WebDriver) -> bool:
 def find_photo_grid_candidates(driver: WebDriver) -> list:
     candidates = []
     seen: set[tuple[float, float, float, float]] = set()
+    miui_xpaths = []
+    if _is_xiaomi_physical_android_driver(driver):
+        miui_xpaths = [
+            '//android.widget.ImageView[@resource-id="com.miui.gallery:id/micro_thumb"]',
+        ]
     for xpath in [
         '//android.widget.ImageView[@clickable="true" and contains(@content-desc, "Photo")]',
+        *miui_xpaths,
         "//XCUIElementTypeImage[@name='PXGGridLayout-Info']",
         "//XCUIElementTypeImage[contains(@label, 'Screenshot')]",
         "//XCUIElementTypeImage",
@@ -566,6 +584,7 @@ def _photo_picker_transition_completed(driver: WebDriver) -> bool:
             "Select photos",
             "Device folders",
             'package="com.google.android.apps.photos"',
+            *(['package="com.miui.gallery"'] if _is_xiaomi_physical_android_driver(driver) else []),
             'text="Done"',
             "发布笔记",
             "发布活动",
@@ -601,6 +620,9 @@ def _tap_photo_source_option(driver: WebDriver, texts: list[str]) -> bool:
 
 
 def _tap_photo_library_sheet_option(driver: WebDriver) -> bool:
+    if _is_xiaomi_physical_android_driver(driver) and _android_quicksearch_visible(_safe_page_source(driver)):
+        _photo_picker_debug("skip photo library sheet fallback on Android quicksearch")
+        return False
     try:
         size = driver.get_window_size()
         driver.execute_script(
@@ -725,6 +747,8 @@ def _tap_named_element_center(driver: WebDriver, text: str) -> bool:
     xpaths = _visible_ios_text_xpaths(text)
     if is_android:
         xpaths = [
+            f'//*[@content-desc="{text}"]',
+            f'//*[contains(@content-desc, "{text}")]',
             f'//*[@text="{text}"]',
             f'//*[contains(@text, "{text}")]',
             f'//*[@name="{text}" or @label="{text}" or @value="{text}"]',
@@ -857,6 +881,8 @@ def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
     if str(capabilities.get("platformName", "")).lower() == "android":
         if tap_text_if_present(driver, "Done", timeout=1):
             return True
+        if tap_text_if_present(driver, "确认", timeout=1):
+            return True
     if _tap_accessibility_id_now(driver, "Add"):
         return True
     if _tap_texts_by_predicate(driver, ["完成", "添加"]):
@@ -960,6 +986,15 @@ def _choose_local_photo_from_android_gallery3d(
     if size is None:
         return False
 
+    if _is_xiaomi_physical_android_driver(driver) and _is_miui_gallery_picker(driver):
+        if preferred_album_name and not _open_miui_gallery_target_album(driver, preferred_album_name):
+            return False
+        normalized_indexes = _normalize_picture_indexes(picture_indexes)
+        target_indexes = normalized_indexes or (max(1, picture_index),)
+        if _tap_android_photo_selection_badges(driver, target_indexes):
+            return confirm_system_photo_picker_selection(driver)
+        return False
+
     album_name = preferred_album_name or _preferred_android_gallery3d_album_name()
     if album_name:
         if _tap_named_element_center(driver, album_name):
@@ -1012,11 +1047,117 @@ def _android_gallery3d_photo_positions() -> list[tuple[float, float]]:
 
 
 def _is_android_gallery3d_picker(driver: WebDriver) -> bool:
+    if not _is_android_driver(driver):
+        return False
+    page_source = _safe_page_source(driver)
+    if "com.android.gallery3d" in page_source and "选择照片" in page_source:
+        return True
+    return _is_xiaomi_physical_android_driver(driver) and _miui_gallery_picker_visible(page_source)
+
+
+def _is_miui_gallery_picker(driver: WebDriver) -> bool:
+    return _miui_gallery_picker_visible(_safe_page_source(driver))
+
+
+def _miui_gallery_picker_visible(page_source: str) -> bool:
+    return "com.miui.gallery" in page_source and "com.miui.gallery:id/micro_thumb" in page_source
+
+
+def _is_android_driver(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    return str(capabilities.get("platformName", "")).lower() == "android"
+
+
+def _android_quicksearch_visible(page_source: str) -> bool:
+    return "com.android.quicksearchbox" in page_source and any(text in page_source for text in ["应用推荐", "热搜榜", "搜索"])
+
+
+def _is_xiaomi_physical_android_driver(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() != "android":
         return False
+    udid = str(capabilities.get("appium:udid") or capabilities.get("udid") or os.environ.get("VW_ANDROID_UDID", "")).strip()
+    if not udid or udid.startswith("emulator-") or ":" in udid:
+        return False
+    device_text = " ".join(
+        str(capabilities.get(key) or "")
+        for key in [
+            "appium:deviceName",
+            "deviceName",
+            "appium:manufacturer",
+            "manufacturer",
+            "appium:model",
+            "model",
+        ]
+    ).lower()
+    page_source = _safe_page_source(driver).lower()
+    return any(marker in device_text for marker in ["xiaomi", "miui", "25060", "dali"]) or "com.miui.gallery" in page_source
+
+
+def _tap_android_photo_selection_badges(driver: WebDriver, picture_indexes: tuple[int, ...]) -> bool:
+    badges = find_photo_grid_selection_badges(driver)
+    if not badges:
+        return False
+    tapped_any = False
+    for index in _normalize_picture_indexes(picture_indexes):
+        if index > len(badges):
+            continue
+        rect = _rect_snapshot(badges[index - 1])
+        if rect is None:
+            continue
+        if _tap_rect_center(driver, rect):
+            tapped_any = True
+            time.sleep(0.2)
+    return tapped_any
+
+
+def _open_miui_gallery_target_album(driver: WebDriver, album_name: str) -> bool:
+    _dismiss_miui_gallery_service_prompt(driver)
+    if not _tap_named_element_center(driver, "影集"):
+        _photo_picker_debug(f"miui albums tab not found; target={album_name}")
+        return False
+    if _wait_until(lambda: _miui_gallery_album_text_visible(driver, "影集"), timeout=2):
+        time.sleep(0.3)
+    if _tap_miui_gallery_album_by_name(driver, album_name):
+        return True
+    if _tap_miui_gallery_album_by_name(driver, "其他相册"):
+        if _wait_until(lambda: _miui_gallery_album_text_visible(driver, album_name), timeout=2):
+            return _tap_miui_gallery_album_by_name(driver, album_name)
+        for _ in range(3):
+            try:
+                swipe_vertical(driver, direction="up")
+            except WebDriverException:
+                pass
+            time.sleep(0.3)
+            if _tap_miui_gallery_album_by_name(driver, album_name):
+                return True
+    _photo_picker_debug(f"miui target album not found; target={album_name}")
+    return False
+
+
+def _dismiss_miui_gallery_service_prompt(driver: WebDriver) -> None:
     page_source = _safe_page_source(driver)
-    return "com.android.gallery3d" in page_source and "选择照片" in page_source
+    if "地图相册服务" not in page_source and "第三方数据共享说明" not in page_source:
+        return
+    if _tap_named_element_center(driver, "同意"):
+        _wait_until(
+            lambda: "地图相册服务" not in _safe_page_source(driver),
+            timeout=2,
+        )
+        time.sleep(0.3)
+
+
+def _tap_miui_gallery_album_by_name(driver: WebDriver, album_name: str) -> bool:
+    if album_name not in _safe_page_source(driver):
+        return False
+    if not _tap_named_element_center(driver, album_name):
+        return False
+    time.sleep(0.5)
+    return True
+
+
+def _miui_gallery_album_text_visible(driver: WebDriver, text: str) -> bool:
+    return text in _safe_page_source(driver)
 
 
 def _android_gallery3d_album_list_visible(page_source: str) -> bool:

@@ -703,7 +703,9 @@ def _android_share_sheet_visible(page_source: str) -> bool:
 
 
 def _android_search_page_visible(page_source: str) -> bool:
-    return "android.widget.EditText" in page_source and 'text="搜索"' in page_source
+    if "android.widget.EditText" in page_source and 'text="搜索"' in page_source:
+        return True
+    return "com.android.quicksearchbox" in page_source and any(text in page_source for text in ["应用推荐", "热搜榜", "搜索"])
 
 
 def _android_detail_page_visible(page_source: str) -> bool:
@@ -750,6 +752,22 @@ def _tap_android_top_back(driver: WebDriver) -> bool:
             "mobile: tap",
             {"x": int(rect["width"] * 0.06), "y": int(rect["height"] * 0.09)},
         )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
+def _tap_android_header_close(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        for x_ratio, y_ratio in [(0.93, 0.09), (0.95, 0.09), (0.91, 0.09)]:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": int(rect["width"] * x_ratio), "y": int(rect["height"] * y_ratio)},
+            )
+            time.sleep(0.2)
+            if _android_publish_entry_ready(_safe_page_source(driver)):
+                return True
         return True
     except (AttributeError, KeyError, TypeError, WebDriverException):
         return False

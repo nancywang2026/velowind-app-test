@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time as datetime_time, timedelta
+import os
 import re
+import subprocess
 import time
 from xml.etree import ElementTree
 
@@ -1054,6 +1056,79 @@ def _is_android_driver(driver: WebDriver) -> bool:
     return str(capabilities.get("platformName", "")).lower() == "android"
 
 
+def _is_physical_android_driver(driver: WebDriver) -> bool:
+    if not _is_android_driver(driver):
+        return False
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    return bool(udid) and not udid.startswith("emulator-") and ":" not in udid
+
+
+def _tap_physical_android_device(driver: WebDriver, *, x: float, y: float) -> bool:
+    if not _is_physical_android_driver(driver):
+        return False
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    try:
+        result = subprocess.run(
+            ["adb", "-s", udid, "shell", "input", "tap", str(int(x)), str(int(y))],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _swipe_physical_android_device(
+    driver: WebDriver,
+    *,
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    duration_ms: int,
+) -> bool:
+    if not _is_physical_android_driver(driver):
+        return False
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    try:
+        result = subprocess.run(
+            [
+                "adb",
+                "-s",
+                udid,
+                "shell",
+                "input",
+                "swipe",
+                str(int(start_x)),
+                str(int(start_y)),
+                str(int(end_x)),
+                str(int(end_y)),
+                str(duration_ms),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def _ios_datetime_picker_visible(page_source: str) -> bool:
     if "XCUIElementTypePickerWheel" in page_source:
         return True
@@ -1352,6 +1427,12 @@ def _fill_android_datetime_picker_wheels(
 ) -> bool:
     for field in field_order:
         wheel_id = wheel_ids.get(field)
+        if (
+            wheel_id
+            and _is_physical_android_driver(driver)
+            and _adjust_physical_android_datetime_picker_wheel_to_target(driver, wheel_id, field, parts[field])
+        ):
+            continue
         if wheel_id and _tap_android_datetime_picker_visible_wheel_value(driver, wheel_id, field, parts[field]):
             continue
         if _drag_android_datetime_picker_wheel_to_target(driver, field, parts[field]):
@@ -1389,6 +1470,53 @@ def _set_android_datetime_picker_wheel_value(driver: WebDriver, wheel_id: str, f
         return False
 
 
+def _adjust_physical_android_datetime_picker_wheel_to_target(driver: WebDriver, wheel_id: str, field: str, target: str) -> bool:
+    if not _is_physical_android_driver(driver):
+        return False
+
+    for _ in range(36):
+        current = _android_datetime_picker_current_parts(driver)
+        if current is None:
+            return False
+        current_value = current.get(field)
+        if current_value == target:
+            return True
+
+        page_source = _safe_page_source(driver)
+        target_rects = _android_datetime_picker_visible_value_rects(page_source, wheel_id, target)
+        wheel_rect = _android_datetime_picker_wheel_bounds_rect(page_source, wheel_id)
+        if target_rects and wheel_rect is not None:
+            _left, top, _right, bottom = wheel_rect
+            wheel_center_y = (top + bottom) // 2
+            target_rect = sorted(
+                target_rects,
+                key=lambda rect: abs(((rect[1] + rect[3]) // 2) - wheel_center_y),
+            )[0]
+            target_x = (target_rect[0] + target_rect[2]) // 2
+            target_y = (target_rect[1] + target_rect[3]) // 2
+            if abs(target_y - wheel_center_y) <= 8:
+                return True
+            _swipe_physical_android_device(
+                driver,
+                start_x=target_x,
+                start_y=target_y,
+                end_x=target_x,
+                end_y=wheel_center_y,
+                duration_ms=260,
+            )
+            time.sleep(0.45)
+            continue
+
+        step_direction = _android_datetime_picker_step_direction(field, current_value, target)
+        if step_direction is None:
+            return False
+        _swipe_physical_android_datetime_picker_wheel_step(driver, field, step_direction)
+        time.sleep(0.45)
+
+    current = _android_datetime_picker_current_parts(driver)
+    return bool(current and current.get(field) == target)
+
+
 def _tap_android_datetime_picker_visible_wheel_value(driver: WebDriver, wheel_id: str, field: str, value: str) -> bool:
     current = _android_datetime_picker_current_parts(driver) or {}
     if current.get(field) == value:
@@ -1398,12 +1526,18 @@ def _tap_android_datetime_picker_visible_wheel_value(driver: WebDriver, wheel_id
         try:
             driver.execute_script("mobile: tap", {"x": x, "y": y})
         except WebDriverException:
-            continue
+            pass
         if _wait_until(
             lambda: (_android_datetime_picker_current_parts(driver) or {}).get(field) == value,
             timeout=1.5,
         ):
             return True
+        if _is_physical_android_driver(driver) and _tap_physical_android_device(driver, x=x, y=y):
+            if _wait_until(
+                lambda: (_android_datetime_picker_current_parts(driver) or {}).get(field) == value,
+                timeout=1.5,
+            ):
+                return True
 
     escaped_wheel_id = wheel_id.replace('"', '\\"')
     escaped_value = value.replace('"', '\\"')
@@ -1441,22 +1575,42 @@ def _tap_android_datetime_picker_visible_wheel_value(driver: WebDriver, wheel_id
 
 
 def _android_datetime_picker_visible_value_points(page_source: str, wheel_id: str, value: str) -> list[tuple[int, int]]:
+    return [
+        ((left + right) // 2, (top + bottom) // 2)
+        for left, top, right, bottom in _android_datetime_picker_visible_value_rects(page_source, wheel_id, value)
+    ]
+
+
+def _android_datetime_picker_visible_value_rects(page_source: str, wheel_id: str, value: str) -> list[tuple[int, int, int, int]]:
     try:
         root = ElementTree.fromstring(page_source)
     except ElementTree.ParseError:
         return []
 
-    points = []
+    rects = []
     for wheel in root.iter():
         if wheel.attrib.get("resource-id") != wheel_id:
             continue
         for element in wheel.iter():
             if element.attrib.get("text") != value:
                 continue
-            center = _android_bounds_center(element.attrib.get("bounds", ""))
-            if center is not None:
-                points.append(center)
-    return points
+            rect = _android_bounds_rect(element.attrib.get("bounds", ""))
+            if rect is not None:
+                rects.append(rect)
+    return rects
+
+
+def _android_datetime_picker_wheel_bounds_rect(page_source: str, wheel_id: str) -> tuple[int, int, int, int] | None:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    for wheel in root.iter():
+        if wheel.attrib.get("resource-id") != wheel_id:
+            continue
+        return _android_bounds_rect(wheel.attrib.get("bounds", ""))
+    return None
 
 
 def _android_bounds_center(bounds: str) -> tuple[int, int] | None:
@@ -1504,6 +1658,9 @@ def _drag_android_datetime_picker_wheel_to_target(driver: WebDriver, field: str,
         if step_direction is None:
             return False
         _tap_android_datetime_picker_wheel_step(driver, field, step_direction)
+        if _is_physical_android_driver(driver):
+            time.sleep(0.45)
+            continue
         time.sleep(0.1)
         after_step = _android_datetime_picker_current_parts(driver)
         if after_step and after_step.get(field) != current_value:
@@ -1557,10 +1714,33 @@ def _tap_android_datetime_picker_wheel_step(driver: WebDriver, field: str, direc
     center_x, center_y = _android_datetime_picker_wheel_center(rect, field)
     offset = max(92, int(rect["height"] * 0.04))
     tap_y = center_y + offset if direction == "next" else center_y - offset
+    if _is_physical_android_driver(driver):
+        if _swipe_physical_android_datetime_picker_wheel_step(driver, field, direction):
+            return
     try:
         driver.execute_script("mobile: tap", {"x": center_x, "y": tap_y})
     except WebDriverException:
         pass
+
+
+def _swipe_physical_android_datetime_picker_wheel_step(driver: WebDriver, field: str, direction: str) -> bool:
+    try:
+        rect = driver.get_window_rect()
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        return False
+
+    center_x, center_y = _android_datetime_picker_wheel_center(rect, field)
+    offset = max(92, int(rect["height"] * 0.04))
+    start_y = center_y + offset if direction == "next" else center_y - offset
+    end_y = center_y - offset if direction == "next" else center_y + offset
+    return _swipe_physical_android_device(
+        driver,
+        start_x=center_x,
+        start_y=start_y,
+        end_x=center_x,
+        end_y=end_y,
+        duration_ms=280,
+    )
 
 
 def _android_datetime_picker_wheel_center(rect: dict, field: str) -> tuple[int, int]:

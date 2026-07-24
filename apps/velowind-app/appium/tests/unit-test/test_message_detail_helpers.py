@@ -761,6 +761,28 @@ def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeyp
     assert events[:2] == ["publish-entry", "note-type"]
 
 
+def test_prepare_android_publish_entry_closes_search_page(monkeypatch):
+    events = []
+    page_sources = iter(['class="android.widget.EditText" text="搜索"', 'text="首页" text="活动" text="消息" text="我的"'])
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: next(page_sources))
+    monkeypatch.setattr(message_detail, "_tap_android_header_close", lambda driver: events.append("header-close") or True)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    message_detail._prepare_android_publish_entry(FakeDriver())
+
+    assert events == ["header-close"]
+
+
+def test_android_search_page_visible_accepts_xiaomi_quicksearch_home():
+    page_source = 'package="com.android.quicksearchbox" text="应用推荐" text="搜索"'
+
+    assert message_detail._android_search_page_visible(page_source) is True
+
+
 def test_tap_note_type_uses_android_text_locator(monkeypatch):
     calls = []
 
