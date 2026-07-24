@@ -15,6 +15,23 @@ def load_recording(recording_path: Path) -> dict[str, Any]:
     return json.loads(recording_path.read_text(encoding="utf-8"))
 
 
+def normalized_recording_steps(recording: dict[str, Any]) -> list[dict[str, Any]]:
+    if recording.get("mode") == "bug":
+        steps = []
+        for raw_step in recording.get("steps", []):
+            steps.append(
+                {
+                    "label": raw_step.get("label")
+                    or raw_step.get("description")
+                    or f"step-{raw_step.get('index', len(steps) + 1)}",
+                    "command": {"kind": "wait", "note": raw_step.get("description")},
+                    "snapshot": raw_step.get("snapshot", {}),
+                }
+            )
+        return steps
+    return recording.get("steps", [])[1:]
+
+
 def render_wait_assertion(step: dict[str, Any]) -> str:
     snapshot = step["snapshot"]
     visible_ids = snapshot.get("visible_ids") or []
@@ -91,8 +108,10 @@ def render_step_block(step: dict[str, Any]) -> str:
 
 
 def render_test_module(recording: dict[str, Any], recording_path: Path) -> str:
-    test_name = safe_name(recording["test_name"]).replace("-", "_")
-    blocks = [render_step_block(step) for step in recording["steps"][1:]]
+    if recording.get("platform") not in {None, "ios"}:
+        raise ValueError("iOS test generator only supports iOS recordings.")
+    test_name = safe_name(recording.get("test_name") or f"test_{recording['session_name']}").replace("-", "_")
+    blocks = [render_step_block(step) for step in normalized_recording_steps(recording)]
     body = "\n\n".join(blocks) if blocks else "    pass"
     return f"""import pytest
 

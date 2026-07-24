@@ -9,6 +9,9 @@ from typing import Any
 from .artifacts import safe_name
 
 
+_REVIEW_USAGE = "Usage: keep | no-op | rename <index> <text> | delete <index>"
+
+
 @dataclass(frozen=True)
 class BugCommand:
     kind: str
@@ -96,7 +99,9 @@ def apply_review_command(recording: BugRecording, raw_command: str) -> BugRecord
     command = tokens[0].lower()
 
     if command == "rename" and len(tokens) == 3:
-        target = int(tokens[1])
+        target = _parse_review_index(tokens[1])
+        if not any(capture.index == target for capture in recording.captures):
+            raise ValueError(f"No capture found with index {target}")
         updated = [
             replace(capture, label=safe_name(tokens[2]), description=tokens[2], user_description=tokens[2])
             if capture.index == target
@@ -106,12 +111,24 @@ def apply_review_command(recording: BugRecording, raw_command: str) -> BugRecord
         return replace(recording, captures=updated)
 
     if command == "delete" and len(tokens) == 2:
-        target = int(tokens[1])
+        target = _parse_review_index(tokens[1])
+        if not any(capture.index == target for capture in recording.captures):
+            raise ValueError(f"No capture found with index {target}")
+        has_initial_capture = any(capture.index == 0 for capture in recording.captures)
+        if has_initial_capture and target == 0:
+            raise ValueError("Initial capture 0 cannot be deleted")
         remaining = [capture for capture in recording.captures if capture.index != target]
-        reindexed = [replace(capture, index=index) for index, capture in enumerate(remaining, start=1)]
+        if has_initial_capture:
+            initial_captures = [capture for capture in remaining if capture.index == 0]
+            reviewed_captures = [capture for capture in remaining if capture.index != 0]
+            reindexed = initial_captures + [
+                replace(capture, index=index) for index, capture in enumerate(reviewed_captures, start=1)
+            ]
+        else:
+            reindexed = [replace(capture, index=index) for index, capture in enumerate(remaining, start=1)]
         return replace(recording, captures=reindexed)
 
-    raise ValueError("Usage: keep | no-op | rename <index> <text> | delete <index>")
+    raise ValueError(_REVIEW_USAGE)
 
 
 def build_bug_recording_payload(recording: BugRecording, output_dir: Path) -> dict[str, Any]:
@@ -137,6 +154,8 @@ def render_bug_report(recording: BugRecording, recording_path: Path) -> str:
     return "\n".join(
         [
             f"# {recording.title}",
+            "",
+            f"Session: `{recording.session_name}`",
             "",
             "## Environment",
             f"- Platform: {_platform_label(recording.platform)}",
@@ -165,11 +184,7 @@ def render_bug_report(recording: BugRecording, recording_path: Path) -> str:
 
 
 def render_taiga_issue(recording: BugRecording, bug_report_path: Path) -> str:
-    screenshot_lines = [
-        f"- Step {capture.index}: {capture.snapshot.screenshot_path}"
-        for capture in recording.captures
-        if capture.snapshot.screenshot_path
-    ]
+    evidence_lines = _taiga_evidence_lines(recording.captures)
 
     return "\n".join(
         [
@@ -185,8 +200,8 @@ def render_taiga_issue(recording: BugRecording, bug_report_path: Path) -> str:
             "## 实际结果",
             recording.actual_result or "未填写",
             "",
-            "## 证据截图",
-            *(screenshot_lines or ["- 未生成截图"]),
+            "## 证据",
+            *evidence_lines,
             "",
             "## 本地报告",
             str(bug_report_path),
@@ -202,6 +217,13 @@ def _platform_label(platform: str) -> str:
     if normalized == "android":
         return "Android"
     return platform
+
+
+def _parse_review_index(raw_index: str) -> int:
+    try:
+        return int(raw_index)
+    except ValueError as exc:
+        raise ValueError(_REVIEW_USAGE) from exc
 
 
 def _environment_lines(environment: dict[str, Any]) -> list[str]:
@@ -229,4 +251,14 @@ def _evidence_lines(captures: list[BugCapture]) -> list[str]:
         if capture.snapshot.capture_error:
             lines.append(f"  - Capture error: {capture.snapshot.capture_error}")
         previous_hash = capture.snapshot.source_hash
+    return lines or ["- 未生成证据"]
+
+
+def _taiga_evidence_lines(captures: list[BugCapture]) -> list[str]:
+    lines = []
+    for capture in captures:
+        if capture.snapshot.screenshot_path:
+            lines.append(f"- Step {capture.index} screenshot: {capture.snapshot.screenshot_path}")
+        if capture.snapshot.xml_path:
+            lines.append(f"- Step {capture.index} XML: {capture.snapshot.xml_path}")
     return lines or ["- 未生成证据"]

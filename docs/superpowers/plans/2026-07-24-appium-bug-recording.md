@@ -880,7 +880,7 @@ git commit -m "feat: record bug evidence and reports"
 - Modify: `apps/velowind-app/appium/README.md`
 - Modify: `docs/ios-manual-recording.md`
 
-- [ ] **Step 1: Update package scripts**
+- [x] **Step 1: Update package scripts**
 
 Change scripts to:
 
@@ -892,7 +892,7 @@ Change scripts to:
 
 Keep all other scripts unchanged.
 
-- [ ] **Step 2: Update docs with cross-platform bug-mode examples**
+- [x] **Step 2: Update docs with cross-platform bug-mode examples**
 
 Add this section to `apps/velowind-app/appium/README.md` after the iOS recording commands:
 
@@ -922,7 +922,7 @@ done
 
 Rename `docs/ios-manual-recording.md` to `docs/appium-manual-recording.md` if no external link depends on the old name. If keeping the old file, replace its title with `# Appium 手动录制与 Bug 录制` and add both iOS and Android bug examples.
 
-- [ ] **Step 3: Run JSON and focused unit validation**
+- [x] **Step 3: Run JSON and focused unit validation**
 
 Run:
 
@@ -933,7 +933,7 @@ PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m pytest apps/velowind-a
 
 Expected: `package.json ok` and pytest PASS.
 
-- [ ] **Step 4: Commit Task 4**
+- [x] **Step 4: Commit Task 4**
 
 ```bash
 git add package.json apps/velowind-app/appium/README.md docs/ios-manual-recording.md docs/appium-manual-recording.md
@@ -950,7 +950,7 @@ If `docs/appium-manual-recording.md` is not created, omit it from `git add`.
 - Test: `apps/velowind-app/appium/tests/unit-test/test_ios_manual_recording.py`
 - Test: `apps/velowind-app/appium/tests/unit-test/test_mobile_manual_recording.py`
 
-- [ ] **Step 1: Add tests for iOS bug-mode generation from reviewed steps**
+- [x] **Step 1: Add tests for iOS bug-mode generation from reviewed steps**
 
 Append to `test_ios_manual_recording.py`:
 
@@ -986,7 +986,7 @@ def test_generate_test_module_reads_bug_mode_steps(tmp_path):
     assert "search-input" in rendered
 ```
 
-- [ ] **Step 2: Update generator to normalize legacy and bug-mode steps**
+- [x] **Step 2: Update generator to normalize legacy and bug-mode steps**
 
 Add helper functions to `generate_ios_test_from_recording.py`:
 
@@ -1039,7 +1039,7 @@ def {test_name}(driver, ios_config, step):
 """
 ```
 
-- [ ] **Step 3: Add post-report prompt that only runs iOS generation when confirmed**
+- [x] **Step 3: Add post-report prompt that only runs iOS generation when confirmed**
 
 In `record_bug_journey`, after output paths are printed, add:
 
@@ -1057,7 +1057,7 @@ In `record_bug_journey`, after output paths are printed, add:
 
 Do not ask this question until `bug-report.md` and `taiga-issue.md` have already been written.
 
-- [ ] **Step 4: Run generator and recording tests**
+- [x] **Step 4: Run generator and recording tests**
 
 Run:
 
@@ -1067,7 +1067,7 @@ PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m pytest apps/velowind-a
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 ```bash
 git add apps/velowind-app/appium/velowind_appium/mobile_manual_recording.py apps/velowind-app/appium/velowind_appium/generate_ios_test_from_recording.py apps/velowind-app/appium/tests/unit-test/test_ios_manual_recording.py apps/velowind-app/appium/tests/unit-test/test_mobile_manual_recording.py
@@ -1079,7 +1079,7 @@ git commit -m "feat: hand off bug recordings to test generation"
 **Files:**
 - No code files unless verification reveals a bug.
 
-- [ ] **Step 1: Run the complete local unit test set for recording**
+- [x] **Step 1: Run the complete local unit test set for recording**
 
 Run:
 
@@ -1095,7 +1095,7 @@ PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m pytest \
 
 Expected: PASS.
 
-- [ ] **Step 2: Run CLI help checks**
+- [x] **Step 2: Run CLI help checks**
 
 Run:
 
@@ -1106,7 +1106,7 @@ PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.ios_ma
 
 Expected: both commands print usage and exit 0.
 
-- [ ] **Step 3: Smoke the Android command without a device only enough to verify command wiring**
+- [x] **Step 3: Smoke the Android command without a device only enough to verify command wiring**
 
 Run:
 
@@ -1157,7 +1157,7 @@ keep
 
 Expected: `.tmp/appium-android/recordings/recorder-smoke-android/bug-report.md`, `recording.json`, and `taiga-issue.md` exist and include screenshot paths.
 
-- [ ] **Step 6: Commit verification fixes only if needed**
+- [x] **Step 6: Commit verification fixes only if needed**
 
 If manual verification reveals a bug, fix only that bug, rerun the failing verification, and commit:
 

@@ -154,6 +154,19 @@ def capture_snapshot(driver: WebDriver, artifact_dir: Path, label: str) -> Snaps
     )
 
 
+def _sanitize_json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace").decode("utf-8")
+    if isinstance(value, list):
+        return [_sanitize_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            _sanitize_json_value(key): _sanitize_json_value(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 def build_recording_payload(
     *,
     session_name: str,
@@ -163,7 +176,8 @@ def build_recording_payload(
     steps: list[RecordingStep],
     config: Any,
 ) -> dict[str, Any]:
-    return {
+    return _sanitize_json_value(
+        {
         "session_name": session_name,
         "module_name": module_name,
         "test_name": test_name,
@@ -182,7 +196,8 @@ def build_recording_payload(
             }
             for step in steps
         ],
-    }
+        }
+    )
 
 
 def render_generator_instructions(recording_path: Path) -> str:
@@ -297,9 +312,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return record_ios_journey(args)
+    from .mobile_manual_recording import main as mobile_main
+
+    return mobile_main(argv, default_platform="ios")
 
 
 if __name__ == "__main__":
