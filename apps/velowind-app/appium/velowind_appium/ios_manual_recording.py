@@ -297,9 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return record_ios_journey(args)
+    from .mobile_manual_recording import main as mobile_main
+
+    return mobile_main(argv, default_platform="ios")
 
 
 if __name__ == "__main__":
