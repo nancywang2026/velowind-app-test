@@ -80,6 +80,9 @@ case "$VW_ANDROID_TARGET" in
     export VW_ANDROID_DEVICE_NAME="${VW_ANDROID_DEVICE_NAME:-MuMu}"
     export VW_ANDROID_APP="${VW_ANDROID_APP:-/Users/test/Nancy/Testing/automation/android/寻风集_1.2.1.apk}"
     ;;
+  physical)
+    export VW_APPIUM_SERVER_URL="${VW_APPIUM_SERVER_URL:-http://127.0.0.1:4724}"
+    ;;
   *)
     echo "Unsupported Android target: $VW_ANDROID_TARGET" >&2
     exit 1
@@ -184,9 +187,13 @@ start_local_android_appium_server() {
 }
 
 ensure_local_android_appium_server() {
-  if [ "$VW_ANDROID_TARGET" != "android_studio" ]; then
-    return 0
-  fi
+  case "$VW_ANDROID_TARGET" in
+    android_studio|physical)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 
   if ! local_appium_server_target; then
     return 0

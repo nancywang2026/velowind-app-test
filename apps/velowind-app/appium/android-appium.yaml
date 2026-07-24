@@ -10,10 +10,10 @@ android_studio:
   platform_version:
   app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.1.apk
 
-mumu:
-  udid: 127.0.0.1:16385
-  device_name: MuMu
-  platform_version:
+physical:
+  udid: YHK7EERSGAPZX87X
+  device_name: 25060RK16C
+  platform_version: "16"
   app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.1.apk
 
 login:
