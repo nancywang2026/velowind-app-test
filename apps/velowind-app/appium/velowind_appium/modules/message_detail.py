@@ -180,6 +180,7 @@ class MessageNoteDraft:
     location: str
     album: str | None = None
     picture_index: int = 1
+    picture_indexes: tuple[int, ...] = ()
     allow_comments: bool = True
 
 
@@ -231,6 +232,7 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         picture_index = max(1, int(raw_picture_index))
     except (TypeError, ValueError):
         picture_index = 1
+    picture_indexes = _normalize_picture_indexes(note.get("picture_indexes", ()))
     allow_comments = note.get("allow_comments", True)
     if isinstance(allow_comments, str):
         allow_comments = allow_comments.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
@@ -241,8 +243,32 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         location=location,
         album=album,
         picture_index=picture_index,
+        picture_indexes=picture_indexes,
         allow_comments=bool(allow_comments),
     )
+
+
+def _normalize_picture_indexes(raw_value) -> tuple[int, ...]:
+    if raw_value in (None, ""):
+        return ()
+    if isinstance(raw_value, (int, float, str)):
+        values = [raw_value]
+    elif isinstance(raw_value, (list, tuple)):
+        values = raw_value
+    else:
+        return ()
+    indexes: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if index < 1 or index in seen:
+            continue
+        indexes.append(index)
+        seen.add(index)
+    return tuple(indexes)
 
 
 def wait_for_message_note_form(driver: WebDriver, timeout: int = 30) -> str | None:
@@ -1408,26 +1434,71 @@ def _fill_note_body(driver: WebDriver, body: str) -> None:
 def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
     with _note_profile("upload-clear-existing-images"):
         _clear_existing_note_images(driver)
+    picture_indexes = _normalize_picture_indexes(draft.picture_indexes)
+    expected_count = len(picture_indexes)
+    first_picture_index = picture_indexes[0] if picture_indexes else draft.picture_index
+
+    photo_chosen = _choose_note_image_from_library(
+        driver,
+        album_name=draft.album,
+        picture_index=first_picture_index,
+        picture_indexes=picture_indexes,
+        select_all_from_album=bool(picture_indexes),
+    )
+    if not photo_chosen:
+        raise AssertionError(
+            "Photo library opened but no selectable photo was found. "
+            "If this is a simulator, seed at least one image into Photos."
+        )
+
+    if not picture_indexes:
+        return
+
+    if _wait_for_note_selected_image_count(driver, expected_count):
+        return
+
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return
+
+    current_count = _note_selected_image_count(driver)
+    for picture_index in picture_indexes[current_count:]:
+        if not _choose_note_image_from_library(
+            driver,
+            album_name=draft.album,
+            picture_index=picture_index,
+            picture_indexes=(),
+            select_all_from_album=False,
+        ):
+            break
+        if _wait_for_note_selected_image_count(driver, expected_count):
+            return
+    raise AssertionError(f"Expected {expected_count} note images after upload, got {_note_selected_image_count(driver)}")
+
+
+def _choose_note_image_from_library(
+    driver: WebDriver,
+    *,
+    album_name: str | None,
+    picture_index: int,
+    picture_indexes: tuple[int, ...],
+    select_all_from_album: bool,
+) -> bool:
     with _note_profile("upload-tap-image-plus"):
         image_plus_tapped = _tap_note_image_plus(driver)
     if not image_plus_tapped:
         raise AssertionError("Unable to find the note image plus button")
 
+    kwargs = {
+        "album_name": album_name,
+        "picture_index": picture_index,
+        "select_all_from_album": select_all_from_album,
+        "retry_sheet_option": _tap_note_photo_library_sheet_option,
+    }
+    if picture_indexes:
+        kwargs["picture_indexes"] = picture_indexes
     with _note_profile("upload-choose-photo-library"):
-        photo_chosen = photo_picker.choose_photo_from_library(
-            driver,
-            album_name=draft.album,
-            picture_index=draft.picture_index,
-            select_all_from_album=False,
-            retry_sheet_option=_tap_note_photo_library_sheet_option,
-        )
-    if photo_chosen:
-        return
-
-    raise AssertionError(
-        "Photo library opened but no selectable photo was found. "
-        "If this is a simulator, seed at least one image into Photos."
-    )
+        return photo_picker.choose_photo_from_library(driver, **kwargs)
 
 
 def _tap_note_photo_library_sheet_option(driver: WebDriver) -> bool:
@@ -1460,6 +1531,14 @@ def _clear_existing_note_images(driver: WebDriver, max_images: int = 9) -> None:
             return
         if not _wait_until(lambda: len(_find_note_image_remove_buttons(driver)) < before_count, timeout=2):
             return
+
+
+def _note_selected_image_count(driver: WebDriver) -> int:
+    return len(_find_note_image_remove_buttons(driver))
+
+
+def _wait_for_note_selected_image_count(driver: WebDriver, expected_count: int, timeout: int = 8) -> bool:
+    return _wait_until(lambda: _note_selected_image_count(driver) >= expected_count, timeout=timeout)
 
 
 def _note_selected_images_hint(page_source: str) -> bool:

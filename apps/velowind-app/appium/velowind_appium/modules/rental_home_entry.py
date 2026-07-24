@@ -22,6 +22,9 @@ RENTAL_ENTRY_IDS = [
     "home-rent-car-entry",
     "rental-entry",
     "rent-car-entry",
+    "floating-rent-entry",
+    "floating-rent-entry-icon",
+    "floating-rent-entry-blur",
     "floating-rental-entry",
     "floating-truck-entry",
     "floating-rental-mode-entry-car",
@@ -30,7 +33,25 @@ RENTAL_ENTRY_IDS = [
     "truck-icon",
 ]
 RENTAL_ENTRY_TEXTS = ["租车", "车辆租赁", "租车服务"]
+HOME_OVERLAY_BLOCKING_TEXTS = [
+    "post-detail-banner-pager",
+    "post-detail-page",
+    "message-detail-page",
+    "article-detail-page",
+    "activity-route-detail-v3",
+    "活动详情",
+    "页面预览提示",
+    "rent-page-shell",
+    "use-car-tab-page",
+    "租车",
+    "立即选车",
+    "服务门店",
+]
 FLOATING_TRUCK_RATIOS = [
+    (0.84, 0.72),
+    (0.84, 0.76),
+    (0.87, 0.72),
+    (0.87, 0.76),
     (0.65, 0.84),
     (0.70, 0.84),
     (0.90, 0.72),
@@ -50,9 +71,6 @@ def open_rental_from_home(driver: WebDriver, timeout: int = 20) -> None:
             if _wait_for_store_after_tap(driver):
                 return
         if tap_by_text_containing(driver, ["租车", "车辆租赁"], timeout=1):
-            if _wait_for_store_after_tap(driver):
-                return
-        if tap_by_coordinate_ratios(driver, FLOATING_TRUCK_RATIOS):
             if _wait_for_store_after_tap(driver):
                 return
         time.sleep(0.4)
@@ -97,6 +115,8 @@ def _rental_store_visible(driver: WebDriver) -> bool:
 
 def _home_visible(driver: WebDriver) -> bool:
     source = safe_page_source(driver)
+    if any(text in source for text in HOME_OVERLAY_BLOCKING_TEXTS):
+        return False
     return (
         ("首页" in source and ("全国" in source or "推荐" in source))
         or "post-home-feed-category-pager" in source

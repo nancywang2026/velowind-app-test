@@ -347,6 +347,12 @@ def test_leave_stale_session_form_keeps_backing_out_until_form_is_gone(monkeypat
     assert activity_sessions._session_form_visible(driver.page_source) is False
 
 
+def test_session_form_visible_does_not_match_activity_list_item_named_new_session():
+    page_source = "我的活动 发布 西湖徒步 已取消 西湖新增场次 报名已取消，名额已释放"
+
+    assert activity_sessions._session_form_visible(page_source) is False
+
+
 def test_fill_session_form_does_not_accept_stale_android_datetime_value(monkeypatch):
     draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 20))
     driver = FakeDriver("新增场次 场次展示文案 报名截止时间 07.08 10:38 活动名额 开始时间 结束时间")
@@ -502,6 +508,17 @@ def test_android_datetime_picker_current_parts_accepts_single_digit_selected_tim
         "day": "20",
         "hour": "09",
         "minute": "03",
+    }
+
+
+def test_android_datetime_picker_current_parts_accepts_chinese_selected_time():
+    driver = FakeDriver("报名截止时间 6月30日 10:00 已选择时间 7月23日20点30分 取消 确认 月 日 时 分")
+
+    assert activity_sessions._android_datetime_picker_current_parts(driver) == {
+        "month": "07",
+        "day": "23",
+        "hour": "20",
+        "minute": "30",
     }
 
 
@@ -754,7 +771,30 @@ def test_fill_android_datetime_picker_wheels_prefers_direct_day_set(monkeypatch)
         ["day"],
         {"day": "23"},
     ) is True
-    assert calls == [("activity-session-create-deadline-picker-day-wheel", "day", "23")]
+    assert calls == [("drag",), ("activity-session-create-deadline-picker-day-wheel", "day", "23")]
+
+
+def test_fill_android_datetime_picker_wheels_prefers_drag_before_direct_set(monkeypatch):
+    driver = FakeDriver("已选择时间 07.18 10:17 月 日 时 分", width=1280, height=2856)
+    calls = []
+    current = {"day": "18"}
+
+    def fake_drag(received, field, value):
+        calls.append(("drag", field, value))
+        current[field] = value
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_visible_wheel_value", lambda *args, **kwargs: False)
+    monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel_to_target", fake_drag)
+    monkeypatch.setattr(activity_sessions, "_set_android_datetime_picker_wheel_value", lambda *args, **kwargs: calls.append(("set",)) or True)
+
+    assert activity_sessions._fill_android_datetime_picker_wheels(
+        driver,
+        {"day": "activity-session-create-deadline-picker-day-wheel"},
+        ["day"],
+        {"day": "23"},
+    ) is True
+    assert calls == [("drag", "day", "23")]
 
 
 def test_fill_android_datetime_picker_wheels_uses_step_fallback_for_day(monkeypatch):
@@ -1360,7 +1400,6 @@ def test_open_my_activity_publish_list_taps_my_activity_when_already_on_me_page(
     monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: driver.page_source)
     monkeypatch.setattr(activity_sessions, "_tap_me_tab", lambda received: events.append("tap-me") or True)
     monkeypatch.setattr(activity_sessions, "_tap_publish_tab", lambda received: events.append("tap-publish") or True)
-    monkeypatch.setattr(activity_sessions, "_toggle_show_delisted", lambda received: events.append("toggle-delisted") or True)
 
     def fake_tap_text(driver, text, timeout=1):
         events.append(("tap-text", text))
@@ -1378,7 +1417,6 @@ def test_open_my_activity_publish_list_taps_my_activity_when_already_on_me_page(
     assert events == [
         ("tap-text", "我的活动"),
         "tap-publish",
-        "toggle-delisted",
     ]
 
 
@@ -1392,6 +1430,82 @@ def test_tap_more_for_approved_activity_uses_right_side_of_top_approved_card(mon
     assert activity_sessions._tap_more_for_approved_activity(driver) is True
     assert driver.scripts == [
         ("mobile: tap", {"x": 366, "y": 262}),
+    ]
+
+
+def test_tap_more_for_approved_activity_tries_next_approved_card_when_first_has_no_manage_menu(monkeypatch):
+    driver = FakeDriver("我的活动 发布 显示下架活动 第一条 通过 第二条 通过", width=402, height=874)
+    badge_elements = [
+        FakeElement({"x": 1, "y": 252, "width": 34, "height": 20}),
+        FakeElement({"x": 1, "y": 346, "width": 34, "height": 20}),
+    ]
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: driver.page_source)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
+    monkeypatch.setattr(driver, "find_elements", lambda *args: badge_elements, raising=False)
+
+    def execute_script(script, payload):
+        driver.scripts.append((script, payload))
+        if payload["y"] == 356:
+            driver.page_source = "管理场次"
+
+    monkeypatch.setattr(driver, "execute_script", execute_script, raising=False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is True
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 366, "y": 262}),
+        ("mobile: tap", {"x": 366, "y": 356}),
+    ]
+
+
+def test_tap_more_for_approved_activity_does_not_tap_default_when_ios_approved_badge_is_offscreen(monkeypatch):
+    page_source = '<XCUIElementTypeOther name="上海出发到杭州 通过 上架" x="128" y="-1696" width="34" height="19" />'
+    driver = FakeDriver(page_source, width=402, height=874)
+    offscreen_badge = FakeElement({"x": 128, "y": -1696, "width": 34, "height": 19})
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: page_source)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [offscreen_badge], raising=False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is False
+    assert driver.scripts == []
+
+
+def test_scroll_my_activity_list_toward_approved_activity_goes_down_when_approved_badge_is_above(monkeypatch):
+    driver = FakeDriver('<XCUIElementTypeOther name="上海出发到杭州 通过 上架" />', width=402, height=874)
+    offscreen_badge = FakeElement({"x": 128, "y": -1696, "width": 34, "height": 19})
+    swipes = []
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [offscreen_badge], raising=False)
+    monkeypatch.setattr(activity_sessions, "swipe_vertical", lambda received, direction="up": swipes.append(direction))
+
+    assert activity_sessions._scroll_my_activity_list_toward_approved_activity(driver) is True
+    assert swipes == ["down"]
+
+
+def test_ios_datetime_picker_wheel_step_uses_visible_wheel_element_center(monkeypatch):
+    driver = FakeDriver(width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+    day_wheel = FakeElement(
+        {"x": 111, "y": 623, "width": 85, "height": 106},
+        name="activity-session-create-deadline-picker-day-wheel",
+    )
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [day_wheel], raising=False)
+
+    activity_sessions._tap_ios_datetime_picker_wheel_step(driver, "day", "next")
+
+    assert driver.scripts == [
+        (
+            "swipe",
+            {
+                "start_x": 153,
+                "start_y": 714,
+                "end_x": 153,
+                "end_y": 638,
+                "duration": 300,
+            },
+        )
     ]
 
 

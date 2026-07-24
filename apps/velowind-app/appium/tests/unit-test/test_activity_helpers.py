@@ -15,6 +15,35 @@ from velowind_appium.modules import activity
 TESTDATA_PATH = Path(__file__).resolve().parent.parent / "activity" / "testdata" / "publish_activity.yaml"
 
 
+class FakeActivityElement:
+    def __init__(self, rect, *, value="", visible=True):
+        self.rect = rect
+        self.value = value
+        self.visible = visible
+        self.clicked = False
+        self.cleared = False
+        self.sent_keys = []
+
+    def click(self):
+        self.clicked = True
+
+    def clear(self):
+        self.cleared = True
+        self.value = ""
+
+    def send_keys(self, value):
+        self.sent_keys.append(value)
+        self.value = value
+
+    def is_displayed(self):
+        return self.visible
+
+    def get_attribute(self, name):
+        if name in {"value", "name", "label", "placeholderValue"}:
+            return self.value
+        return ""
+
+
 def test_build_activity_draft_reads_first_yaml_case():
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
@@ -127,6 +156,73 @@ def test_activity_publish_success_signal_accepts_my_activity_page_with_expected_
     """
 
     assert activity_publish_success_signal(page_source, expected_title="张家界大环线2天1晚") == "我的活动列表"
+
+
+def test_advanced_field_visible_ignores_background_activity_feed_text():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther visible="true" name="活动列表 总里程 64 时长 2天1晚" x="0" y="0" width="402" height="874" />
+      <XCUIElementTypeOther visible="true" name="发布活动 活动名称 高级选项 提交审核" x="0" y="128" width="402" height="746" />
+    </AppiumAUT>
+    """
+
+    assert activity._advanced_field_visible(page_source, [(["总里程", "里程"], "128")]) is False
+
+
+def test_fill_ios_input_near_label_requires_visible_nearby_input(monkeypatch):
+    title_field = FakeActivityElement({"x": 26, "y": 300, "width": 350, "height": 21})
+
+    class FakeDriver:
+        page_source = '<AppiumAUT><XCUIElementTypeOther visible="true" name="总里程" x="0" y="0" width="402" height="874" /></AppiumAUT>'
+
+        def find_elements(self, _by, xpath):
+            if "contains(@name" in xpath:
+                return [FakeActivityElement({"x": 0, "y": 0, "width": 402, "height": 874})]
+            if "XCUIElementTypeTextField" in xpath:
+                return [title_field]
+            return []
+
+    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: None)
+
+    assert activity._fill_input_near_label(FakeDriver(), "总里程", "128") is False
+    assert title_field.sent_keys == []
+
+
+def test_fill_ios_input_near_label_fills_nearby_visible_input(monkeypatch):
+    field = FakeActivityElement({"x": 26, "y": 420, "width": 350, "height": 44})
+
+    class FakeDriver:
+        page_source = '<AppiumAUT><XCUIElementTypeStaticText visible="true" name="总里程" x="26" y="380" width="80" height="24" /></AppiumAUT>'
+
+        def find_elements(self, _by, xpath):
+            if "contains(@name" in xpath:
+                return [FakeActivityElement({"x": 26, "y": 380, "width": 80, "height": 24})]
+            if "XCUIElementTypeTextField" in xpath:
+                return [field]
+            return []
+
+    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: None)
+
+    assert activity._fill_input_near_label(FakeDriver(), "总里程", "128") is True
+    assert field.sent_keys == ["128"]
+
+
+def test_fill_advanced_field_prefers_exact_placeholder(monkeypatch):
+    field = FakeActivityElement({"x": 26, "y": 337, "width": 350, "height": 21})
+    calls = []
+
+    class FakeDriver:
+        def find_element(self, _by, xpath):
+            calls.append(xpath)
+            if '@placeholderValue="例如：68km"' in xpath:
+                return field
+            raise activity.NoSuchElementException("not found")
+
+    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: None)
+
+    assert activity._fill_advanced_field(FakeDriver(), ["总里程", "里程"], "128", ["例如：68km"]) is True
+    assert field.sent_keys == ["128"]
+    assert calls
 
 
 def test_open_activity_publisher_retries_when_publish_entry_opens_login(monkeypatch):
