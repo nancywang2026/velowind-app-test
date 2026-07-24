@@ -108,6 +108,39 @@ def test_build_recording_payload_and_write_generated_module(tmp_path):
     assert "test_message_search" in output_path.read_text(encoding="utf-8")
 
 
+def test_build_recording_payload_sanitizes_surrogates_for_json_output(tmp_path):
+    step = RecordingStep(
+        index=1,
+        label="open-note",
+        command=RecordingCommand(kind="tap_text", text="第一篇笔记"),
+        captured_at="2026-07-24T12:00:00",
+        snapshot=SnapshotSummary(
+            screenshot_path="/tmp/a.png",
+            xml_path="/tmp/a.xml",
+            source_hash="abc",
+            visible_ids=["note-card-1"],
+            visible_texts=["坏字符\udce5"],
+        ),
+    )
+    config = type("Config", (), {"bundle_id": "com.velowind.rider", "udid": "device-001"})()
+
+    payload = build_recording_payload(
+        session_name="message-search",
+        module_name="test_message_search.py",
+        test_name="test_message_search",
+        output_dir=tmp_path,
+        steps=[step],
+        config=config,
+    )
+
+    recording_path = tmp_path / "recording.json"
+    recording_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    written = recording_path.read_text(encoding="utf-8")
+    assert "坏字符" in written
+    assert "\udce5" not in written
+
+
 def test_generate_test_module_reads_bug_mode_steps(tmp_path):
     recording_path = tmp_path / "recording.json"
     recording_path.write_text(
