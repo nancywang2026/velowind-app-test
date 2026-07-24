@@ -138,6 +138,8 @@ def render_bug_report(recording: BugRecording, recording_path: Path) -> str:
         [
             f"# {recording.title}",
             "",
+            f"Session: `{recording.session_name}`",
+            "",
             "## Environment",
             f"- Platform: {_platform_label(recording.platform)}",
             *_environment_lines(recording.environment),
@@ -165,11 +167,7 @@ def render_bug_report(recording: BugRecording, recording_path: Path) -> str:
 
 
 def render_taiga_issue(recording: BugRecording, bug_report_path: Path) -> str:
-    screenshot_lines = [
-        f"- Step {capture.index}: {capture.snapshot.screenshot_path}"
-        for capture in recording.captures
-        if capture.snapshot.screenshot_path
-    ]
+    evidence_lines = _taiga_evidence_lines(recording.captures)
 
     return "\n".join(
         [
@@ -185,8 +183,8 @@ def render_taiga_issue(recording: BugRecording, bug_report_path: Path) -> str:
             "## 实际结果",
             recording.actual_result or "未填写",
             "",
-            "## 证据截图",
-            *(screenshot_lines or ["- 未生成截图"]),
+            "## 证据",
+            *evidence_lines,
             "",
             "## 本地报告",
             str(bug_report_path),
@@ -229,4 +227,14 @@ def _evidence_lines(captures: list[BugCapture]) -> list[str]:
         if capture.snapshot.capture_error:
             lines.append(f"  - Capture error: {capture.snapshot.capture_error}")
         previous_hash = capture.snapshot.source_hash
+    return lines or ["- 未生成证据"]
+
+
+def _taiga_evidence_lines(captures: list[BugCapture]) -> list[str]:
+    lines = []
+    for capture in captures:
+        if capture.snapshot.screenshot_path:
+            lines.append(f"- Step {capture.index} screenshot: {capture.snapshot.screenshot_path}")
+        if capture.snapshot.xml_path:
+            lines.append(f"- Step {capture.index} XML: {capture.snapshot.xml_path}")
     return lines or ["- 未生成证据"]
