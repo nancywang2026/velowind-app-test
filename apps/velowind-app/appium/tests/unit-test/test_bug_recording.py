@@ -115,6 +115,7 @@ def test_render_bug_report_and_taiga_issue_include_platform_and_evidence():
     assert "/tmp/1.xml" in report
     assert "/tmp/recording.json" in report
     assert "页面一直加载中" in taiga
+    assert "/tmp/1.png" in taiga
     assert "/tmp/1.xml" in taiga
     assert "/tmp/bug-report.md" in taiga
 
