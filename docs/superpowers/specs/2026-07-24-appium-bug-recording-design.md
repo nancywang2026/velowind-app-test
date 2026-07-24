@@ -1,20 +1,28 @@
-# iOS Bug Recording Design
+# Appium Bug Recording Design
 
 ## Goal
 
-Add a lightweight, reliable iOS real-device bug recording flow for Appium. The tester operates the app directly on the iPhone, records only meaningful screen states from the terminal, and receives a reviewable bug report first. After the report is confirmed, the tool asks whether to generate an Appium pytest script from the same recording.
+Add a lightweight, reliable mobile bug recording flow for Appium on both iOS and Android. The tester operates the app directly on the phone or emulator, records only meaningful screen states from the terminal, and receives a reviewable bug report first. After the report is confirmed, the tool asks whether to generate an Appium pytest script from the same recording.
 
 The first implementation targets one recording session per bug. It should optimize for clear reproduction evidence, low manual effort, and compatibility with the existing Appium artifact layout.
 
 ## User Flow
 
-The recorder starts through the existing iOS recording entry point with a bug mode:
+The recorder starts through platform-specific package scripts or the shared Python module:
 
 ```bash
 pnpm appium:ios:record -- --mode bug --session-name search-loading
+pnpm appium:android:record -- --mode bug --session-name search-loading
 ```
 
-After Appium connects to the real device, the tester manually drives the app on the phone. The terminal accepts lightweight commands:
+Both commands call the same recorder with an explicit platform. Direct invocation is also supported:
+
+```bash
+PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.mobile_manual_recording --platform ios --mode bug --session-name search-loading
+PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.mobile_manual_recording --platform android --mode bug --session-name search-loading
+```
+
+After Appium connects to the selected device, the tester manually drives the app. The terminal accepts lightweight commands:
 
 ```text
 capture
@@ -31,10 +39,10 @@ At `done`, the recorder enters a short review phase. It prints the captured step
 
 ## Outputs
 
-Each session writes into the existing recording tree:
+Each session writes into the platform's existing temporary artifact tree:
 
 ```text
-.tmp/appium-ios/recordings/<session-name>/
+.tmp/appium-<platform>/recordings/<session-name>/
   recording.json
   bug-report.md
   taiga-issue.md
@@ -44,12 +52,12 @@ Each session writes into the existing recording tree:
   01-open-search-page.xml
 ```
 
-`recording.json` remains the machine-readable source of truth. It stores session metadata, environment metadata, expected and actual result text, notes, and an ordered list of captured states. Each captured state includes its label, optional user description, generated description, screenshot path, XML path, page-source hash, visible identifiers, and visible short text.
+`recording.json` remains the machine-readable source of truth. It stores session metadata, platform, environment metadata, expected and actual result text, notes, and an ordered list of captured states. Each captured state includes its label, optional user description, generated description, screenshot path, XML path, page-source hash, visible identifiers, and visible short text.
 
 `bug-report.md` is the human-readable artifact for review. It includes:
 
 - title and session name
-- device, iOS/Appium configuration, bundle id, UDID, and recording time
+- platform, device/Appium configuration, bundle id or Android package, UDID, and recording time
 - reproduction steps from the reviewed captures
 - expected result
 - actual result
@@ -61,7 +69,7 @@ Each session writes into the existing recording tree:
 
 ## Taiga Integration
 
-After the bug report is generated, the tool asks whether to create a Taiga issue. If confirmed, it uses the Taiga MCP `create_issue` tool with the configured project, generated subject, generated description, and tags such as `ios`, `appium-recording`, and `manual-repro`.
+After the bug report is generated, the tool asks whether to create a Taiga issue. If confirmed, it uses the Taiga MCP `create_issue` tool with the configured project, generated subject, generated description, and tags such as `<platform>`, `appium-recording`, and `manual-repro`.
 
 The available Taiga MCP tools do not currently expose file attachment upload. The first version writes screenshot and XML paths into the issue description instead of uploading image files. The Taiga integration should be isolated behind a small adapter so an attachment upload step can be added later without changing recording or report generation.
 
@@ -77,18 +85,35 @@ Bug mode is report-first. After the user confirms the bug report, the tool asks:
 
 Only a positive answer invokes the existing generated-test path. The generated script should reuse the reviewed step names and captured page summaries as wait assertions. This keeps B and A connected while preventing premature test-script generation before the bug report is reviewed.
 
+## Platform Support
+
+iOS and Android share the same recording/reporting model, but use different configuration and driver factories:
+
+- iOS uses `load_ios_config` and `create_ios_driver`, with default artifacts under `.tmp/appium-ios`.
+- Android uses `load_android_config` and `create_android_driver`, with default artifacts under `.tmp/appium-android`.
+
+The recorder must not assume iOS-only fields. Environment serialization should normalize common fields and include platform-specific fields:
+
+- common: platform, server URL, UDID, device name, artifact directory, login username presence, recording time
+- iOS: bundle id, app path, platform version, WDA-related fields when useful
+- Android: app package, app activity, target, app path, platform version
+
+Android recording should support both a physical Android device and an emulator, following the existing Android config discovery. It should not start an emulator itself in the first version; existing local scripts remain responsible for emulator lifecycle.
+
 ## Architecture
 
-Extend `velowind_appium.ios_manual_recording` instead of creating a separate recorder. The module already owns Appium connection setup, snapshot capture, recording payloads, and the existing `pnpm appium:ios:record` entry point.
+Generalize the current `velowind_appium.ios_manual_recording` implementation into a shared mobile recorder. The existing module already owns Appium connection setup, snapshot capture, recording payloads, and the `pnpm appium:ios:record` entry point, but the new design must avoid baking iOS into the data model or command names.
 
-Add a bug recording branch selected by `--mode bug`. The default mode remains the current action-command recording behavior to preserve compatibility.
+Add a bug recording branch selected by `--mode bug` and a platform selector chosen by package script or `--platform ios|android`. The default iOS mode remains the current action-command recording behavior to preserve compatibility.
 
 Recommended module boundaries:
 
-- `ios_manual_recording.py`: CLI parsing, driver lifecycle, interactive bug recording loop.
+- `mobile_manual_recording.py`: shared CLI parsing, platform dispatch, driver lifecycle, and interactive bug recording loop.
+- `ios_manual_recording.py`: compatibility wrapper for the existing iOS command path.
 - `bug_recording.py`: bug-specific data classes, command parsing, review flow, description generation, and report body rendering.
 - `taiga_reporting.py`: optional Taiga issue body preparation and MCP-facing adapter boundary.
 - `generate_ios_test_from_recording.py`: continue to handle pytest generation, reading any reviewed step metadata if present.
+- `generate_android_test_from_recording.py` or a generalized generator can be added when Android script generation enters scope.
 
 The first implementation can keep Taiga issue creation user-assisted if direct MCP invocation from the CLI is not available. In that case, the CLI writes `taiga-issue.md`, and Codex can create the issue through MCP after the user confirms.
 
@@ -129,6 +154,8 @@ If Taiga creation fails, local report generation remains successful. The CLI sho
 
 If pytest script generation fails after B is complete, the bug report remains valid. Script generation errors are reported separately from recording/reporting errors.
 
+If Android device discovery fails, the recorder should surface the same actionable guidance as the Android config layer: start a device or emulator, check `adb devices`, or set `VW_ANDROID_UDID`.
+
 ## Testing
 
 Add unit coverage for:
@@ -138,6 +165,7 @@ Add unit coverage for:
 - review command parsing and mutation
 - `recording.json` payload shape for bug mode
 - `bug-report.md` and `taiga-issue.md` rendering
-- `--mode bug` CLI dispatch without starting a real Appium session
+- `--mode bug` and `--platform ios|android` CLI dispatch without starting a real Appium session
+- platform-specific metadata rendering for iOS and Android
 
-Manual verification should run the iOS recorder against a real device, capture at least three states, generate a local report, and confirm the generated Markdown contains the screenshot paths and reviewed reproduction steps.
+Manual verification should run the iOS recorder against a real device and the Android recorder against either a real device or emulator. Each run should capture at least three states, generate a local report, and confirm the generated Markdown contains the platform metadata, screenshot paths, and reviewed reproduction steps.
