@@ -102,6 +102,37 @@ def test_build_parser_accepts_taiga_project():
     assert args.taiga_project == "velowind"
 
 
+def test_main_accepts_package_manager_help_separator(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--platform", "android", "--", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "Record manual mobile app interactions and bug evidence." in captured.out
+
+
+def test_main_accepts_package_manager_help_separator_from_sys_argv(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mobile_manual_recording.py",
+            "--platform",
+            "android",
+            "--",
+            "--help",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "Record manual mobile app interactions and bug evidence." in captured.out
+
+
 def test_bug_mode_returns_without_starting_driver(monkeypatch):
     calls = {"record_bug_journey": 0, "create_driver": 0}
 
@@ -270,7 +301,7 @@ def test_record_bug_journey_keeps_initial_capture_in_final_recording(tmp_path, m
         recorded["recording"] = recording
         return {"bug_report": artifact_dir / "bug-report.md", "taiga_issue": artifact_dir / "taiga-issue.md", "recording": artifact_dir / "recording.json"}
 
-    prompts = iter(["actual 页面一直加载中", "done", "keep"])
+    prompts = iter(["actual 页面一直加载中", "done", "keep", "n"])
     runtime = PlatformRuntime(platform="ios", load_config=fake_load_config, create_driver=fake_create_driver)
     args = type("Args", (), {"output_dir": str(tmp_path), "session_name": "search-loading"})()
 
@@ -312,3 +343,92 @@ def test_record_bug_journey_finishes_gracefully_when_bug_prompt_reaches_eof(tmp_
 
     assert record_bug_journey(args, runtime) == 0
     assert [capture.index for capture in recorded["recording"].captures] == [0]
+
+
+def test_record_bug_journey_generates_ios_test_when_confirmed(tmp_path, monkeypatch):
+    class FakeDriver:
+        page_source = "<AppiumAUT><node visible='true' text='初始页面' /></AppiumAUT>"
+
+        def save_screenshot(self, path):
+            Path(path).write_bytes(b"fake-png")
+
+        def quit(self):
+            pass
+
+    recorded = {}
+    generated_paths = []
+
+    def fake_create_driver(config):
+        return FakeDriver()
+
+    def fake_load_config():
+        return object()
+
+    def fake_prompt(_message):
+        return next(prompts)
+
+    def fake_write_bug_recording_outputs(recording, artifact_dir):
+        recorded["recording"] = recording
+        recording_path = artifact_dir / "recording.json"
+        return {
+            "bug_report": artifact_dir / "bug-report.md",
+            "taiga_issue": artifact_dir / "taiga-issue.md",
+            "recording": recording_path,
+        }
+
+    def fake_generate_test_module(recording_path):
+        generated_paths.append(recording_path)
+        return recording_path.with_name("test_search_loading.py")
+
+    prompts = iter(["actual 页面一直加载中", "done", "keep", "y"])
+    runtime = PlatformRuntime(platform="ios", load_config=fake_load_config, create_driver=fake_create_driver)
+    args = type("Args", (), {"output_dir": str(tmp_path), "session_name": "search-loading"})()
+
+    monkeypatch.setattr("velowind_appium.mobile_manual_recording._prompt", fake_prompt)
+    monkeypatch.setattr("velowind_appium.mobile_manual_recording.write_bug_recording_outputs", fake_write_bug_recording_outputs)
+    monkeypatch.setattr(
+        "velowind_appium.generate_ios_test_from_recording.generate_test_module",
+        fake_generate_test_module,
+    )
+
+    assert record_bug_journey(args, runtime) == 0
+    assert recorded["recording"].actual_result == "页面一直加载中"
+    assert generated_paths == [tmp_path / "search-loading" / "recording.json"]
+
+
+def test_record_bug_journey_prints_android_generation_message(tmp_path, monkeypatch, capsys):
+    class FakeDriver:
+        page_source = "<AppiumAUT><node visible='true' text='初始页面' /></AppiumAUT>"
+
+        def save_screenshot(self, path):
+            Path(path).write_bytes(b"fake-png")
+
+        def quit(self):
+            pass
+
+    def fake_create_driver(config):
+        return FakeDriver()
+
+    def fake_load_config():
+        return object()
+
+    def fake_prompt(_message):
+        return next(prompts)
+
+    def fake_write_bug_recording_outputs(recording, artifact_dir):
+        return {
+            "bug_report": artifact_dir / "bug-report.md",
+            "taiga_issue": artifact_dir / "taiga-issue.md",
+            "recording": artifact_dir / "recording.json",
+        }
+
+    prompts = iter(["actual 页面一直加载中", "done", "keep"])
+    runtime = PlatformRuntime(platform="android", load_config=fake_load_config, create_driver=fake_create_driver)
+    args = type("Args", (), {"output_dir": str(tmp_path), "session_name": "search-loading"})()
+
+    monkeypatch.setattr("velowind_appium.mobile_manual_recording._prompt", fake_prompt)
+    monkeypatch.setattr("velowind_appium.mobile_manual_recording.write_bug_recording_outputs", fake_write_bug_recording_outputs)
+
+    assert record_bug_journey(args, runtime) == 0
+    output = capsys.readouterr().out
+    assert "Android script generation will be added separately." in output

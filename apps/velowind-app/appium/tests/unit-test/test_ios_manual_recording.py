@@ -106,3 +106,34 @@ def test_build_recording_payload_and_write_generated_module(tmp_path):
     assert generated == output_path
     assert output_path.exists()
     assert "test_message_search" in output_path.read_text(encoding="utf-8")
+
+
+def test_generate_test_module_reads_bug_mode_steps(tmp_path):
+    recording_path = tmp_path / "recording.json"
+    recording_path.write_text(
+        json.dumps(
+            {
+                "mode": "bug",
+                "platform": "ios",
+                "session_name": "search-loading",
+                "module_name": "test_search_loading.py",
+                "test_name": "test_search_loading",
+                "steps": [
+                    {
+                        "index": 1,
+                        "label": "open-search",
+                        "description": "打开搜索页",
+                        "snapshot": {"visible_ids": ["search-input"], "visible_texts": ["搜索"]},
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = render_test_module(json.loads(recording_path.read_text(encoding="utf-8")), recording_path)
+
+    assert "test_search_loading" in rendered
+    assert "wait_open_search" in rendered
+    assert "search-input" in rendered

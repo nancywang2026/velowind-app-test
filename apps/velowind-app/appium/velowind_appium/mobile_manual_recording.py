@@ -6,6 +6,7 @@ from datetime import datetime
 from hashlib import sha1
 import json
 from pathlib import Path
+import sys
 from typing import Any, Callable
 
 from appium.webdriver.webdriver import WebDriver
@@ -228,6 +229,15 @@ def record_bug_journey(args: argparse.Namespace, runtime: PlatformRuntime) -> in
         paths = write_bug_recording_outputs(reviewed, artifact_dir)
         print(f"Bug report written: {paths['bug_report']}")
         print(f"Taiga issue draft written: {paths['taiga_issue']}")
+        if runtime.platform == "ios":
+            answer = _prompt("是否基于这份 recording 生成 Appium pytest 脚本草稿？[y/N] ")
+            if (answer or "").strip().lower() in {"y", "yes"}:
+                from .generate_ios_test_from_recording import generate_test_module
+
+                generated = generate_test_module(paths["recording"])
+                print(f"Generated test draft: {generated}")
+        else:
+            print("Android bug report is complete. Android script generation will be added separately.")
         return 0
     finally:
         driver.quit()
@@ -259,9 +269,15 @@ def build_parser(default_platform: str | None = None) -> argparse.ArgumentParser
     return parser
 
 
+def _normalize_cli_argv(argv: list[str] | None) -> list[str]:
+    raw_argv = sys.argv[1:] if argv is None else argv
+    return [argument for argument in raw_argv if argument != "--"]
+
+
 def main(argv: list[str] | None = None, *, default_platform: str | None = None) -> int:
     parser = build_parser(default_platform=default_platform)
-    args = parser.parse_args(argv)
+    normalized_argv = _normalize_cli_argv(argv)
+    args = parser.parse_args(normalized_argv)
 
     if not args.platform:
         parser.error("--platform is required")
