@@ -230,3 +230,35 @@ def test_build_bug_recording_payload_is_json_ready():
     assert payload["actual_result"] == "实际"
     assert payload["notes"] == ["备注"]
     assert payload["steps"][0]["snapshot"]["source_hash"] == "a"
+
+
+def test_build_bug_recording_payload_removes_invalid_unicode_surrogates():
+    recording = BugRecording(
+        session_name="android-share",
+        platform="android",
+        title="分享\ud83d异常",
+        environment={"platform": "android", "device_name": "25060RK16C\udc00"},
+        expected_result="应跳转到寻风集 App",
+        actual_result="浏览器中打开后继续\ud83d",
+        notes=["页面源码包含非法字符\udc00"],
+        captures=[
+            BugCapture(
+                1,
+                "share",
+                "点击分享\ud83d",
+                None,
+                "2026-07-27T10:00:00",
+                SnapshotSummary(None, None, "a", ["id\udc00"], ["分享\ud83d"], None),
+            ),
+        ],
+    )
+
+    payload = build_bug_recording_payload(recording, output_dir=Path(".tmp/appium-android/recordings/android-share"))
+
+    assert payload["title"] == "分享异常"
+    assert payload["environment"]["device_name"] == "25060RK16C"
+    assert payload["actual_result"] == "浏览器中打开后继续"
+    assert payload["notes"] == ["页面源码包含非法字符"]
+    assert payload["steps"][0]["description"] == "点击分享"
+    assert payload["steps"][0]["snapshot"]["visible_ids"] == ["id"]
+    assert payload["steps"][0]["snapshot"]["visible_texts"] == ["分享"]

@@ -132,7 +132,7 @@ def apply_review_command(recording: BugRecording, raw_command: str) -> BugRecord
 
 
 def build_bug_recording_payload(recording: BugRecording, output_dir: Path) -> dict[str, Any]:
-    return {
+    payload = {
         "mode": "bug",
         "session_name": recording.session_name,
         "platform": recording.platform,
@@ -145,69 +145,93 @@ def build_bug_recording_payload(recording: BugRecording, output_dir: Path) -> di
         "notes": list(recording.notes),
         "steps": [asdict(capture) for capture in recording.captures],
     }
+    cleaned = _remove_invalid_unicode(payload)
+    if not isinstance(cleaned, dict):
+        raise TypeError("Bug recording payload must remain a dictionary after unicode cleanup.")
+    return cleaned
 
 
 def render_bug_report(recording: BugRecording, recording_path: Path) -> str:
     evidence_lines = _evidence_lines(recording.captures)
     notes = recording.notes or ["无"]
 
-    return "\n".join(
-        [
-            f"# {recording.title}",
-            "",
-            f"Session: `{recording.session_name}`",
-            "",
-            "## Environment",
-            f"- Platform: {_platform_label(recording.platform)}",
-            *_environment_lines(recording.environment),
-            "",
-            "## Reproduction Steps",
-            *_step_lines(recording.captures),
-            "",
-            "## Expected Result",
-            recording.expected_result or "未填写",
-            "",
-            "## Actual Result",
-            recording.actual_result or "未填写",
-            "",
-            "## Notes",
-            *[f"- {note}" for note in notes],
-            "",
-            "## Evidence",
-            *evidence_lines,
-            "",
-            "## Raw Recording",
-            str(recording_path),
-            "",
-        ]
+    return _strip_invalid_unicode(
+        "\n".join(
+            [
+                f"# {recording.title}",
+                "",
+                f"Session: `{recording.session_name}`",
+                "",
+                "## Environment",
+                f"- Platform: {_platform_label(recording.platform)}",
+                *_environment_lines(recording.environment),
+                "",
+                "## Reproduction Steps",
+                *_step_lines(recording.captures),
+                "",
+                "## Expected Result",
+                recording.expected_result or "未填写",
+                "",
+                "## Actual Result",
+                recording.actual_result or "未填写",
+                "",
+                "## Notes",
+                *[f"- {note}" for note in notes],
+                "",
+                "## Evidence",
+                *evidence_lines,
+                "",
+                "## Raw Recording",
+                str(recording_path),
+                "",
+            ]
+        )
     )
 
 
 def render_taiga_issue(recording: BugRecording, bug_report_path: Path) -> str:
     evidence_lines = _taiga_evidence_lines(recording.captures)
 
-    return "\n".join(
-        [
-            "## 平台",
-            _platform_label(recording.platform),
-            "",
-            "## 复现步骤",
-            *_step_lines(recording.captures),
-            "",
-            "## 期望结果",
-            recording.expected_result or "未填写",
-            "",
-            "## 实际结果",
-            recording.actual_result or "未填写",
-            "",
-            "## 证据",
-            *evidence_lines,
-            "",
-            "## 本地报告",
-            str(bug_report_path),
-            "",
-        ]
+    return _strip_invalid_unicode(
+        "\n".join(
+            [
+                "## 平台",
+                _platform_label(recording.platform),
+                "",
+                "## 复现步骤",
+                *_step_lines(recording.captures),
+                "",
+                "## 期望结果",
+                recording.expected_result or "未填写",
+                "",
+                "## 实际结果",
+                recording.actual_result or "未填写",
+                "",
+                "## 证据",
+                *evidence_lines,
+                "",
+                "## 本地报告",
+                str(bug_report_path),
+                "",
+            ]
+        )
     )
+
+
+def _strip_invalid_unicode(value: str) -> str:
+    return value.encode("utf-8", errors="ignore").decode("utf-8")
+
+
+def _remove_invalid_unicode(value: Any) -> Any:
+    if isinstance(value, str):
+        return _strip_invalid_unicode(value)
+    if isinstance(value, list):
+        return [_remove_invalid_unicode(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_remove_invalid_unicode(item) for item in value)
+    if isinstance(value, dict):
+        return {_remove_invalid_unicode(key): _remove_invalid_unicode(item) for key, item in value.items()}
+    return value
 
 
 def _platform_label(platform: str) -> str:
