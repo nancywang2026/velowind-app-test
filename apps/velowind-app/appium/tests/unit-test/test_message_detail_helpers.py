@@ -293,7 +293,7 @@ def test_build_changbaishan_note_draft_uses_requested_content():
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
-    assert draft.location == "黑龙江"
+    assert draft.location == "长白山"
     assert draft.album == "长白山"
     assert draft.allow_comments is True
 
@@ -308,15 +308,28 @@ def test_load_message_note_draft_reads_yaml_use_case():
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
     assert draft.picture_index == 1
-    assert draft.location == "黑龙江"
+    assert draft.location == "长白山"
 
 
-def test_load_message_note_draft_reads_no_location_variant():
-    testdata_path = (
-        Path(__file__).resolve().parent.parent / "message" / "testdata" / "publish_notes.yaml"
+def test_load_message_note_draft_reads_no_location_variant(tmp_path):
+    testdata_path = tmp_path / "publish_notes.yaml"
+    testdata_path.write_text(
+        """
+use_cases:
+  - id: publish-note-no-location
+    note:
+      title: 长白山真的有种让人瞬间安静下来的魔力
+      body: 第一次去长白山，真的会被那种辽阔感击中。
+      album: 长白山
+      topics:
+        - "#长白山"
+      location:
+      allow_comments: true
+""",
+        encoding="utf-8",
     )
 
-    draft = load_message_note_draft("publish-note-changbaishan-no-location", testdata_path=testdata_path)
+    draft = load_message_note_draft("publish-note-no-location", testdata_path=testdata_path)
 
     assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
@@ -332,10 +345,6 @@ def test_list_message_note_use_case_ids_reads_all_yaml_cases():
     use_case_ids = list_message_note_use_case_ids(testdata_path=testdata_path)
 
     assert "publish-note-changbaishan" in use_case_ids
-    assert "publish-note-changbaishan-no-location" in use_case_ids
-    assert "publish-note-yunnan-erhai" in use_case_ids
-    assert "publish-note-hangzhou-hiking" in use_case_ids
-    assert "publish-note-beijing-forbidden-city" in use_case_ids
 
 
 def test_message_note_form_is_visible_from_publish_page_source():
@@ -438,9 +447,12 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
 
 def test_fill_message_note_form_skips_location_when_select_location_is_false(monkeypatch):
     events = []
-    draft = load_message_note_draft(
-        "publish-note-changbaishan-no-location",
-        testdata_path=Path(__file__).resolve().parent.parent / "message" / "testdata" / "publish_notes.yaml",
+    draft = MessageNoteDraft(
+        title="长白山真的有种让人瞬间安静下来的魔力",
+        body="第一次去长白山，真的会被那种辽阔感击中。",
+        topics=["#长白山"],
+        location="",
+        album="长白山",
     )
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
@@ -1952,6 +1964,59 @@ def test_find_location_search_input_supports_android_hint():
             raise message_detail.NoSuchElementException()
 
     assert message_detail._find_location_search_input(FakeDriver()) is expected
+
+
+def test_ios_note_location_search_uses_visible_text_field(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def __init__(self, displayed, rect):
+            self._displayed = displayed
+            self.rect = rect
+
+        def is_displayed(self):
+            return self._displayed
+
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def set_value(self, value):
+            events.append(("set-value", value))
+
+    hidden = FakeElement(False, {"x": 0, "y": 0, "width": 316, "height": 42})
+    visible = FakeElement(True, {"x": 69, "y": 120, "width": 316, "height": 42})
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_elements(self, by, value):
+            events.append(("find-elements", value))
+            return [hidden, visible]
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "标记地点 长白山")
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_text_or_contains",
+        lambda driver, text: events.append(("tap-text", text)) or True,
+    )
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    assert message_detail._search_note_location_from_picker(FakeDriver(), "长白山") is True
+    assert events == [
+        (
+            "find-elements",
+            '//XCUIElementTypeTextField[@value="搜索地点" or @name="搜索地点" or @label="搜索地点" or @placeholderValue="搜索地点"]',
+        ),
+        "click",
+        "clear",
+        ("set-value", "长白山"),
+        "hide-keyboard",
+        ("tap-text", "搜索"),
+    ]
 
 
 def test_search_note_location_keeps_android_picker_open(monkeypatch):

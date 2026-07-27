@@ -2174,6 +2174,10 @@ def _search_note_location_from_picker(driver: WebDriver, location: str) -> bool:
     normalized = (location or "").strip()
     if not normalized:
         return False
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        return _search_ios_note_location_from_picker(driver, normalized)
+
     search_input = _find_location_search_input(driver)
     if search_input is None:
         return False
@@ -2181,12 +2185,70 @@ def _search_note_location_from_picker(driver: WebDriver, location: str) -> bool:
         _replace_text(search_input, normalized)
     except WebDriverException:
         return False
-    capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() != "android":
         _hide_keyboard(driver)
         _tap_text_or_contains(driver, "搜索")
     time.sleep(0.5)
     return True
+
+
+def _search_ios_note_location_from_picker(driver: WebDriver, location: str) -> bool:
+    search_input = _find_ios_location_search_input(driver)
+    if search_input is None:
+        return False
+    try:
+        search_input.click()
+        try:
+            search_input.clear()
+        except WebDriverException:
+            pass
+        try:
+            search_input.set_value(location)
+        except (AttributeError, WebDriverException):
+            search_input.send_keys(location)
+    except WebDriverException:
+        return False
+    if not _wait_until(lambda: location in _safe_page_source(driver), timeout=2):
+        return False
+    _hide_keyboard(driver)
+    _tap_text_or_contains(driver, "搜索")
+    time.sleep(0.5)
+    return True
+
+
+def _find_ios_location_search_input(driver: WebDriver):
+    xpaths = [
+        (
+            '//XCUIElementTypeTextField['
+            '@value="搜索地点" or @name="搜索地点" or @label="搜索地点" or @placeholderValue="搜索地点"'
+            ']'
+        ),
+        '//*[contains(@name, "搜索地点") or contains(@label, "搜索地点")]/descendant::XCUIElementTypeTextField[1]',
+        '//XCUIElementTypeSearchField',
+        '//XCUIElementTypeTextField',
+    ]
+    candidates = []
+    for xpath in xpaths:
+        try:
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (AttributeError, WebDriverException):
+            continue
+        for element in elements:
+            try:
+                if not element.is_displayed():
+                    continue
+                rect = element.rect
+            except (AttributeError, WebDriverException):
+                continue
+            if _rect_snapshot(element) is None:
+                continue
+            candidates.append((float(rect.get("y", 0) or 0), float(rect.get("height", 0) or 0), element))
+        if candidates:
+            break
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
 
 
 def _find_location_search_input(driver: WebDriver):
