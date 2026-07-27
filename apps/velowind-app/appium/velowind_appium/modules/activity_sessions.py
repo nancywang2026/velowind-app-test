@@ -35,7 +35,7 @@ class ActivitySessionDraft:
 def build_activity_session_draft(*, today: date | None = None) -> ActivitySessionDraft:
     base_date = today or date.today()
     return ActivitySessionDraft(
-        title=f"自动化场次 {base_date:%m%d}",
+        title=f"测试 - 场次 {base_date:%m%d}",
         signup_deadline=_format_datetime(base_date + timedelta(days=5), datetime_time(18, 0)),
         start_time=_format_datetime(base_date + timedelta(days=6), datetime_time(9, 0)),
         end_time=_format_datetime(base_date + timedelta(days=6), datetime_time(18, 0)),

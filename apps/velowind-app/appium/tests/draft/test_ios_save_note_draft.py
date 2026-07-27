@@ -13,7 +13,7 @@ from velowind_appium.modules import (
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_for_publish_entry
 
 
-NOTE_DRAFT_TITLE = "自动化草稿标题"
+NOTE_DRAFT_TITLE = "测试 - 草稿标题"
 
 
 @pytest.mark.full
