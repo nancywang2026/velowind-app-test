@@ -195,22 +195,22 @@ def render_taiga_issue(recording: BugRecording, bug_report_path: Path) -> str:
     return _strip_invalid_unicode(
         "\n".join(
             [
-                "## 平台",
+                "**平台：**",
                 _platform_label(recording.platform),
                 "",
-                "## 复现步骤",
+                "**复现步骤：**",
                 *_step_lines(recording.captures),
                 "",
-                "## 期望结果",
+                "**期望结果：**",
                 recording.expected_result or "未填写",
                 "",
-                "## 实际结果",
+                "**实际结果：**",
                 recording.actual_result or "未填写",
                 "",
-                "## 证据",
+                "**证据：**",
                 *evidence_lines,
                 "",
-                "## 本地报告",
+                "**本地报告：**",
                 str(bug_report_path),
                 "",
             ]

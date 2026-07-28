@@ -533,13 +533,21 @@ def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> Messag
 
 def submit_message_comment(driver: WebDriver, comment_text: str, timeout: int = 20) -> None:
     before_snapshot = parse_detail_snapshot(_safe_page_source(driver))
-    if not (
-        _tap_candidate(driver, COMMENT_ENTRY_IDS, COMMENT_ENTRY_TEXTS)
-        or _tap_bottom_action_at_index(driver, 2)
-    ):
+    _close_ios_image_preview_if_visible(driver)
+    input_box = None
+    opened_entry = _tap_candidate(driver, COMMENT_ENTRY_IDS, COMMENT_ENTRY_TEXTS)
+    if opened_entry:
+        try:
+            input_box = _find_comment_input(driver, timeout=min(timeout, 2))
+        except AssertionError:
+            input_box = None
+
+    if input_box is None and _tap_bottom_action_at_index(driver, 2):
+        input_box = _find_comment_input(driver, timeout=timeout)
+
+    if input_box is None:
         raise AssertionError("Unable to open the comment entry point from message detail")
 
-    input_box = _find_comment_input(driver, timeout=timeout)
     _enter_comment_text(driver, input_box, comment_text)
 
     if not _tap_candidate(driver, COMMENT_SUBMIT_IDS, COMMENT_SUBMIT_TEXTS):
@@ -2939,6 +2947,82 @@ def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
     if len(candidates) <= action_index:
         return False
     return _tap_element_center(driver, candidates[action_index])
+
+
+def _close_ios_image_preview_if_visible(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+
+    page_source = _safe_page_source(driver)
+    if not _ios_image_preview_visible(page_source):
+        return False
+
+    rect = _ios_preview_close_rect(page_source)
+    if rect is None:
+        try:
+            window = driver.get_window_rect()
+            x = int(float(window["width"]) * 0.92)
+            y = int(float(window["height"]) * 0.10)
+        except (AttributeError, KeyError, TypeError, WebDriverException):
+            return False
+    else:
+        left, top, right, bottom = rect
+        x = (left + right) // 2
+        y = (top + bottom) // 2
+
+    try:
+        driver.execute_script("mobile: tap", {"x": x, "y": y})
+    except (AttributeError, WebDriverException):
+        return False
+
+    _wait_until(lambda: not _ios_image_preview_visible(_safe_page_source(driver)), timeout=2)
+    return True
+
+
+def _ios_image_preview_visible(page_source: str) -> bool:
+    if "post-detail-preview-pager" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+    return any(
+        element.attrib.get("name") == "post-detail-preview-pager"
+        and element.attrib.get("visible") != "false"
+        for element in root.iter()
+    )
+
+
+def _ios_preview_close_rect(page_source: str) -> tuple[int, int, int, int] | None:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    window_width = 0
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        attributes = element.attrib
+        if attributes.get("visible") == "false" or attributes.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attributes)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        width = right - left
+        height = bottom - top
+        window_width = max(window_width, right)
+        if top <= 130 and 25 <= width <= 55 and 25 <= height <= 55:
+            candidates.append(rect)
+
+    if not candidates:
+        return None
+    right_edge_threshold = int(window_width * 0.75) if window_width else 300
+    right_candidates = [rect for rect in candidates if rect[0] >= right_edge_threshold]
+    if not right_candidates:
+        return None
+    return max(right_candidates, key=lambda rect: (rect[0], -rect[1]))
 
 
 def _tap_android_bottom_action_by_source(driver: WebDriver, action_index: int) -> bool:
