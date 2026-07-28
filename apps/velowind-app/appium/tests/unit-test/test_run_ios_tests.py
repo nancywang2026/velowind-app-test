@@ -56,6 +56,24 @@ pytest_args:
     assert command[marker_index + 1] == "smoke"
 
 
+def test_build_pytest_command_uses_isolated_allure_run_dir(monkeypatch):
+    monkeypatch.setenv("VW_APPIUM_RUN_ID", "ios-run-1")
+
+    command = run_ios_tests.build_pytest_command(["-m", "smoke"])
+
+    assert f"--alluredir={run_ios_tests.REPO_ROOT / '.tmp' / 'appium-ios' / 'runs' / 'ios-run-1' / 'allure-results'}" in command
+    assert f"--alluredir={run_ios_tests.REPO_ROOT / '.tmp' / 'appium-ios' / 'allure-results'}" not in command
+
+
+def test_build_pytest_command_allows_allure_result_dir_override(monkeypatch, tmp_path):
+    results_dir = tmp_path / "custom-results"
+    monkeypatch.setenv("VW_ALLURE_RESULTS_DIR", str(results_dir))
+
+    command = run_ios_tests.build_pytest_command(["-m", "smoke"])
+
+    assert f"--alluredir={results_dir}" in command
+
+
 def test_build_pytest_command_rejects_empty_suite_file(tmp_path):
     suite_file = tmp_path / "empty.yaml"
     suite_file.write_text("{}", encoding="utf-8")

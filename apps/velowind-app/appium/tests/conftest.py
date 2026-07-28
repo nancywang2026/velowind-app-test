@@ -6,6 +6,7 @@ from selenium.common.exceptions import InvalidSessionIdException, WebDriverExcep
 
 from velowind_appium.android_config import load_android_config
 from velowind_appium.android_driver import create_android_driver
+from velowind_appium.allure_artifacts import allure_artifacts
 from velowind_appium.config import load_ios_config
 from velowind_appium.driver import create_ios_driver
 from velowind_appium.reporting import allure, generate_and_open_allure_report
@@ -14,8 +15,6 @@ from velowind_appium.session import ensure_logged_in_on_home
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-ALLURE_RESULTS = REPO_ROOT / ".tmp" / "appium-ios" / "allure-results"
-ALLURE_REPORT = REPO_ROOT / ".tmp" / "appium-ios" / "allure-report"
 WALKTHROUGH_TEST_FILE = "smoke/test_ios_feature_walkthrough.py"
 
 
@@ -172,8 +171,9 @@ def pytest_sessionfinish(session, exitstatus):
     if not any(item.location[0].endswith(WALKTHROUGH_TEST_FILE) for item in getattr(session, "items", [])):
         return
 
+    artifacts = allure_artifacts(REPO_ROOT, _test_platform())
     generate_and_open_allure_report(
         repo_root=REPO_ROOT,
-        allure_results=ALLURE_RESULTS,
-        allure_report=ALLURE_REPORT,
+        allure_results=artifacts.results,
+        allure_report=artifacts.report,
     )

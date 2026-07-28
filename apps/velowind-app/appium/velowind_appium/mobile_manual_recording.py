@@ -10,7 +10,7 @@ import sys
 from typing import Any, Callable
 
 from appium.webdriver.webdriver import WebDriver
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
 
 from .actions import capture_debug_artifacts
 from .android_config import load_android_config
@@ -168,6 +168,13 @@ def _review_recording(recording: BugRecording) -> BugRecording:
             print(error)
 
 
+def _quit_driver_if_needed(driver: WebDriver) -> None:
+    try:
+        driver.quit()
+    except (InvalidSessionIdException, WebDriverException):
+        pass
+
+
 def record_bug_journey(args: argparse.Namespace, runtime: PlatformRuntime) -> int:
     config = runtime.load_config()
     artifact_root = Path(args.output_dir).expanduser() if args.output_dir else default_recording_dir(runtime.platform)
@@ -240,7 +247,7 @@ def record_bug_journey(args: argparse.Namespace, runtime: PlatformRuntime) -> in
             print("Android bug report is complete. Android script generation will be added separately.")
         return 0
     finally:
-        driver.quit()
+        _quit_driver_if_needed(driver)
 
 
 def build_parser(default_platform: str | None = None) -> argparse.ArgumentParser:

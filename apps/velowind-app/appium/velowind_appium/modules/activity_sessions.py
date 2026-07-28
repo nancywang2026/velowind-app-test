@@ -1383,12 +1383,12 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
     if not _wait_until(lambda: _android_datetime_picker_visible(_safe_page_source(driver), keyword), timeout=3):
         return False
     field_order = {
-        "报名截止时间": ["day", "hour", "minute"],
-        "报名截止": ["day", "hour", "minute"],
-        "开始时间": ["day", "hour", "minute"],
-        "活动开始": ["day", "hour", "minute"],
-        "结束时间": ["day", "hour", "minute"],
-        "活动结束": ["day", "hour", "minute"],
+        "报名截止时间": ["month", "day", "hour", "minute"],
+        "报名截止": ["month", "day", "hour", "minute"],
+        "开始时间": ["month", "day", "hour", "minute"],
+        "活动开始": ["month", "day", "hour", "minute"],
+        "结束时间": ["month", "day", "hour", "minute"],
+        "活动结束": ["month", "day", "hour", "minute"],
     }.get(keyword)
     if field_order is None:
         return False
@@ -1427,12 +1427,6 @@ def _fill_android_datetime_picker_wheels(
 ) -> bool:
     for field in field_order:
         wheel_id = wheel_ids.get(field)
-        if (
-            wheel_id
-            and _is_physical_android_driver(driver)
-            and _adjust_physical_android_datetime_picker_wheel_to_target(driver, wheel_id, field, parts[field])
-        ):
-            continue
         if wheel_id and _tap_android_datetime_picker_visible_wheel_value(driver, wheel_id, field, parts[field]):
             continue
         if _drag_android_datetime_picker_wheel_to_target(driver, field, parts[field]):
@@ -1730,7 +1724,7 @@ def _swipe_physical_android_datetime_picker_wheel_step(driver: WebDriver, field:
         return False
 
     center_x, center_y = _android_datetime_picker_wheel_center(rect, field)
-    offset = max(92, int(rect["height"] * 0.04))
+    offset = max(30, int(rect["height"] * 0.013))
     start_y = center_y + offset if direction == "next" else center_y - offset
     end_y = center_y - offset if direction == "next" else center_y + offset
     return _swipe_physical_android_device(

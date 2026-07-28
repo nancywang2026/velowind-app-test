@@ -47,7 +47,7 @@ class FakeActivityElement:
 def test_build_activity_draft_reads_first_yaml_case():
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
-    assert draft.title == "张家界大环线2天1晚"
+    assert draft.title == "测试 - 张家界大环线2天1晚"
     assert draft.activity_type == "骑行"
     assert draft.province == "浙江省"
     assert draft.city == "张家界市"
@@ -70,7 +70,7 @@ def test_build_activity_draft_reads_first_yaml_case():
 def test_build_activity_draft_reads_all_zhangjiajie_fields():
     draft = build_activity_draft(testdata_path=TESTDATA_PATH)
 
-    assert draft.title == "张家界大环线2天1晚"
+    assert draft.title == "测试 - 张家界大环线2天1晚"
     assert draft.activity_type == "骑行"
     assert draft.province == "浙江省"
     assert draft.city == "张家界市"

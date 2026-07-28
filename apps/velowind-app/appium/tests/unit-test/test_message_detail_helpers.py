@@ -290,7 +290,7 @@ def test_parse_detail_snapshot_extracts_bottom_action_counts():
 def test_build_changbaishan_note_draft_uses_requested_content():
     draft = build_changbaishan_note_draft()
 
-    assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
+    assert draft.title == "测试 - 长白山真的有种让人瞬间安静下来的魔力"
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
     assert draft.location == "长白山"
@@ -305,7 +305,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
 
     draft = load_message_note_draft("publish-note-changbaishan", testdata_path=testdata_path)
 
-    assert draft.title == "长白山真的有种让人瞬间安静下来的魔力"
+    assert draft.title == "测试 - 长白山真的有种让人瞬间安静下来的魔力"
     assert draft.album == "长白山"
     assert draft.picture_index == 1
     assert draft.location == "长白山"
@@ -715,6 +715,57 @@ def test_submit_comment_uses_ios_set_value_and_verifies_full_text(monkeypatch):
     ]
 
 
+def test_submit_comment_falls_back_to_ios_bottom_action_when_text_entry_does_not_open_input(monkeypatch):
+    events = []
+    input_attempts = iter([AssertionError("missing input"), object()])
+
+    class FakeInput:
+        @staticmethod
+        def click():
+            events.append("click-input")
+
+        @staticmethod
+        def clear():
+            events.append("clear")
+
+        @staticmethod
+        def set_value(value):
+            events.append(("set-value", value))
+
+        @staticmethod
+        def get_attribute(attribute):
+            return "自动化测试留言" if attribute == "value" else ""
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    def fake_find_comment_input(driver, timeout):
+        result = next(input_attempts)
+        if isinstance(result, Exception):
+            raise result
+        return FakeInput()
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"]))
+    monkeypatch.setattr(message_detail, "_tap_candidate", lambda driver, ids, texts: events.append(("tap-candidate", tuple(texts))) or True)
+    monkeypatch.setattr(message_detail, "_tap_bottom_action_at_index", lambda driver, index: events.append(("tap-bottom-action", index)) or True)
+    monkeypatch.setattr(message_detail, "_find_comment_input", fake_find_comment_input)
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_for_comment_echo", lambda *args, **kwargs: events.append("wait-echo"))
+
+    message_detail.submit_message_comment(FakeDriver(), "自动化测试留言", timeout=3)
+
+    assert events == [
+        ("tap-candidate", tuple(message_detail.COMMENT_ENTRY_TEXTS)),
+        ("tap-bottom-action", 2),
+        "click-input",
+        "clear",
+        ("set-value", "自动化测试留言"),
+        ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)),
+        "wait-echo",
+    ]
+
+
 def test_find_comment_input_supports_android_edit_text():
     expected = object()
 
@@ -726,6 +777,37 @@ def test_find_comment_input_supports_android_edit_text():
             raise NoSuchElementException("no match")
 
     assert message_detail._find_comment_input(FakeDriver(), timeout=0.1) is expected
+
+
+def test_close_ios_image_preview_taps_visible_top_right_close_button():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = """
+        <AppiumAUT>
+          <XCUIElementTypeApplication>
+            <XCUIElementTypeWindow>
+              <XCUIElementTypeOther visible="true" x="0" y="0" width="402" height="874">
+                <XCUIElementTypeOther visible="true" x="0" y="0" width="402" height="104">
+                  <XCUIElementTypeOther visible="true" x="13" y="70" width="376" height="34">
+                    <XCUIElementTypeOther visible="true" x="355" y="70" width="34" height="34" />
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+                <XCUIElementTypeOther name="post-detail-preview-pager" visible="true" x="0" y="0" width="402" height="874" />
+                <XCUIElementTypeOther name="写留言" label="写留言" visible="false" x="13" y="715" width="376" height="39" />
+              </XCUIElementTypeOther>
+            </XCUIElementTypeWindow>
+          </XCUIElementTypeApplication>
+        </AppiumAUT>
+        """
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._close_ios_image_preview_if_visible(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 372, "y": 87})]
 
 
 def test_share_note_to_moments_taps_share_then_target(monkeypatch):

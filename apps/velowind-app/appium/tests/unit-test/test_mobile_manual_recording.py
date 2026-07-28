@@ -3,7 +3,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
 
 from velowind_appium.mobile_manual_recording import (
     _prompt,
@@ -343,6 +343,39 @@ def test_record_bug_journey_finishes_gracefully_when_bug_prompt_reaches_eof(tmp_
 
     assert record_bug_journey(args, runtime) == 0
     assert [capture.index for capture in recorded["recording"].captures] == [0]
+
+
+def test_record_bug_journey_finishes_gracefully_when_session_already_ended(tmp_path, monkeypatch):
+    class FakeDriver:
+        page_source = "<AppiumAUT><node visible='true' text='初始页面' /></AppiumAUT>"
+
+        def save_screenshot(self, path):
+            Path(path).write_bytes(b"fake-png")
+
+        def quit(self):
+            raise InvalidSessionIdException("A session is either terminated or not started")
+
+    recorded = {}
+
+    def fake_create_driver(config):
+        return FakeDriver()
+
+    def fake_load_config():
+        return object()
+
+    def fake_write_bug_recording_outputs(recording, artifact_dir):
+        recorded["recording"] = recording
+        return {"bug_report": artifact_dir / "bug-report.md", "taiga_issue": artifact_dir / "taiga-issue.md", "recording": artifact_dir / "recording.json"}
+
+    prompts = iter(["actual 页面一直加载中", "done", "keep", "n"])
+    runtime = PlatformRuntime(platform="ios", load_config=fake_load_config, create_driver=fake_create_driver)
+    args = type("Args", (), {"output_dir": str(tmp_path), "session_name": "search-loading"})()
+
+    monkeypatch.setattr("velowind_appium.mobile_manual_recording._prompt", lambda _message: next(prompts))
+    monkeypatch.setattr("velowind_appium.mobile_manual_recording.write_bug_recording_outputs", fake_write_bug_recording_outputs)
+
+    assert record_bug_journey(args, runtime) == 0
+    assert recorded["recording"].actual_result == "页面一直加载中"
 
 
 def test_record_bug_journey_generates_ios_test_when_confirmed(tmp_path, monkeypatch):

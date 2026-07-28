@@ -9,11 +9,11 @@ from pathlib import Path
 
 import yaml
 
+from .allure_artifacts import allure_artifacts as _resolve_allure_artifacts
+
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 TEST_PATH = REPO_ROOT / "apps" / "velowind-app" / "appium" / "tests"
-ALLURE_RESULTS = REPO_ROOT / ".tmp" / "appium-ios" / "allure-results"
-ALLURE_REPORT = REPO_ROOT / ".tmp" / "appium-ios" / "allure-report"
 DEFAULT_SUITE_FILE = REPO_ROOT / "apps" / "velowind-app" / "appium" / "test-suites" / "smoke.yaml"
 
 
@@ -28,37 +28,53 @@ def _run(command):
     return subprocess.run(command, cwd=REPO_ROOT, check=False)
 
 
+def allure_artifacts(run_id=None):
+    return _resolve_allure_artifacts(REPO_ROOT, "ios", run_id)
+
+
 def _allure_pytest_args() -> list[str]:
     if importlib.util.find_spec("allure_pytest") is None:
         return []
+    artifacts = allure_artifacts()
     return [
-        f"--alluredir={ALLURE_RESULTS}",
+        f"--alluredir={artifacts.results}",
         "--clean-alluredir",
     ]
 
 
 def _generate_and_open_report() -> None:
+    artifacts = allure_artifacts()
     allure_bin = shutil.which("allure")
     if allure_bin is None:
         print("Allure CLI not found. Install it with `brew install allure` to auto-open reports.")
         return
-    if not ALLURE_RESULTS.exists():
-        print(f"Allure results not found: {ALLURE_RESULTS}")
+    if not artifacts.results.exists():
+        print(f"Allure results not found: {artifacts.results}")
         return
 
     generate_result = _run(
         [
             allure_bin,
             "generate",
-            str(ALLURE_RESULTS),
+            str(artifacts.results),
             "--clean",
             "-o",
-            str(ALLURE_REPORT),
+            str(artifacts.report),
         ]
     )
     if generate_result.returncode != 0:
         return
-    subprocess.Popen([allure_bin, "open", str(ALLURE_REPORT)], cwd=REPO_ROOT)
+    try:
+        if artifacts.latest_report.exists() or artifacts.latest_report.is_symlink():
+            artifacts.latest_report.unlink()
+        artifacts.latest_report.symlink_to(artifacts.report, target_is_directory=True)
+    except OSError:
+        pass
+    open_command = [allure_bin, "open", str(artifacts.report)]
+    port = os.environ.get("VW_ALLURE_OPEN_PORT", "").strip()
+    if port:
+        open_command.extend(["-p", port])
+    subprocess.Popen(open_command, cwd=REPO_ROOT)
 
 
 def load_test_suite(path: Path) -> TestSuite:
@@ -126,6 +142,7 @@ def build_pytest_command(cli_args: list[str]) -> list[str]:
 
 
 def main() -> int:
+    allure_artifacts()
     cli_args = sys.argv[1:]
     if not cli_args and DEFAULT_SUITE_FILE.exists():
         cli_args = ["--suite", str(DEFAULT_SUITE_FILE)]

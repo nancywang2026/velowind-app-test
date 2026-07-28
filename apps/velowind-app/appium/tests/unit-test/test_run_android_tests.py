@@ -51,6 +51,24 @@ pytest_args:
     assert command[marker_index + 1] == "smoke"
 
 
+def test_build_android_pytest_command_uses_isolated_allure_run_dir(monkeypatch):
+    monkeypatch.setenv("VW_APPIUM_RUN_ID", "android-run-1")
+
+    command = run_android_tests.build_pytest_command(["-m", "android_smoke"])
+
+    assert f"--alluredir={run_android_tests.REPO_ROOT / '.tmp' / 'appium-android' / 'runs' / 'android-run-1' / 'allure-results'}" in command
+    assert f"--alluredir={run_android_tests.REPO_ROOT / '.tmp' / 'appium-android' / 'allure-results'}" not in command
+
+
+def test_build_android_pytest_command_allows_allure_result_dir_override(monkeypatch, tmp_path):
+    results_dir = tmp_path / "custom-results"
+    monkeypatch.setenv("VW_ALLURE_RESULTS_DIR", str(results_dir))
+
+    command = run_android_tests.build_pytest_command(["-m", "android_smoke"])
+
+    assert f"--alluredir={results_dir}" in command
+
+
 def test_build_android_pytest_command_rejects_empty_suite_file(tmp_path):
     suite_file = tmp_path / "empty.yaml"
     suite_file.write_text("{}", encoding="utf-8")
@@ -60,8 +78,10 @@ def test_build_android_pytest_command_rejects_empty_suite_file(tmp_path):
 
 
 def test_android_runner_uses_android_artifact_paths():
-    assert run_android_tests.ALLURE_RESULTS == Path(run_android_tests.REPO_ROOT) / ".tmp" / "appium-android" / "allure-results"
-    assert run_android_tests.ALLURE_REPORT == Path(run_android_tests.REPO_ROOT) / ".tmp" / "appium-android" / "allure-report"
+    artifacts = run_android_tests.allure_artifacts("android-run-1")
+
+    assert artifacts.results == Path(run_android_tests.REPO_ROOT) / ".tmp" / "appium-android" / "runs" / "android-run-1" / "allure-results"
+    assert artifacts.report == Path(run_android_tests.REPO_ROOT) / ".tmp" / "appium-android" / "runs" / "android-run-1" / "allure-report"
 
 
 def test_android_activity_publish_suite_uses_platform_neutral_activity_case():
@@ -98,6 +118,7 @@ def test_android_full_suite_contains_required_regression_cases():
         "message/test_ios_publish_note.py",
         "activity/test_publish_activity.py",
         "activity/test_manage_activity_session.py",
+        "rental/test_rental_order.py",
     ]
     assert suite.pytest_args == ["--maxfail=1"]
 

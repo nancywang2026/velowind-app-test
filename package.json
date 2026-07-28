@@ -12,8 +12,9 @@
     "appium:ios:preflight": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.preflight",
     "appium:ios:record": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.mobile_manual_recording --platform ios",
     "appium:ios:record:generate": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.generate_ios_test_from_recording",
-    "appium:ios:allure:generate": "allure generate .tmp/appium-ios/allure-results --clean -o .tmp/appium-ios/allure-report",
-    "appium:ios:allure:open": "allure open .tmp/appium-ios/allure-report",
+    "appium:ios:cleanup": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.cleanup_test_data --platform ios",
+    "appium:ios:allure:generate": "sh -c 'test -n \"$VW_APPIUM_RUN_ID\" && allure generate .tmp/appium-ios/runs/$VW_APPIUM_RUN_ID/allure-results --clean -o .tmp/appium-ios/runs/$VW_APPIUM_RUN_ID/allure-report'",
+    "appium:ios:allure:open": "allure open .tmp/appium-ios/latest-report",
     "appium:android:test": "pnpm appium:android:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_android_tests -m android_smoke",
     "appium:android:media:export": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.mac_photos_export",
     "appium:android:media:sync": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.android_media_sync",
@@ -29,8 +30,9 @@
     "appium:android:record": "pnpm appium:android:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.mobile_manual_recording --platform android",
     "appium:android:config-test": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m pytest apps/velowind-app/appium/tests/unit-test/test_android_config.py apps/velowind-app/appium/tests/unit-test/test_run_android_tests.py apps/velowind-app/appium/tests/unit-test/test_android_preflight.py -q",
     "appium:android:preflight": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.android_preflight",
-    "appium:android:allure:generate": "allure generate .tmp/appium-android/allure-results --clean -o .tmp/appium-android/allure-report",
-    "appium:android:allure:open": "allure open .tmp/appium-android/allure-report"
+    "appium:android:cleanup": "pnpm appium:android:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.cleanup_test_data --platform android",
+    "appium:android:allure:generate": "sh -c 'test -n \"$VW_APPIUM_RUN_ID\" && allure generate .tmp/appium-android/runs/$VW_APPIUM_RUN_ID/allure-results --clean -o .tmp/appium-android/runs/$VW_APPIUM_RUN_ID/allure-report'",
+    "appium:android:allure:open": "allure open .tmp/appium-android/latest-report"
   },
   "packageManager": "pnpm@9.0.0"
 }

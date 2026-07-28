@@ -272,19 +272,33 @@ done
 测试运行后会自动生成 Allure raw results：
 
 ```text
-.tmp/appium-ios/allure-results/
+.tmp/appium-<platform>/runs/<run-id>/allure-results/
 ```
 
-生成 HTML 报告：
+HTML 报告会生成到同一轮运行目录下：
 
-```bash
-pnpm appium:ios:allure:generate
+```text
+.tmp/appium-<platform>/runs/<run-id>/allure-report/
 ```
 
-打开报告：
+打开最近一次报告：
 
 ```bash
 pnpm appium:ios:allure:open
+pnpm appium:android:allure:open
+```
+
+重生成指定 run 的 HTML 报告：
+
+```bash
+VW_APPIUM_RUN_ID=20260728-143012-12345 pnpm appium:ios:allure:generate
+```
+
+并发查看多个报告时，直接对不同 run 目录指定不同端口：
+
+```bash
+allure open .tmp/appium-ios/runs/<run-id-a>/allure-report -p 5051
+allure open .tmp/appium-ios/runs/<run-id-b>/allure-report -p 5052
 ```
 
 失败用例会把截图和页面 XML 作为附件写入报告。

@@ -430,8 +430,23 @@ def test_write_android_end_time_adjusts_day_hour_and_minute(monkeypatch):
     monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda received: confirmed.append(True))
 
     assert activity_sessions._write_android_datetime_picker_value(driver, "结束时间", "2026-07-29 18:00") is True
-    assert captured == [(["day", "hour", "minute"], {"month": "07", "day": "29", "hour": "18", "minute": "00"})]
+    assert captured == [(["month", "day", "hour", "minute"], {"month": "07", "day": "29", "hour": "18", "minute": "00"})]
     assert confirmed == [True]
+
+
+def test_write_android_deadline_adjusts_month_when_target_crosses_month(monkeypatch):
+    driver = FakeDriver("已选择时间 07.28 10:17 取消 确认 月 日 时 分 报名截止时间", width=1280, height=2856)
+    captured = []
+
+    def fake_fill(received, wheel_ids, field_order, parts):
+        captured.append((field_order, parts))
+        return True
+
+    monkeypatch.setattr(activity_sessions, "_fill_android_datetime_picker_wheels", fake_fill)
+    monkeypatch.setattr(activity_sessions, "_confirm_session_picker", lambda received: True)
+
+    assert activity_sessions._write_android_datetime_picker_value(driver, "报名截止时间", "2026-08-02 18:00") is True
+    assert captured == [(["month", "day", "hour", "minute"], {"month": "08", "day": "02", "hour": "18", "minute": "00"})]
 
 
 def test_write_android_start_time_uses_start_time_picker_wheel_ids(monkeypatch):
@@ -454,7 +469,7 @@ def test_write_android_start_time_uses_start_time_picker_wheel_ids(monkeypatch):
                 "hour": "activity-session-create-start-time-picker-hour-wheel",
                 "minute": "activity-session-create-start-time-picker-minute-wheel",
             },
-            ["day", "hour", "minute"],
+            ["month", "day", "hour", "minute"],
             {"month": "07", "day": "28", "hour": "09", "minute": "00"},
         )
     ]
@@ -797,7 +812,7 @@ def test_fill_android_datetime_picker_wheels_prefers_drag_before_direct_set(monk
     assert calls == [("drag", "day", "23")]
 
 
-def test_fill_android_datetime_picker_wheels_prefers_physical_visible_row_alignment(monkeypatch):
+def test_fill_android_datetime_picker_wheels_prefers_visible_value_before_physical_alignment(monkeypatch):
     driver = FakeDriver("已选择时间 07.25 22:16 月 日 时 分", width=1280, height=2856)
     driver.capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
     calls = []
@@ -807,7 +822,7 @@ def test_fill_android_datetime_picker_wheels_prefers_physical_visible_row_alignm
         return True
 
     monkeypatch.setattr(activity_sessions, "_adjust_physical_android_datetime_picker_wheel_to_target", fake_physical, raising=False)
-    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_visible_wheel_value", lambda *args, **kwargs: calls.append(("tap-visible",)) or False)
+    monkeypatch.setattr(activity_sessions, "_tap_android_datetime_picker_visible_wheel_value", lambda *args, **kwargs: calls.append(("tap-visible",)) or True)
     monkeypatch.setattr(activity_sessions, "_drag_android_datetime_picker_wheel_to_target", lambda *args, **kwargs: calls.append(("generic-drag",)) or True)
     monkeypatch.setattr(activity_sessions, "_set_android_datetime_picker_wheel_value", lambda *args, **kwargs: calls.append(("set",)) or True)
 
@@ -818,7 +833,7 @@ def test_fill_android_datetime_picker_wheels_prefers_physical_visible_row_alignm
         {"minute": "18"},
     ) is True
     assert calls == [
-        ("physical", "activity-session-create-deadline-picker-minute-wheel", "minute", "18"),
+        ("tap-visible",),
     ]
 
 
@@ -1024,7 +1039,7 @@ def test_tap_android_datetime_picker_wheel_step_swipes_between_visible_rows_only
 
     activity_sessions._tap_android_datetime_picker_wheel_step(physical_driver, "minute", "next")
 
-    assert swipes == [(1084, 2435, 1084, 2207, 280)]
+    assert swipes == [(1084, 2358, 1084, 2284, 280)]
     assert physical_driver.scripts == []
 
     for capabilities in [
