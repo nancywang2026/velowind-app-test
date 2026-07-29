@@ -102,6 +102,41 @@ def visible_text_hit_points(page_source: str, keywords: list[str]) -> list[tuple
     return hit_points
 
 
+def visible_text_hit_points_containing(page_source: str, keywords: list[str]) -> list[tuple[int, int]]:
+    if not page_source:
+        return []
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    matches: list[tuple[int, int, int]] = []
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        values = [
+            normalize_text(element.attrib.get(attribute, ""))
+            for attribute in ("text", "name", "label", "value", "content-desc")
+        ]
+        if not any(value and any(keyword in value for keyword in keywords) for value in values):
+            continue
+        hit_point = _element_center(element.attrib)
+        if hit_point is None:
+            continue
+        x, y, area = hit_point
+        matches.append((area, x, y))
+
+    hit_points: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for _, x, y in sorted(matches):
+        point = (x, y)
+        if point in seen:
+            continue
+        hit_points.append(point)
+        seen.add(point)
+    return hit_points
+
+
 def tap_by_coordinate_ratios(driver: WebDriver, ratios: list[tuple[float, float]]) -> bool:
     try:
         rect = driver.get_window_rect()
@@ -118,6 +153,20 @@ def tap_by_coordinate_ratios(driver: WebDriver, ratios: list[tuple[float, float]
             return True
         except WebDriverException:
             continue
+    return False
+
+
+def tap_visible_text_containing_hit_point(driver: WebDriver, keywords: list[str], timeout: int = 2) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        for x, y in visible_text_hit_points_containing(safe_page_source(driver), keywords):
+            try:
+                driver.execute_script("mobile: tap", {"x": x, "y": y})
+                time.sleep(0.4)
+                return True
+            except WebDriverException:
+                continue
+        time.sleep(0.2)
     return False
 
 

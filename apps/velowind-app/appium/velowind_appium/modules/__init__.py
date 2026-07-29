@@ -55,6 +55,7 @@ from .rental_orders import (
 from .rental_payment_center import (
     confirm_payment_then_think_again,
     dismiss_pending_payment_dialog_if_present,
+    tap_rental_payment_button,
     wait_for_rental_payment_center_page,
 )
 from .rental_store import choose_first_store, tap_select_car_now, wait_for_rental_store_page
@@ -165,6 +166,7 @@ __all__ = [
     "tap_book_now",
     "tap_first_note_card",
     "tap_note_card_at_ordinal",
+    "tap_rental_payment_button",
     "tap_select_car_now",
     "toggle_ticket_text_and_assert_change",
     "wait_for_activity_form",

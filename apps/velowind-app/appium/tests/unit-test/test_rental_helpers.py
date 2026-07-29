@@ -1,6 +1,6 @@
 from velowind_appium.modules import rental_orders
 from velowind_appium.modules import rental_home_entry
-from velowind_appium.modules.rental_common import visible_text_hit_points
+from velowind_appium.modules.rental_common import visible_text_hit_points, visible_text_hit_points_containing
 
 
 def test_extract_rental_order_summary_from_ios_source():
@@ -96,6 +96,18 @@ def test_visible_text_hit_points_uses_android_bounds_center_for_matching_text():
     assert visible_text_hit_points(page_source, ["车辆详情"]) == [(114, 741)]
 
 
+def test_visible_text_hit_points_containing_matches_ios_label_suffix():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="去支付¥3670.00" label="去支付¥3670.00" visible="true" x="0" y="768" width="402" height="106">
+        <XCUIElementTypeStaticText value="去支付¥3670.00" name="去支付¥3670.00" label="去支付¥3670.00" visible="true" x="145" y="792" width="112" height="21" />
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+
+    assert (201, 821) in visible_text_hit_points_containing(page_source, ["去支付"])
+
+
 class _FakeRentalDriver:
     def __init__(self, page_source: str):
         self.page_source = page_source
@@ -107,6 +119,12 @@ def test_rental_home_visible_rejects_post_detail_overlay():
     )
 
     assert rental_home_entry._home_visible(driver) is False
+
+
+def test_rental_home_visible_allows_home_rental_entry_text():
+    driver = _FakeRentalDriver("首页 全国 推荐 活动 消息 我的 租车 floating-rent-entry")
+
+    assert rental_home_entry._home_visible(driver) is True
 
 
 def test_rental_entry_ids_include_android_floating_rent_entry():

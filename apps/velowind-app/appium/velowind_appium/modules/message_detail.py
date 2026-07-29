@@ -1648,7 +1648,12 @@ def _tap_note_image_remove_button(driver: WebDriver, element) -> bool:
 def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
     if not topics:
         return
-    if not (_tap_text_or_contains(driver, "#话题") or _tap_text_or_contains(driver, "话题")):
+    platform_name = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower()
+    topic_action_visible = _tap_text_or_contains(driver, "#话题") or _tap_text_or_contains(driver, "话题")
+    if not topic_action_visible and platform_name == "android":
+        _focus_android_note_body_for_topic_action(driver)
+        topic_action_visible = _tap_text_or_contains(driver, "#话题") or _tap_text_or_contains(driver, "话题")
+    if not topic_action_visible and platform_name != "android":
         raise AssertionError("Unable to find the #topic action on the note editor")
 
     for xpath in [
@@ -1671,6 +1676,16 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to append topics to the note body")
+
+
+def _focus_android_note_body_for_topic_action(driver: WebDriver) -> bool:
+    try:
+        element = driver.find_element(AppiumBy.XPATH, '//android.widget.EditText[contains(@hint, "正文")]')
+        element.click()
+        time.sleep(0.2)
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
 
 
 def _text_input_current_value(element) -> str:

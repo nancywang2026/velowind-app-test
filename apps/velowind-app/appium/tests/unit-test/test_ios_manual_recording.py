@@ -170,3 +170,86 @@ def test_generate_test_module_reads_bug_mode_steps(tmp_path):
     assert "test_search_loading" in rendered
     assert "wait_open_search" in rendered
     assert "search-input" in rendered
+
+
+def test_generate_test_module_writes_bug_mode_recording_without_module_name(tmp_path):
+    recording_path = tmp_path / "recording.json"
+    recording_path.write_text(
+        json.dumps(
+            {
+                "mode": "bug",
+                "platform": "ios",
+                "session_name": "artifact",
+                "title": "页面显示未收到支付宝支付回跳",
+                "steps": [
+                    {
+                        "index": 1,
+                        "label": "点击去支付",
+                        "description": "点击去支付",
+                        "snapshot": {"visible_ids": ["支付中心"], "visible_texts": ["去支付"]},
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    generated = generate_test_module(recording_path)
+
+    assert generated.name == "test_artifact.py"
+    assert generated.exists()
+    assert "test_artifact" in generated.read_text(encoding="utf-8")
+
+
+def test_render_bug_mode_rental_recording_replays_actions():
+    recording = {
+        "mode": "bug",
+        "platform": "ios",
+        "session_name": "rental-payment-callback",
+        "actual_result": "页面显示“未收到支付宝支付回跳，请返回当前页面后重试”",
+        "steps": [
+            {
+                "index": 0,
+                "label": "initial-state",
+                "description": "初始页面",
+                "snapshot": {"visible_ids": ["寻风集"], "visible_texts": ["首页"]},
+            },
+            {
+                "index": 1,
+                "label": "点击租车图标",
+                "description": "点击租车图标",
+                "snapshot": {"visible_ids": ["选择车辆"], "visible_texts": ["选择车辆"]},
+            },
+            {
+                "index": 2,
+                "label": "点击立即预订",
+                "description": "点击立即预订",
+                "snapshot": {"visible_ids": ["订单确认"], "visible_texts": ["订单确认"]},
+            },
+            {
+                "index": 3,
+                "label": "点击提交订单",
+                "description": "点击提交订单",
+                "snapshot": {"visible_ids": ["支付中心"], "visible_texts": ["支付中心"]},
+            },
+            {
+                "index": 4,
+                "label": "点击去支付",
+                "description": "点击去支付",
+                "snapshot": {"visible_ids": ["确认发起支付吗？"], "visible_texts": ["确认"]},
+            },
+        ],
+    }
+
+    rendered = render_test_module(recording, Path("/tmp/recording.json"))
+
+    assert "open_rental_from_home(driver, timeout=25)" in rendered
+    assert "tap_select_car_now(driver, timeout=20)" in rendered
+    assert "open_available_vehicle_detail(driver, timeout=20)" in rendered
+    assert "tap_book_now(driver, timeout=20)" in rendered
+    assert "submit_rental_order(driver, timeout=25)" in rendered
+    assert "tap_rental_payment_button(driver, timeout=20)" in rendered
+    assert "driver.activate_app(ios_config.bundle_id)" in rendered
+    assert "确认发起支付吗？" not in rendered
+    assert "未收到支付宝支付回跳" in rendered

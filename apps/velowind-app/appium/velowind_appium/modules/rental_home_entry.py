@@ -41,9 +41,9 @@ HOME_OVERLAY_BLOCKING_TEXTS = [
     "activity-route-detail-v3",
     "活动详情",
     "页面预览提示",
+    "选择发布类型",
     "rent-page-shell",
     "use-car-tab-page",
-    "租车",
     "立即选车",
     "服务门店",
 ]
@@ -62,6 +62,7 @@ FLOATING_TRUCK_RATIOS = [
 
 
 def open_rental_from_home(driver: WebDriver, timeout: int = 20) -> None:
+    _activate_configured_app_if_needed(driver)
     _recover_home_before_opening_rental(driver)
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
@@ -79,6 +80,10 @@ def open_rental_from_home(driver: WebDriver, timeout: int = 20) -> None:
 
 def _recover_home_before_opening_rental(driver: WebDriver) -> None:
     for _ in range(4):
+        _activate_configured_app_if_needed(driver)
+        if _dismiss_home_overlay_if_present(driver):
+            if _wait_for_home_after_recovery(driver):
+                return
         if _home_visible(driver):
             return
         if tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1):
@@ -90,6 +95,29 @@ def _recover_home_before_opening_rental(driver: WebDriver) -> None:
         safe_back(driver)
         if _wait_for_home_after_recovery(driver):
             return
+
+
+def _activate_configured_app_if_needed(driver: WebDriver) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    bundle_id = capabilities.get("appium:bundleId") or capabilities.get("bundleId")
+    if not bundle_id:
+        return
+    source = safe_page_source(driver)
+    if source and str(bundle_id) in source:
+        return
+    try:
+        driver.activate_app(str(bundle_id))
+        time.sleep(0.5)
+    except Exception:
+        return
+
+
+def _dismiss_home_overlay_if_present(driver: WebDriver) -> bool:
+    if "选择发布类型" not in safe_page_source(driver):
+        return False
+    tap_by_coordinate_ratios(driver, [(0.50, 0.48), (0.50, 0.55), (0.10, 0.40)])
+    time.sleep(0.5)
+    return True
 
 
 def _wait_for_home_after_recovery(driver: WebDriver) -> bool:
