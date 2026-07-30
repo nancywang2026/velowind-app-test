@@ -78,6 +78,7 @@ simulator:
   updated_wda_bundle_id: com.example.WebDriverAgentRunner
   web_driver_agent_url: http://127.0.0.1:8100
   wda_local_port: 8110
+  wda_launch_timeout: 180000
   allow_provisioning_device_registration: true
   show_xcode_log: true
 """.strip(),
@@ -99,6 +100,7 @@ simulator:
     assert config.updated_wda_bundle_id == "com.example.WebDriverAgentRunner"
     assert config.web_driver_agent_url == "http://127.0.0.1:8100"
     assert config.wda_local_port == 8110
+    assert config.wda_launch_timeout == 180000
     assert config.allow_provisioning_device_registration is True
     assert config.show_xcode_log is True
     assert config.login_username == "13381509990"
@@ -177,6 +179,7 @@ def test_build_ios_capabilities_includes_optional_wda_signing(monkeypatch):
     monkeypatch.setenv("VW_IOS_UPDATED_WDA_BUNDLE_ID", "com.example.WebDriverAgentRunner")
     monkeypatch.setenv("VW_IOS_WDA_URL", "http://127.0.0.1:8100")
     monkeypatch.setenv("VW_IOS_WDA_LOCAL_PORT", "8110")
+    monkeypatch.setenv("VW_IOS_WDA_LAUNCH_TIMEOUT", "180000")
     monkeypatch.setenv("VW_IOS_SHOW_XCODE_LOG", "true")
     monkeypatch.setenv("VW_IOS_ALLOW_PROVISIONING_DEVICE_REGISTRATION", "true")
 
@@ -187,6 +190,7 @@ def test_build_ios_capabilities_includes_optional_wda_signing(monkeypatch):
     assert capabilities["appium:updatedWDABundleId"] == "com.example.WebDriverAgentRunner"
     assert capabilities["appium:webDriverAgentUrl"] == "http://127.0.0.1:8100"
     assert capabilities["appium:wdaLocalPort"] == 8110
+    assert capabilities["appium:wdaLaunchTimeout"] == 180000
     assert capabilities["appium:showXcodeLog"] is True
     assert capabilities["appium:allowProvisioningDeviceRegistration"] is True
 

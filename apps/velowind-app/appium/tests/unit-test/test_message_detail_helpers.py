@@ -1116,6 +1116,93 @@ def test_append_note_topics_preserves_existing_android_body(monkeypatch):
     ]
 
 
+def test_append_note_topics_falls_back_to_android_body_when_topic_action_missing(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def get_attribute(self, name):
+            if name == "text":
+                return "第一次去长白山"
+            return None
+
+        def click(self):
+            events.append("click-body")
+
+        def clear(self):
+            events.append("clear-body")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == '//android.widget.EditText[contains(@hint, "正文")]':
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: False)
+    monkeypatch.setattr(message_detail, "_dismiss_editor_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    message_detail._append_note_topics_to_body(FakeDriver(), ["#长白山", "#旅行日记"])
+
+    assert events == [
+        "click-body",
+        "click-body",
+        "clear-body",
+        ("send-keys", "第一次去长白山 #长白山 #旅行日记"),
+        "hide-keyboard",
+    ]
+
+
+def test_append_note_topics_refocuses_android_body_to_reveal_topic_action(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def get_attribute(self, name):
+            if name == "text":
+                return "第一次去长白山"
+            return None
+
+        def click(self):
+            events.append("click-body")
+
+        def clear(self):
+            events.append("clear-body")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            if value == '//android.widget.EditText[contains(@hint, "正文")]':
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    def tap_topic_after_body_focus(driver, text):
+        if text == "#话题" and events == ["click-body"]:
+            events.append("tap-topic")
+            return True
+        return False
+
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", tap_topic_after_body_focus)
+    monkeypatch.setattr(message_detail, "_dismiss_editor_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    message_detail._append_note_topics_to_body(FakeDriver(), ["#长白山", "#旅行日记"])
+
+    assert events == [
+        "click-body",
+        "tap-topic",
+        "click-body",
+        "clear-body",
+        ("send-keys", "第一次去长白山 #长白山 #旅行日记"),
+        "hide-keyboard",
+    ]
+
+
 def test_photo_source_option_taps_row_center_from_text_rect():
     taps = []
 

@@ -7,7 +7,10 @@ from appium.webdriver.webdriver import WebDriver
 from velowind_appium.modules.rental_common import (
     safe_page_source,
     tap_by_coordinate_ratios,
+    tap_by_text_containing,
     tap_first_available,
+    tap_visible_text_hit_point,
+    tap_visible_text_containing_hit_point,
     wait_for_rental_page,
     wait_until_source_contains,
 )
@@ -20,6 +23,7 @@ CONFIRM_PAYMENT_IDS = ["rental-confirm-payment-button", "confirm-payment-button"
 CONFIRM_PAYMENT_TEXTS = ["确认支付", "立即支付", "去支付"]
 THINK_AGAIN_IDS = ["payment-think-again-button", "rental-think-again-button", "payment-cancel-button"]
 THINK_AGAIN_TEXTS = ["再想想", "想一想", "我再想想", "暂不支付", "取消"]
+CURRENT_APP_BUNDLE_ID = "com.velowind.rider"
 
 
 def wait_for_rental_payment_center_page(driver: WebDriver, timeout: int = 20) -> str | None:
@@ -29,6 +33,38 @@ def wait_for_rental_payment_center_page(driver: WebDriver, timeout: int = 20) ->
         texts=PAYMENT_PAGE_TEXTS,
         timeout=timeout,
     )
+
+
+def tap_rental_payment_button(driver: WebDriver, timeout: int = 20) -> None:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        source = safe_page_source(driver)
+        if source and CURRENT_APP_BUNDLE_ID not in source:
+            return
+        if tap_first_available(driver, accessibility_ids=CONFIRM_PAYMENT_IDS, texts=CONFIRM_PAYMENT_TEXTS, timeout=2):
+            if wait_until_source_contains(driver, ["确认发起支付", "确认"], timeout=10):
+                return
+        if tap_by_text_containing(driver, ["去支付", "确认支付", "立即支付"], timeout=2):
+            if wait_until_source_contains(driver, ["确认发起支付", "确认"], timeout=10):
+                return
+        if tap_visible_text_containing_hit_point(driver, ["去支付", "确认支付", "立即支付"], timeout=2):
+            if wait_until_source_contains(driver, ["确认发起支付", "确认"], timeout=10):
+                return
+        if tap_visible_text_hit_point(driver, ["去支付", "确认支付", "立即支付"], timeout=2):
+            if wait_until_source_contains(driver, ["确认发起支付", "确认"], timeout=10):
+                return
+        if tap_by_coordinate_ratios(driver, [(0.50, 0.93), (0.50, 0.91)]):
+            source = safe_page_source(driver)
+            if source and CURRENT_APP_BUNDLE_ID not in source:
+                return
+            if wait_until_source_contains(driver, ["确认发起支付", "确认"], timeout=10):
+                return
+        try:
+            wait_for_rental_payment_center_page(driver, timeout=2)
+        except Exception:
+            pass
+        time.sleep(0.3)
+    raise AssertionError("Unable to tap payment button in rental payment center")
 
 
 def confirm_payment_then_think_again(driver: WebDriver, timeout: int = 20) -> None:

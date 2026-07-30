@@ -202,7 +202,9 @@ def _activity_ready_id_present(driver: WebDriver) -> bool:
 
 
 def _activity_ready_text_present(page_source: str) -> bool:
-    return any(text in page_source for text in ACTIVITY_READY_TEXTS) and "首页" in page_source
+    return any(text in page_source for text in ACTIVITY_READY_TEXTS) and any(
+        text in page_source for text in ["首页", "笔记"]
+    )
 
 
 def _safe_page_source(driver: WebDriver) -> str:

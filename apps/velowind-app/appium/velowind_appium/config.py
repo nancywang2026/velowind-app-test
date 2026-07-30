@@ -32,6 +32,7 @@ class IosAppiumConfig:
     use_new_wda: bool
     use_preinstalled_wda: Optional[bool]
     wda_local_port: Optional[int]
+    wda_launch_timeout: Optional[int]
     no_reset: bool
     wait_for_idle_timeout: float
     reduce_motion: bool
@@ -193,6 +194,8 @@ def load_ios_config() -> IosAppiumConfig:
             else None
         ),
         wda_local_port=_env_int("VW_IOS_WDA_LOCAL_PORT") or _yaml_int(yaml_config, target, "wda_local_port"),
+        wda_launch_timeout=_env_int("VW_IOS_WDA_LAUNCH_TIMEOUT")
+        or _yaml_int(yaml_config, target, "wda_launch_timeout"),
         no_reset=_env_bool("VW_IOS_NO_RESET", _yaml_bool(yaml_config, "no_reset", True)),
         wait_for_idle_timeout=_env_float("VW_IOS_WAIT_FOR_IDLE_TIMEOUT", 1.0),
         reduce_motion=_env_bool("VW_IOS_REDUCE_MOTION", True),
@@ -252,6 +255,8 @@ def build_ios_capabilities(config: IosAppiumConfig) -> Dict[str, object]:
         capabilities["appium:webDriverAgentUrl"] = config.web_driver_agent_url
     if config.wda_local_port:
         capabilities["appium:wdaLocalPort"] = config.wda_local_port
+    if config.wda_launch_timeout:
+        capabilities["appium:wdaLaunchTimeout"] = config.wda_launch_timeout
     if config.show_xcode_log:
         capabilities["appium:showXcodeLog"] = True
     if config.allow_provisioning_device_registration:

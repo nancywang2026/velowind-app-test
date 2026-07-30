@@ -15,7 +15,7 @@ from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_
 
 
 ROOT_TABS = [
-    ("bottom-nav-home", "首页", ["home-page-title", "post-home-feed-category-pager"], ["首页", "全国", "推荐"]),
+    ("bottom-nav-home", "笔记", ["home-page-title", "post-home-feed-category-pager"], ["笔记", "全国", "推荐"]),
     ("bottom-nav-activity", "活动", ["activity-discovery-v2-page"], ["活动"]),
     ("bottom-nav-message", "消息", ["message-page-title"], ["消息"]),
     ("bottom-nav-me", "我的", ["login-page-title"], ["我的", "登录", "手机号"]),
@@ -51,14 +51,14 @@ def test_ios_feature_walkthrough(driver, ios_config, step):
 
     step(
         "tap-home-return",
-        lambda: tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=5),
+        lambda: tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=5),
     )
     step(
         "wait-home-return",
         lambda: wait_for_any_accessibility_id_or_text(
             driver,
             ["home-page-title", "home-activity-discovery-browser", "post-home-feed-category-pager"],
-            ["首页", "全国", "推荐"],
+            ["笔记", "全国", "推荐"],
             timeout=20,
         ),
     )
@@ -95,7 +95,7 @@ def test_ios_feature_walkthrough(driver, ios_config, step):
         or wait_for_any_accessibility_id_or_text(
             driver,
             ["home-page-title", "home-activity-discovery-browser", "post-home-feed-category-pager"],
-            ["首页", "全国", "推荐"],
+            ["笔记", "全国", "推荐"],
             timeout=5,
         ),
     )
@@ -108,7 +108,7 @@ def test_ios_feature_walkthrough(driver, ios_config, step):
 @pytest.mark.full
 @pytest.mark.skipif(os.environ.get("VW_IOS_RUN_FULL") != "true", reason="Set VW_IOS_RUN_FULL=true to run full tab cases")
 def test_bottom_tabs_are_reachable(driver, step, tab_id, tab_text, expected_ids, expected_texts):
-    step("tap-home-before-tab", lambda: tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=3))
+    step("tap-home-before-tab", lambda: tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=3))
     step(
         f"tap-tab-{tab_text}",
         lambda: tap_accessibility_id_or_text_if_present(driver, tab_id, tab_text, timeout=8),

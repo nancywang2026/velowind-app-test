@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import TimeoutException
@@ -84,7 +85,7 @@ def open_available_vehicle_detail(driver: WebDriver, max_attempts: int = 4, time
     for attempt in range(max_attempts):
         open_selected_vehicle_detail(driver, timeout=timeout)
         source = safe_page_source(driver)
-        if "不可预定" not in source:
+        if _visible_vehicle_detail_bookable(source):
             return
         safe_back(driver)
         wait_for_rental_vehicle_list_page(driver, timeout=timeout)
@@ -96,3 +97,45 @@ def open_available_vehicle_detail(driver: WebDriver, max_attempts: int = 4, time
 def _vehicle_detail_visible(driver: WebDriver) -> bool:
     source = safe_page_source(driver)
     return source_contains_any(source, ["车辆基本信息", "基本信息", "车辆配置"])
+
+
+def _visible_vehicle_detail_bookable(page_source: str) -> bool:
+    if not page_source:
+        return False
+    if "XCUIElementType" not in page_source:
+        return "不可预定" not in page_source
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return "不可预定" not in page_source
+
+    visible_values: list[str] = []
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false":
+            continue
+        value = attrs.get("value") or attrs.get("label") or attrs.get("name") or ""
+        if value and _looks_like_ios_readable_node(attrs, value):
+            visible_values.append(value)
+
+    visible_text = " ".join(visible_values)
+    if not source_contains_any(visible_text, ["车辆详情", "基本信息", "车辆配置"]):
+        return False
+    if source_contains_any(visible_text, ["不可预定"]):
+        return False
+    return source_contains_any(visible_text, ["立即预定", "立即预订", "马上预订", "预订", "预定"])
+
+
+def _looks_like_ios_readable_node(attrs: dict[str, str], value: str) -> bool:
+    node_type = attrs.get("type", "")
+    if node_type == "XCUIElementTypeStaticText":
+        return True
+
+    try:
+        x = int(float(attrs.get("x", "")))
+        y = int(float(attrs.get("y", "")))
+        width = int(float(attrs.get("width", "")))
+        height = int(float(attrs.get("height", "")))
+    except ValueError:
+        return len(value) <= 160
+    return not (x == 0 and y == 0 and width >= 360 and height >= 700 and len(value) > 40)

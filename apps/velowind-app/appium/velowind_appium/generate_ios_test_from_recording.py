@@ -15,17 +15,93 @@ def load_recording(recording_path: Path) -> dict[str, Any]:
     return json.loads(recording_path.read_text(encoding="utf-8"))
 
 
+def default_module_name(recording: dict[str, Any]) -> str:
+    session_name = recording.get("session_name") or recording.get("title") or "recording"
+    stem = safe_name(f"test_{session_name}").replace("-", "_")
+    return f"{stem}.py"
+
+
+def infer_bug_command(raw_step: dict[str, Any]) -> dict[str, Any]:
+    description = str(raw_step.get("description") or raw_step.get("user_description") or "")
+    if "点击租车" in description:
+        return {
+            "kind": "python",
+            "code": (
+                "(\n"
+                "                open_rental_from_home(driver, timeout=25),\n"
+                "                choose_first_store(driver, timeout=15),\n"
+                "                tap_select_car_now(driver, timeout=20),\n"
+                "            )"
+            ),
+        }
+    if "立即预订" in description or "立即预定" in description:
+        return {
+            "kind": "python",
+            "code": (
+                "(\n"
+                "                open_available_vehicle_detail(driver, timeout=20),\n"
+                "                tap_book_now(driver, timeout=20),\n"
+                "            )"
+            ),
+        }
+    if "提交订单" in description:
+        return {"kind": "python", "code": "submit_rental_order(driver, timeout=25)"}
+    if "去支付" in description:
+        return {"kind": "python", "code": "tap_rental_payment_button(driver, timeout=20)", "skip_wait": True}
+    return {"kind": "wait", "note": description}
+
+
+def actual_result_text(recording: dict[str, Any]) -> str | None:
+    actual = str(recording.get("actual_result") or "").strip()
+    if not actual:
+        return None
+    if "“" in actual and "”" in actual:
+        return actual.split("“", 1)[1].split("”", 1)[0].strip()
+    return actual.removeprefix("页面显示").strip(" ：:")
+
+
+def bug_step_label(recording: dict[str, Any], raw_step: dict[str, Any], fallback_index: int) -> str:
+    label = raw_step.get("label")
+    description = raw_step.get("description") or raw_step.get("user_description")
+    if label and label != recording.get("session_name"):
+        return label
+    return description or label or f"step-{raw_step.get('index', fallback_index)}"
+
+
 def normalized_recording_steps(recording: dict[str, Any]) -> list[dict[str, Any]]:
     if recording.get("mode") == "bug":
         steps = []
         for raw_step in recording.get("steps", []):
             steps.append(
                 {
-                    "label": raw_step.get("label")
-                    or raw_step.get("description")
-                    or f"step-{raw_step.get('index', len(steps) + 1)}",
-                    "command": {"kind": "wait", "note": raw_step.get("description")},
+                    "label": bug_step_label(recording, raw_step, len(steps) + 1),
+                    "command": infer_bug_command(raw_step),
                     "snapshot": raw_step.get("snapshot", {}),
+                }
+            )
+        actual_text = actual_result_text(recording)
+        if actual_text:
+            steps.append(
+                {
+                    "label": "点击确认并回退回App",
+                    "command": {
+                        "kind": "python",
+                        "code": (
+                            "(\n"
+                            "                tap_text_if_present(driver, '确认', timeout=8),\n"
+                            "                safe_back(driver),\n"
+                            "                driver.activate_app(ios_config.bundle_id),\n"
+                            "            )"
+                        ),
+                    },
+                    "snapshot": {},
+                }
+            )
+            steps.append(
+                {
+                    "label": "验证实际错误提示",
+                    "command": {"kind": "wait", "note": actual_text},
+                    "snapshot": {"visible_ids": [actual_text], "visible_texts": [actual_text]},
                 }
             )
         return steps
@@ -79,6 +155,8 @@ def render_action(step: dict[str, Any]) -> str | None:
         return "safe_back(driver)"
     if kind == "swipe":
         return f"swipe_vertical(driver, direction={command['direction']!r})"
+    if kind == "python":
+        return command["code"]
     return None
 
 
@@ -97,13 +175,14 @@ def render_step_block(step: dict[str, Any]) -> str:
             f"    )"
         )
 
-    lines.append(
-        f"    step(\n"
-        f"        {f'wait_{label}'!r},\n"
-        f"        lambda: {wait_assertion},\n"
-        f"        capture=True,\n"
-        f"    )"
-    )
+    if not step["command"].get("skip_wait"):
+        lines.append(
+            f"    step(\n"
+            f"        {f'wait_{label}'!r},\n"
+            f"        lambda: {wait_assertion},\n"
+            f"        capture=True,\n"
+            f"    )"
+        )
     return "\n".join(lines)
 
 
@@ -124,6 +203,15 @@ from velowind_appium.actions import (
     tap_text_if_present,
     wait_for_any_accessibility_id_or_text,
 )
+from velowind_appium.modules import (
+    choose_first_store,
+    open_available_vehicle_detail,
+    open_rental_from_home,
+    submit_rental_order,
+    tap_book_now,
+    tap_rental_payment_button,
+    tap_select_car_now,
+)
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 
 
@@ -140,7 +228,7 @@ def {test_name}(driver, ios_config, step):
 def generate_test_module(recording_path: Path, output_path: Path | None = None) -> Path:
     recording = load_recording(recording_path)
     target_dir = ensure_artifact_dir(output_path.parent if output_path else DEFAULT_MODULE_DIR)
-    target_path = output_path or target_dir / recording["module_name"]
+    target_path = output_path or target_dir / (recording.get("module_name") or default_module_name(recording))
     target_path.write_text(render_test_module(recording, recording_path), encoding="utf-8")
     return target_path
 

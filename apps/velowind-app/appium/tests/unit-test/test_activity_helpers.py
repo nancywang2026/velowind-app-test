@@ -49,7 +49,7 @@ def test_build_activity_draft_reads_first_yaml_case():
 
     assert draft.title == "测试 - 张家界大环线2天1晚"
     assert draft.activity_type == "骑行"
-    assert draft.province == "浙江省"
+    assert draft.province == "湖南"
     assert draft.city == "张家界市"
     assert draft.location == "张家界西站出站口"
     assert draft.album == "张家界"
@@ -72,7 +72,7 @@ def test_build_activity_draft_reads_all_zhangjiajie_fields():
 
     assert draft.title == "测试 - 张家界大环线2天1晚"
     assert draft.activity_type == "骑行"
-    assert draft.province == "浙江省"
+    assert draft.province == "湖南"
     assert draft.city == "张家界市"
     assert draft.album == "张家界"
     assert draft.contact_name == "张家界大环线领队"
@@ -279,7 +279,7 @@ def test_open_activity_publisher_prepares_android_publish_entry_before_loop(monk
     assert events == ["prepare-android-publish-entry"]
 
 
-def test_open_activity_publisher_aggressively_taps_activity_type_after_publish_entry(monkeypatch):
+def test_open_activity_publisher_does_not_tap_activity_type_when_publish_sheet_is_absent(monkeypatch):
     events = []
     state = {"page": "home"}
 
@@ -287,11 +287,7 @@ def test_open_activity_publisher_aggressively_taps_activity_type_after_publish_e
     monkeypatch.setattr(activity, "login_required_from_page_source", lambda page: False)
     monkeypatch.setattr(activity, "activity_form_is_visible", lambda page: page == "form")
     monkeypatch.setattr(activity, "_publish_sheet_visible", lambda driver: (lambda: False))
-    monkeypatch.setattr(
-        activity,
-        "_tap_activity_type_by_coordinate",
-        lambda driver: events.append("tap-activity-type-by-coordinate") or state.update(page="form") or True,
-    )
+    monkeypatch.setattr(activity, "_tap_activity_type_by_coordinate", lambda driver: events.append("tap-activity-type-by-coordinate") or True)
     monkeypatch.setattr(activity, "_tap_activity_type_if_present", lambda driver: events.append("tap-activity-type") or True)
     monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: condition())
 
@@ -305,9 +301,12 @@ def test_open_activity_publisher_aggressively_taps_activity_type_after_publish_e
     monkeypatch.setattr(activity.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
 
-    open_activity_publisher(object(), ios_config=object(), timeout=5)
+    try:
+        open_activity_publisher(object(), ios_config=object(), timeout=3)
+    except AssertionError as exc:
+        assert "Unable to open the activity publisher" in str(exc)
 
-    assert events == ["tap-publish-entry", "tap-activity-type-by-coordinate"]
+    assert events == ["tap-publish-entry"]
 
 
 def test_tap_plus_button_by_coordinate_verifies_android_publish_sheet_opened(monkeypatch):
@@ -336,7 +335,64 @@ def test_tap_plus_button_by_coordinate_verifies_android_publish_sheet_opened(mon
     ]
 
 
-def test_open_activity_publisher_taps_activity_type_after_publish_entry_without_sheet_signal(monkeypatch):
+def test_tap_plus_button_by_coordinate_rejects_ios_tap_when_publish_entry_stays_closed(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 402, "height": 874}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "首页 全国 推荐 笔记 活动 消息 我的")
+    monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: condition())
+
+    assert activity._tap_plus_button_by_coordinate(FakeDriver()) is False
+    assert taps == [("mobile: tap", {"x": 201, "y": 812})]
+
+
+def test_tap_plus_button_by_coordinate_accepts_ios_tap_after_publish_sheet_opens(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 402, "height": 874}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "选择发布类型 发布活动")
+    monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: condition())
+
+    assert activity._tap_plus_button_by_coordinate(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 201, "y": 812})]
+
+
+def test_tap_publish_entry_continues_to_plus_when_id_tap_does_not_open(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(activity, "tap_if_present", lambda driver, accessibility_id, timeout=0.5: events.append(("id", accessibility_id)) or True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "首页 全国 推荐 笔记 活动 消息 我的")
+    monkeypatch.setattr(activity, "_wait_until", lambda condition, timeout: condition())
+    monkeypatch.setattr(activity, "_tap_plus_button_by_coordinate", lambda driver: events.append("plus") or True)
+
+    assert activity._tap_publish_entry_if_present(FakeDriver()) is True
+    assert events == [("id", "bottom-nav-publish"), "plus"]
+
+
+def test_open_activity_publisher_skips_activity_type_after_unverified_publish_entry(monkeypatch):
     state = {"page": "home"}
     events = []
 
@@ -369,9 +425,12 @@ def test_open_activity_publisher_taps_activity_type_after_publish_entry_without_
     monkeypatch.setattr(activity.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
 
-    open_activity_publisher(object(), ios_config=object(), timeout=5)
+    try:
+        open_activity_publisher(object(), ios_config=object(), timeout=3)
+    except AssertionError as exc:
+        assert "Unable to open the activity publisher" in str(exc)
 
-    assert events == ["tap-publish-entry", "tap-activity-type-by-coordinate", "tap-activity-type"]
+    assert events == ["tap-publish-entry"]
 
 
 def test_publish_sheet_visible_ignores_bottom_activity_tab(monkeypatch):
@@ -389,8 +448,7 @@ def test_fill_activity_form_resolves_picker_placeholders_after_text_fields(monke
     monkeypatch.setattr(activity, "_upload_activity_image", lambda driver, draft: events.append("upload-image"))
     monkeypatch.setattr(activity, "_fill_title", lambda driver, value: events.append("fill-title"))
     monkeypatch.setattr(activity, "_select_activity_type", lambda driver, value: events.append("select-activity-type"))
-    monkeypatch.setattr(activity, "_select_province", lambda driver, value: events.append("select-province"))
-    monkeypatch.setattr(activity, "_fill_city", lambda driver, value: events.append("fill-city"))
+    monkeypatch.setattr(activity, "_select_activity_region", lambda driver, province, city: events.append("select-region"))
     monkeypatch.setattr(activity, "_fill_description", lambda driver, value: events.append("fill-description"))
     monkeypatch.setattr(activity, "_fill_itinerary", lambda driver, value: events.append("fill-itinerary"))
     monkeypatch.setattr(activity, "_fill_known_text_fields", lambda driver, value: events.append("fill-known-fields"))
@@ -487,6 +545,81 @@ def test_fill_city_hides_keyboard_after_entering_value(monkeypatch):
     activity._fill_city(object(), "石家庄市")
 
     assert events[-1] == "hide-keyboard"
+
+
+def test_fill_city_selects_city_from_region_drawer(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(
+        activity,
+        "_safe_page_source",
+        lambda driver: "发布活动 搜索省份或城市 张家界 确认地区",
+    )
+    monkeypatch.setattr(
+        activity,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: events.append(("tap", text)) or text in {"张家界", "确认地区"},
+    )
+    monkeypatch.setattr(activity, "_fill_input_near_label", lambda driver, keyword, value: False)
+
+    activity._fill_city(object(), "张家界市")
+
+    assert events == [("tap", "张家界市"), ("tap", "张家界"), ("tap", "确认地区")]
+
+
+def test_select_activity_region_selects_province_then_city_in_region_drawer(monkeypatch):
+    events = []
+    state = {"page": "选择地区 搜索省份或城市 湖南 湖北 河南 确认地区"}
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: events.append(("open", text)) or True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+
+    def fake_tap_region_option(driver, texts, timeout=2):
+        events.append(("tap-option", tuple(texts)))
+        if "湖南" in texts:
+            state["page"] = "湖南 搜索省份或城市 张家界 长沙 湘潭 确认地区"
+            return True
+        if "张家界" in texts:
+            state["page"] = "湖南 张家界 确认地区"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "_tap_region_option", fake_tap_region_option)
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: events.append(("tap", text)) or text == "确认地区")
+
+    activity._select_activity_region(object(), "湖南", "张家界市")
+
+    assert events == [
+        ("open", "选择所属省份"),
+        ("tap-option", ("湖南", "湖南市", "湖南省")),
+        ("tap-option", ("张家界市", "张家界")),
+        ("tap", "确认地区"),
+    ]
+
+
+def test_tap_form_field_uses_mobile_tap_on_android_text_center(monkeypatch):
+    events = []
+
+    class FakeElement:
+        rect = {"x": 84, "y": 1501, "width": 448, "height": 65}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, _by, xpath):
+            events.append(("find", xpath))
+            if "选择所属省份" in xpath:
+                return FakeElement()
+            raise activity.NoSuchElementException("missing")
+
+        def execute_script(self, name, payload):
+            events.append((name, payload))
+
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=0.5: events.append(("text-click", text)) or False)
+
+    assert activity._tap_form_field(FakeDriver(), "选择所属省份") is True
+    assert ("mobile: tap", {"x": 308.0, "y": 1533.5}) in events
 
 
 def test_fill_description_populates_editor_title_and_body(monkeypatch):
@@ -740,6 +873,93 @@ def test_select_province_chooses_specific_overlay_option(monkeypatch):
     activity._select_province(object(), "上海")
 
     assert selected_options == [["上海", "上海市", "上海省"]]
+
+
+def test_select_province_searches_new_region_drawer(monkeypatch):
+    events = []
+
+    class FakeSearchInput:
+        def click(self):
+            events.append("click-search")
+
+        def clear(self):
+            events.append("clear-search")
+
+        def send_keys(self, value):
+            events.append(("search", value))
+
+    class FakeDriver:
+        def find_element(self, _by, xpath):
+            events.append(("find", xpath))
+            if "搜索省份或城市" in xpath:
+                return FakeSearchInput()
+            raise activity.NoSuchElementException("missing")
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "选择地区 搜索省份或城市")
+    monkeypatch.setattr(
+        activity,
+        "_choose_specific_overlay_option",
+        lambda driver, texts: events.append(("fallback", texts)) or False,
+    )
+    monkeypatch.setattr(
+        activity,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: events.append(("tap", text)) or (text == "湖南" and ("search", "湖南") in events),
+    )
+    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    activity._select_province(FakeDriver(), "湖南")
+
+    assert ("search", "湖南") in events
+    assert ("tap", "湖南") in events
+    assert not any(event == ("fallback", ["湖南", "湖南市", "湖南省"]) for event in events)
+
+
+def test_select_province_waits_for_region_drawer_before_scroll_fallback(monkeypatch):
+    events = []
+    page_sources = iter(["发布活动 选择所属省份", "选择地区 搜索省份或城市"])
+
+    class FakeSearchInput:
+        def click(self):
+            events.append("click-search")
+
+        def clear(self):
+            events.append("clear-search")
+
+        def send_keys(self, value):
+            events.append(("search", value))
+
+    class FakeDriver:
+        def find_element(self, _by, xpath):
+            if "搜索省份或城市" in xpath:
+                return FakeSearchInput()
+            raise activity.NoSuchElementException("missing")
+
+    def fake_wait_until(predicate, timeout):
+        events.append(("wait", timeout))
+        return predicate()
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(page_sources))
+    monkeypatch.setattr(activity, "_wait_until", fake_wait_until)
+    monkeypatch.setattr(
+        activity,
+        "_choose_specific_overlay_option",
+        lambda driver, texts: events.append(("fallback", texts)) or False,
+    )
+    monkeypatch.setattr(
+        activity,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: events.append(("tap", text)) or (text == "湖南" and ("search", "湖南") in events),
+    )
+    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    activity._select_province(FakeDriver(), "湖南")
+
+    assert ("wait", 3) in events
+    assert ("search", "湖南") in events
+    assert not any(event == ("fallback", ["湖南", "湖南市", "湖南省"]) for event in events)
 
 
 def test_choose_specific_overlay_option_scrolls_until_target_appears(monkeypatch):

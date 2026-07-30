@@ -27,6 +27,7 @@ NOTE_CARD_XPATHS = [
 ]
 GENERIC_NOTE_CARD_TEXTS = {
     "首页",
+    "笔记",
     "推荐",
     "全国",
     "关注",
@@ -247,7 +248,7 @@ def _looks_like_note_card(text: str, x: int, y: int, width: int, height: int) ->
         return False
     if not text:
         return False
-    if "首页 活动 消息 我的" in text or "Vertical scroll bar" in text:
+    if _bottom_tabs_signature_in_text(text) or "Vertical scroll bar" in text:
         return False
     if text.startswith("用户 "):
         return False
@@ -268,9 +269,13 @@ def _looks_like_note_title(text: str, x: int, y: int, width: int, height: int) -
         return False
     if re.fullmatch(r"[0-9a-f]{16,}", text):
         return False
-    if any(token in text for token in ["Vertical scroll bar", "首页 活动 消息 我的"]):
+    if "Vertical scroll bar" in text or _bottom_tabs_signature_in_text(text):
         return False
     return 0 <= x <= 430
+
+
+def _bottom_tabs_signature_in_text(text: str) -> bool:
+    return "首页 活动 消息 我的" in text or "笔记 活动 消息 我的" in text
 
 
 def _tap_home_browse_coordinate(driver: WebDriver) -> bool:

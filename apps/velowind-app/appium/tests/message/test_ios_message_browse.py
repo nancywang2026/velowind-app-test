@@ -24,7 +24,7 @@ def test_logged_in_user_can_browse_comment_and_interact_with_note(driver, ios_co
 
     assert snapshot.title, "Expected the message detail to expose a title"
     assert snapshot.body, "Expected the message detail to expose content"
-    assert snapshot.view_count, "Expected the message detail to expose a view count"
+    assert snapshot.view_count is None, "Expected the message detail to hide the deprecated view count"
     assert snapshot.comment_count, "Expected the message detail to expose a comment count"
     assert snapshot.comments or snapshot.empty_comment_hint, "Expected comments or an empty-comment hint in the detail page"
 

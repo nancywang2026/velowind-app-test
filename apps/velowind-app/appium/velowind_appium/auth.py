@@ -40,12 +40,12 @@ def ensure_logged_in_if_needed(driver: WebDriver, config: IosAppiumConfig) -> bo
         time.sleep(1)
 
     if not login_required_from_page_source(_safe_page_source(driver)):
-        tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=3)
+        _tap_home_tab(driver, timeout=3)
         return False
 
     _wait_for_login_form(driver)
     _perform_password_login(driver, config.login_username, config.login_password)
-    tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=5)
+    _tap_home_tab(driver, timeout=5)
     return True
 
 
@@ -166,6 +166,13 @@ def _password_form_visible(driver: WebDriver, baseline: str) -> bool:
     return (
         "请输入手机号和密码完成登录" in current
         or "登录" in current and "请输入手机号" in current and current != baseline
+    )
+
+
+def _tap_home_tab(driver: WebDriver, timeout: int = 3) -> bool:
+    return (
+        tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=timeout)
+        or tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1)
     )
 
 

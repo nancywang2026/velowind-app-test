@@ -39,14 +39,19 @@ HOME_BLOCKING_TEXTS = [
     "activity-route-detail-v3",
     "活动详情",
     "页面预览提示",
-    "我的活动",
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]
 def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
+    last_page_source = ""
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
+        if page_source:
+            last_page_source = page_source
+        if page_source and _me_content_page_visible(page_source):
+            time.sleep(0.2)
+            continue
         if page_source and any(text in page_source for text in HOME_BLOCKING_TEXTS):
             time.sleep(0.2)
             continue
@@ -55,7 +60,7 @@ def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
         if page_source and _home_ready_text_present(page_source):
             return "home-feed-text"
         time.sleep(0.2)
-    raise TimeoutException("Home feed did not become ready")
+    raise TimeoutException(f"Home feed did not become ready; {_home_debug_summary(last_page_source)}")
 
 
 def open_first_home_message(driver: WebDriver, max_swipes: int = 3) -> None:
@@ -89,9 +94,7 @@ def switch_note_type_navigation(driver: WebDriver, timeout: int = 10) -> None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
-        root_navigation_visible = all(text in page_source for text in ["首页", "全国"]) or (
-            'resource-id="post-home-feed-category-pager"' in page_source and "全国" in page_source
-        )
+        root_navigation_visible = _home_ready_text_present(page_source)
         if root_navigation_visible and any(text in page_source for text in NOTE_TYPE_NAV_TEXTS):
             return
         time.sleep(0.2)
@@ -286,11 +289,58 @@ def _home_ready_id_present(driver: WebDriver) -> bool:
 
 
 def _home_ready_text_present(page_source: str) -> bool:
+    if _me_content_page_visible(page_source):
+        return False
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
         return False
-    if 'resource-id="post-home-feed-category-pager"' in page_source:
+    if "post-home-feed-category-pager" in page_source:
         return True
-    return "首页" in page_source and ("全国" in page_source or "推荐" in page_source)
+    has_note_navigation = any(text in page_source for text in ["全国", "推荐", "骑行", "徒步"])
+    if "首页" in page_source and has_note_navigation:
+        return True
+    return all(text in page_source for text in ["笔记", "活动", "消息", "我的"]) and has_note_navigation
+
+
+def _me_content_page_visible(page_source: str) -> bool:
+    if not page_source:
+        return False
+    return (
+        all(text in page_source for text in ["我的笔记", "收藏", "点赞"])
+        or all(text in page_source for text in ["我的活动", "发布", "报名"])
+        or all(text in page_source for text in ["草稿箱", "我的发布"])
+    )
+
+
+def _home_debug_summary(page_source: str) -> str:
+    if not page_source:
+        return "page_source=<empty>"
+    matched_blockers = [text for text in HOME_BLOCKING_TEXTS if text in page_source]
+    visible_texts = _extract_visible_texts(page_source)
+    preview = " | ".join(visible_texts[:30])
+    if len(preview) > 500:
+        preview = preview[:500] + "..."
+    return f"blockers={matched_blockers}; visible_texts={preview!r}"
+
+
+def _extract_visible_texts(page_source: str) -> list[str]:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return [line.strip() for line in page_source.splitlines() if line.strip()][:30]
+
+    texts: list[str] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        for key in ("name", "label", "value", "text"):
+            text = element.attrib.get(key, "").strip()
+            if not text or text in seen:
+                continue
+            texts.append(text)
+            seen.add(text)
+            break
+    return texts
 
 
 def _safe_page_source(driver: WebDriver) -> str:

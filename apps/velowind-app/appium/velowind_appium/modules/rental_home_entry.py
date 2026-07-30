@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import TimeoutException
@@ -41,12 +42,20 @@ HOME_OVERLAY_BLOCKING_TEXTS = [
     "activity-route-detail-v3",
     "活动详情",
     "页面预览提示",
+    "选择发布类型",
     "rent-page-shell",
     "use-car-tab-page",
-    "租车",
     "立即选车",
     "服务门店",
 ]
+IOS_NON_HOME_TOP_TITLES = {
+    "我的活动",
+    "我的笔记",
+    "我的租车",
+    "我的卡券",
+    "个人资料",
+    "兴趣偏好",
+}
 FLOATING_TRUCK_RATIOS = [
     (0.84, 0.72),
     (0.84, 0.76),
@@ -62,6 +71,7 @@ FLOATING_TRUCK_RATIOS = [
 
 
 def open_rental_from_home(driver: WebDriver, timeout: int = 20) -> None:
+    _activate_configured_app_if_needed(driver)
     _recover_home_before_opening_rental(driver)
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
@@ -79,9 +89,16 @@ def open_rental_from_home(driver: WebDriver, timeout: int = 20) -> None:
 
 def _recover_home_before_opening_rental(driver: WebDriver) -> None:
     for _ in range(4):
+        _activate_configured_app_if_needed(driver)
+        if _dismiss_home_overlay_if_present(driver):
+            if _wait_for_home_after_recovery(driver):
+                return
         if _home_visible(driver):
             return
-        if tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1):
+        if (
+            tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=1)
+            or tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1)
+        ):
             if _wait_for_home_after_recovery(driver):
                 return
         if tap_by_coordinate_ratios(driver, [(0.05, 0.09), (0.06, 0.07)]):
@@ -90,6 +107,29 @@ def _recover_home_before_opening_rental(driver: WebDriver) -> None:
         safe_back(driver)
         if _wait_for_home_after_recovery(driver):
             return
+
+
+def _activate_configured_app_if_needed(driver: WebDriver) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    bundle_id = capabilities.get("appium:bundleId") or capabilities.get("bundleId")
+    if not bundle_id:
+        return
+    source = safe_page_source(driver)
+    if source and str(bundle_id) in source:
+        return
+    try:
+        driver.activate_app(str(bundle_id))
+        time.sleep(0.5)
+    except Exception:
+        return
+
+
+def _dismiss_home_overlay_if_present(driver: WebDriver) -> bool:
+    if "选择发布类型" not in safe_page_source(driver):
+        return False
+    tap_by_coordinate_ratios(driver, [(0.50, 0.48), (0.50, 0.55), (0.10, 0.40)])
+    time.sleep(0.5)
+    return True
 
 
 def _wait_for_home_after_recovery(driver: WebDriver) -> bool:
@@ -117,8 +157,39 @@ def _home_visible(driver: WebDriver) -> bool:
     source = safe_page_source(driver)
     if any(text in source for text in HOME_OVERLAY_BLOCKING_TEXTS):
         return False
+    if _visible_ios_non_home_top_title_present(source):
+        return False
     return (
-        ("首页" in source and ("全国" in source or "推荐" in source))
+        (any(text in source for text in ["首页", "笔记"]) and ("全国" in source or "推荐" in source))
         or "post-home-feed-category-pager" in source
-        or all(text in source for text in ["首页", "活动", "消息", "我的"])
+        or (all(text in source for text in ["活动", "消息", "我的"]) and any(text in source for text in ["首页", "笔记"]))
     )
+
+
+def _visible_ios_non_home_top_title_present(page_source: str) -> bool:
+    if not page_source or "XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false":
+            continue
+        title = attrs.get("value") or attrs.get("label") or attrs.get("name") or ""
+        if title not in IOS_NON_HOME_TOP_TITLES:
+            continue
+        if _element_near_ios_top(attrs):
+            return True
+    return False
+
+
+def _element_near_ios_top(attrs: dict[str, str]) -> bool:
+    try:
+        y = int(float(attrs.get("y", "")))
+        height = int(float(attrs.get("height", "")))
+    except ValueError:
+        return False
+    return y <= 140 and height <= 80
