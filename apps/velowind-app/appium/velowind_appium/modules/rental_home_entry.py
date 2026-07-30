@@ -86,7 +86,10 @@ def _recover_home_before_opening_rental(driver: WebDriver) -> None:
                 return
         if _home_visible(driver):
             return
-        if tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1):
+        if (
+            tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=1)
+            or tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1)
+        ):
             if _wait_for_home_after_recovery(driver):
                 return
         if tap_by_coordinate_ratios(driver, [(0.05, 0.09), (0.06, 0.07)]):
@@ -146,7 +149,7 @@ def _home_visible(driver: WebDriver) -> bool:
     if any(text in source for text in HOME_OVERLAY_BLOCKING_TEXTS):
         return False
     return (
-        ("首页" in source and ("全国" in source or "推荐" in source))
+        (any(text in source for text in ["首页", "笔记"]) and ("全国" in source or "推荐" in source))
         or "post-home-feed-category-pager" in source
-        or all(text in source for text in ["首页", "活动", "消息", "我的"])
+        or (all(text in source for text in ["活动", "消息", "我的"]) and any(text in source for text in ["首页", "笔记"]))
     )

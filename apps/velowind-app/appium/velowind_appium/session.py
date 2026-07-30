@@ -33,11 +33,8 @@ HOME_BLOCKING_TEXTS = [
     "页面预览提示",
     "rent-page-shell",
     "use-car-tab-page",
-    "租车",
     "立即选车",
     "服务门店",
-    "我的活动",
-    "我的笔记",
     "选择分享方式",
     "微信好友",
     "朋友圈",
@@ -71,7 +68,7 @@ def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumC
         if not ensure_logged_in_if_needed(driver, ios_config):
             raise AssertionError("Unable to log in from the Me tab before running regression cases")
 
-    tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=8)
+    _tap_home_tab(driver, timeout=8)
     if not _home_visible(driver):
         wait_for_home_feed(driver, timeout=20)
     return True
@@ -83,7 +80,7 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
     tap_text_if_present(driver, "同意", timeout=1)
 
     def _go_home():
-        return tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=5)
+        return _tap_home_tab(driver, timeout=5)
 
     def _wait_home():
         if _home_visible(driver):
@@ -173,7 +170,7 @@ def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumC
     def _tap_home_fast() -> bool:
         if _tap_home_tab_by_coordinate(driver):
             return True
-        return tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=3)
+        return _tap_home_tab(driver, timeout=3)
 
     def _wait_publish_ready(timeout: int = 8) -> bool:
         end_at = time.monotonic() + timeout
@@ -239,25 +236,51 @@ def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumC
 
 def _home_or_login_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
+    if _me_content_page_visible(page_source):
+        return False
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
         return False
-    return any(text in page_source for text in ["首页", "全国", "推荐", "密码登录", "手机号登录", "请输入手机号"])
+    return any(text in page_source for text in ["首页", "笔记", "全国", "推荐", "密码登录", "手机号登录", "请输入手机号"])
 
 
 def _home_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
+    if _me_content_page_visible(page_source):
+        return False
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
         return False
-    return all(text in page_source for text in ["首页", "活动", "消息", "我的"]) or any(
-        text in page_source for text in ["全国", "推荐", "骑行", "徒步"]
-    )
+    return (
+        all(text in page_source for text in ["活动", "消息", "我的"])
+        and any(text in page_source for text in ["首页", "笔记"])
+    ) or any(text in page_source for text in ["全国", "推荐", "骑行", "徒步"])
 
 
 def _publish_entry_ready(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
+    if _me_content_page_visible(page_source):
+        return False
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
         return False
-    return all(text in page_source for text in ["首页", "活动", "消息", "我的"])
+    return all(text in page_source for text in ["活动", "消息", "我的"]) and any(
+        text in page_source for text in ["首页", "笔记", "全国", "推荐"]
+    )
+
+
+def _me_content_page_visible(page_source: str) -> bool:
+    if not page_source:
+        return False
+    return (
+        all(text in page_source for text in ["我的笔记", "收藏", "点赞"])
+        or all(text in page_source for text in ["我的活动", "发布", "报名"])
+        or all(text in page_source for text in ["草稿箱", "我的发布"])
+    )
+
+
+def _tap_home_tab(driver: WebDriver, timeout: int = 3) -> bool:
+    return (
+        tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=timeout)
+        or tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1)
+    )
 
 
 def _android_launcher_visible(driver: WebDriver) -> bool:
