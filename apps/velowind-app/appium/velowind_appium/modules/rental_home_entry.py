@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import TimeoutException
@@ -47,6 +48,14 @@ HOME_OVERLAY_BLOCKING_TEXTS = [
     "立即选车",
     "服务门店",
 ]
+IOS_NON_HOME_TOP_TITLES = {
+    "我的活动",
+    "我的笔记",
+    "我的租车",
+    "我的卡券",
+    "个人资料",
+    "兴趣偏好",
+}
 FLOATING_TRUCK_RATIOS = [
     (0.84, 0.72),
     (0.84, 0.76),
@@ -148,8 +157,39 @@ def _home_visible(driver: WebDriver) -> bool:
     source = safe_page_source(driver)
     if any(text in source for text in HOME_OVERLAY_BLOCKING_TEXTS):
         return False
+    if _visible_ios_non_home_top_title_present(source):
+        return False
     return (
         (any(text in source for text in ["首页", "笔记"]) and ("全国" in source or "推荐" in source))
         or "post-home-feed-category-pager" in source
         or (all(text in source for text in ["活动", "消息", "我的"]) and any(text in source for text in ["首页", "笔记"]))
     )
+
+
+def _visible_ios_non_home_top_title_present(page_source: str) -> bool:
+    if not page_source or "XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false":
+            continue
+        title = attrs.get("value") or attrs.get("label") or attrs.get("name") or ""
+        if title not in IOS_NON_HOME_TOP_TITLES:
+            continue
+        if _element_near_ios_top(attrs):
+            return True
+    return False
+
+
+def _element_near_ios_top(attrs: dict[str, str]) -> bool:
+    try:
+        y = int(float(attrs.get("y", "")))
+        height = int(float(attrs.get("height", "")))
+    except ValueError:
+        return False
+    return y <= 140 and height <= 80

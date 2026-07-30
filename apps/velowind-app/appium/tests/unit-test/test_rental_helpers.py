@@ -1,5 +1,6 @@
 from velowind_appium.modules import rental_orders
 from velowind_appium.modules import rental_home_entry
+from velowind_appium.modules import rental_vehicle_list
 from velowind_appium.modules.rental_common import visible_text_hit_points, visible_text_hit_points_containing
 
 
@@ -121,6 +122,25 @@ def test_rental_home_visible_rejects_post_detail_overlay():
     assert rental_home_entry._home_visible(driver) is False
 
 
+def test_rental_home_visible_rejects_ios_my_activity_page_with_cached_home_text():
+    driver = _FakeRentalDriver(
+        """
+        <AppiumAUT>
+          <XCUIElementTypeOther name="全国 推荐 骑行 活动 消息 我的 我的活动 报名 点赞 收藏 发布"
+            label="全国 推荐 骑行 活动 消息 我的 我的活动 报名 点赞 收藏 发布"
+            visible="true" x="0" y="0" width="402" height="874">
+            <XCUIElementTypeStaticText name="我的活动" label="我的活动" value="我的活动"
+              visible="true" x="162" y="78" width="78" height="26" />
+            <XCUIElementTypeOther name="全国 推荐 笔记" label="全国 推荐 笔记"
+              visible="false" x="0" y="0" width="402" height="874" />
+          </XCUIElementTypeOther>
+        </AppiumAUT>
+        """
+    )
+
+    assert rental_home_entry._home_visible(driver) is False
+
+
 def test_rental_home_visible_allows_home_rental_entry_text():
     driver = _FakeRentalDriver("首页 全国 推荐 活动 消息 我的 租车 floating-rent-entry")
 
@@ -129,3 +149,30 @@ def test_rental_home_visible_allows_home_rental_entry_text():
 
 def test_rental_entry_ids_include_android_floating_rent_entry():
     assert "floating-rent-entry" in rental_home_entry.RENTAL_ENTRY_IDS
+
+
+def test_visible_vehicle_detail_bookable_ignores_hidden_unavailable_vehicle_list():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther
+        name="选择车辆 文化生活服务车 不可预定 车辆详情 立即预定 车辆详情 文化生活服务车 基本信息 日租参考 ￥1800.00 /天 立即预定"
+        label="选择车辆 文化生活服务车 不可预定 车辆详情 立即预定 车辆详情 文化生活服务车 基本信息 日租参考 ￥1800.00 /天 立即预定"
+        visible="true" x="0" y="0" width="402" height="874">
+      <XCUIElementTypeOther
+        name="选择车辆 文化生活服务车 不可预定 车辆详情 立即预定"
+        label="选择车辆 文化生活服务车 不可预定 车辆详情 立即预定"
+        visible="false" x="0" y="0" width="402" height="874" />
+      <XCUIElementTypeOther
+        name="车辆详情 文化生活服务车 基本信息 日租参考 ￥1800.00 /天 立即预定"
+        label="车辆详情 文化生活服务车 基本信息 日租参考 ￥1800.00 /天 立即预定"
+        visible="true" x="0" y="0" width="402" height="874">
+        <XCUIElementTypeStaticText name="车辆详情" label="车辆详情" value="车辆详情"
+          visible="true" x="162" y="78" width="78" height="26" />
+        <XCUIElementTypeStaticText name="立即预定" label="立即预定" value="立即预定"
+          visible="true" x="305" y="792" width="61" height="21" />
+      </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+
+    assert rental_vehicle_list._visible_vehicle_detail_bookable(page_source) is True
