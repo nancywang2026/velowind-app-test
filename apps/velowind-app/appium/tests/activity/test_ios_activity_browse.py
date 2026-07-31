@@ -2,11 +2,15 @@ import pytest
 
 from velowind_appium.modules import (
     browse_activity_detail,
+    build_activity_signup_draft,
+    fill_activity_signup_form,
     activity_feed_all_results_match_category,
     activity_text_search_result_texts,
     open_first_activity_detail,
+    open_activity_signup,
     open_activity_search,
     open_activity_tab,
+    read_activity_signup_snapshot,
     search_activities,
     select_activity_category,
     switch_activity_category_navigation,
@@ -64,3 +68,32 @@ def test_user_can_browse_activity_detail_fields(driver, ios_config, step):
     snapshot = step("browse-activity-detail", lambda: browse_activity_detail(driver, timeout=25), capture=True)
 
     assert snapshot.is_basic_detail_complete(), f"Expected complete activity detail snapshot, got: {snapshot}"
+
+
+@pytest.mark.full
+def test_user_can_open_activity_signup_form(driver, ios_config, step):
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
+    step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
+    step("open-first-activity-detail", lambda: open_first_activity_detail(driver, timeout=20), capture=True)
+    step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
+    snapshot = step("read-activity-signup", lambda: read_activity_signup_snapshot(driver, timeout=15), capture=True)
+
+    assert snapshot.is_basic_signup_complete(), f"Expected complete activity signup snapshot, got: {snapshot}"
+
+
+@pytest.mark.full
+def test_user_can_fill_activity_signup_identity_fields(driver, ios_config, step):
+    draft = build_activity_signup_draft()
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
+    step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
+    step("open-first-activity-detail", lambda: open_first_activity_detail(driver, timeout=20), capture=True)
+    step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
+    snapshot = step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
+
+    assert snapshot.matches_draft(draft), f"Expected signup form to echo draft values, got: {snapshot}"

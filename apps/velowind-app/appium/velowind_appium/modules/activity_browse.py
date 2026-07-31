@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 import time
 from xml.etree import ElementTree
 
@@ -30,6 +31,15 @@ ACTIVITY_SEARCH_INPUT_XPATHS = [
 ]
 ACTIVITY_SEARCH_SUBMIT_TEXTS = ["搜索", "Search"]
 ACTIVITY_DETAIL_READY_IDS = ["activity-route-detail-v3-hero-carousel", "activity-detail-page"]
+ACTIVITY_SIGNUP_READY_TEXTS = ["活动报名", "报名信息", "提交订单"]
+
+
+@dataclass(frozen=True)
+class ActivitySignupDraft:
+    name: str
+    certificate_type: str
+    certificate_number: str
+    phone: str
 
 
 @dataclass(frozen=True)
@@ -71,6 +81,55 @@ class ActivityDetailSnapshot:
                 self.sessions_visible,
             ]
         )
+
+
+@dataclass(frozen=True)
+class ActivitySignupSnapshot:
+    title_visible: bool
+    meeting_location: str | None
+    schedule_visible: bool
+    quota_visible: bool
+    services_visible: bool
+    registration_fields_visible: bool
+    rules_visible: bool
+    fee_visible: bool
+    submit_order_visible: bool
+    name: str | None = None
+    certificate_type: str | None = None
+    certificate_number: str | None = None
+    phone: str | None = None
+
+    def is_basic_signup_complete(self) -> bool:
+        return all(
+            [
+                self.title_visible,
+                self.meeting_location,
+                self.schedule_visible,
+                self.quota_visible,
+                self.services_visible,
+                self.registration_fields_visible,
+                self.rules_visible,
+                self.fee_visible,
+                self.submit_order_visible,
+            ]
+        )
+
+    def matches_draft(self, draft: ActivitySignupDraft) -> bool:
+        return (
+            self.name == draft.name
+            and self.certificate_type == draft.certificate_type
+            and self.certificate_number == draft.certificate_number
+            and self.phone == draft.phone
+        )
+
+
+def build_activity_signup_draft() -> ActivitySignupDraft:
+    return ActivitySignupDraft(
+        name="自动化报名测试",
+        certificate_type="身份证",
+        certificate_number="110101199001011237",
+        phone="13800138000",
+    )
 
 
 def open_activity_tab(driver: WebDriver, timeout: int = 20) -> None:
@@ -208,6 +267,91 @@ def browse_activity_detail(driver: WebDriver, timeout: int = 25) -> ActivityDeta
         if snapshot.is_basic_detail_complete():
             return snapshot
     return snapshot
+
+
+def open_activity_signup(driver: WebDriver, timeout: int = 20) -> None:
+    if activity_signup_is_visible(_safe_page_source(driver)):
+        return
+    if not _tap_confirm_signup(driver):
+        raise AssertionError("Unable to tap the activity signup action")
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if activity_signup_is_visible(page_source):
+            return
+        if _activity_signup_consent_prompt_visible(page_source):
+            _tap_signup_consent(driver)
+        time.sleep(0.3)
+    raise AssertionError("Activity signup page did not become visible")
+
+
+def activity_signup_is_visible(page_source: str) -> bool:
+    return all(text in page_source for text in ACTIVITY_SIGNUP_READY_TEXTS)
+
+
+def _activity_signup_consent_prompt_visible(page_source: str) -> bool:
+    return all(text in page_source for text in ["报名提示", "同意并继续"])
+
+
+def read_activity_signup_snapshot(driver: WebDriver, timeout: int = 20) -> ActivitySignupSnapshot:
+    if not _wait_until(lambda: activity_signup_is_visible(_safe_page_source(driver)), timeout=timeout):
+        raise AssertionError("Activity signup page did not become visible")
+    return parse_activity_signup_snapshot(_safe_page_source(driver))
+
+
+def fill_activity_signup_form(
+    driver: WebDriver,
+    draft: ActivitySignupDraft,
+    timeout: int = 20,
+) -> ActivitySignupSnapshot:
+    if not activity_signup_is_visible(_safe_page_source(driver)):
+        raise AssertionError("Activity signup page is not visible")
+
+    steps = [
+        lambda: _fill_signup_text_field_by_placeholder(driver, "请输入报名人姓名", draft.name),
+        lambda: _select_signup_certificate_type(driver, draft.certificate_type),
+        lambda: _fill_signup_text_field_by_placeholder(driver, "请输入证件号码", draft.certificate_number),
+        lambda: _fill_signup_text_field_by_placeholder(driver, "请输入通知手机号", draft.phone),
+    ]
+    for action in steps:
+        if not action():
+            raise AssertionError("Unable to fill the activity signup form")
+
+    end_at = time.monotonic() + timeout
+    snapshot = parse_activity_signup_snapshot(_safe_page_source(driver))
+    while time.monotonic() < end_at:
+        snapshot = parse_activity_signup_snapshot(_safe_page_source(driver))
+        if snapshot.matches_draft(draft):
+            return snapshot
+        time.sleep(0.3)
+    raise AssertionError(f"Activity signup form did not echo the draft values: {snapshot}")
+
+
+def parse_activity_signup_snapshot(page_source: str) -> ActivitySignupSnapshot:
+    visible_texts = _extract_texts(page_source, visible_only=True)
+    joined_visible_text = " ".join(visible_texts)
+
+    return ActivitySignupSnapshot(
+        title_visible="活动报名" in joined_visible_text,
+        meeting_location=_extract_signup_meeting_location(joined_visible_text),
+        schedule_visible=bool(re.search(r"\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}", joined_visible_text)),
+        quota_visible=all(text in joined_visible_text for text in ["活动名额", "剩余"]),
+        services_visible="服务配置" in joined_visible_text,
+        registration_fields_visible=all(
+            text in joined_visible_text
+            for text in ["报名信息", "姓名", "证件类型", "证件号码", "通知手机号"]
+        ),
+        rules_visible=all(text in joined_visible_text for text in ["报名规则", "取消规则", "报名说明"]),
+        fee_visible="报名费用" in joined_visible_text and "¥" in joined_visible_text,
+        submit_order_visible="提交订单" in joined_visible_text,
+        name=_extract_signup_input_value_by_placeholder(page_source, "请输入报名人姓名")
+        or _extract_signup_field_value(joined_visible_text, "姓名", ["证件类型"]),
+        certificate_type=_extract_signup_certificate_type(joined_visible_text),
+        certificate_number=_extract_signup_input_value_by_placeholder(page_source, "请输入证件号码")
+        or _extract_signup_field_value(joined_visible_text, "证件号码", ["通知手机号"]),
+        phone=_extract_signup_input_value_by_placeholder(page_source, "请输入通知手机号")
+        or _extract_signup_field_value(joined_visible_text, "通知手机号", ["报名规则", "取消规则", "报名说明"]),
+    )
 
 
 def read_activity_detail_snapshot(driver: WebDriver, timeout: int = 20) -> ActivityDetailSnapshot:
@@ -379,6 +523,28 @@ def _replace_text(element, value: str) -> None:
     element.send_keys(value)
 
 
+def _hide_keyboard(driver: WebDriver) -> None:
+    for kwargs in [
+        {},
+        {"key_name": "Done"},
+        {"key_name": "Return"},
+        {"strategy": "pressKey", "key_name": "Done"},
+    ]:
+        try:
+            driver.hide_keyboard(**kwargs)
+            return
+        except WebDriverException:
+            continue
+    for text in ["完成", "收起键盘", "确定"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            return
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.9), "y": int(rect["height"] * 0.18)})
+    except WebDriverException:
+        pass
+
+
 def _tap_activity_search_submit(driver: WebDriver) -> bool:
     for text in ACTIVITY_SEARCH_SUBMIT_TEXTS:
         if tap_text_if_present(driver, text, timeout=1):
@@ -390,6 +556,60 @@ def _tap_activity_search_submit(driver: WebDriver) -> bool:
         return True
     except WebDriverException:
         return False
+
+
+def _tap_confirm_signup(driver: WebDriver) -> bool:
+    if tap_text_if_present(driver, "确认报名", timeout=2):
+        return True
+    return tap_by_coordinate_ratios(driver, [(0.78, 0.955), (0.82, 0.94), (0.74, 0.93)])
+
+
+def _tap_signup_consent(driver: WebDriver) -> bool:
+    if tap_text_if_present(driver, "同意并继续", timeout=1):
+        return True
+    return tap_by_coordinate_ratios(driver, [(0.73, 0.955), (0.75, 0.94), (0.68, 0.95)])
+
+
+def _fill_signup_text_field_by_placeholder(driver: WebDriver, placeholder: str, value: str) -> bool:
+    for xpath in [
+        f'//XCUIElementTypeTextField[@value="{placeholder}" or @name="{placeholder}" or @label="{placeholder}"]',
+        f'//XCUIElementTypeTextView[@value="{placeholder}" or @name="{placeholder}" or @label="{placeholder}"]',
+        f'//*[contains(@name, "{placeholder}") or contains(@label, "{placeholder}") or contains(@value, "{placeholder}")]/following::XCUIElementTypeTextField[1]',
+        f'//*[contains(@name, "{placeholder}") or contains(@label, "{placeholder}") or contains(@value, "{placeholder}")]/following::XCUIElementTypeTextView[1]',
+    ]:
+        try:
+            _replace_text(driver.find_element(AppiumBy.XPATH, xpath), value)
+            _hide_keyboard(driver)
+            return True
+        except (NoSuchElementException, WebDriverException):
+            continue
+    return False
+
+
+def _select_signup_certificate_type(driver: WebDriver, certificate_type: str) -> bool:
+    if parse_activity_signup_snapshot(_safe_page_source(driver)).certificate_type == certificate_type:
+        return True
+
+    if not tap_text_if_present(driver, "请选择证件类型", timeout=1):
+        for xpath in [
+            '//*[contains(@name, "请选择证件类型") or contains(@label, "请选择证件类型") or contains(@value, "请选择证件类型")]',
+        ]:
+            try:
+                driver.find_element(AppiumBy.XPATH, xpath).click()
+                break
+            except (NoSuchElementException, WebDriverException):
+                continue
+        else:
+            if not tap_by_coordinate_ratios(driver, [(0.50, 0.65), (0.80, 0.65)]):
+                return False
+
+    for text in [certificate_type, "居民身份证", "中国居民身份证"]:
+        if tap_text_if_present(driver, text, timeout=2):
+            return _wait_until(
+                lambda: parse_activity_signup_snapshot(_safe_page_source(driver)).certificate_type == certificate_type,
+                timeout=3,
+            )
+    return False
 
 
 def _tap_activity_category(driver: WebDriver, category_name: str) -> bool:
@@ -556,6 +776,48 @@ def _looks_like_activity_detail_title(text: str) -> bool:
 
 def _first_text_containing(texts: list[str], keyword: str) -> str | None:
     return next((text for text in texts if keyword in text), None)
+
+
+def _extract_signup_meeting_location(joined_text: str) -> str | None:
+    match = re.search(r"集合地点\s+(.+?)(?:\s+报名截止|\s+活动名额|\s+服务配置|$)", joined_text)
+    return match.group(1).strip() if match else None
+
+
+def _extract_signup_input_value_by_placeholder(page_source: str, placeholder: str) -> str | None:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        if element.attrib.get("placeholderValue") != placeholder:
+            continue
+        value = " ".join(element.attrib.get("value", "").split())
+        if not value or value == placeholder:
+            return None
+        return value
+    return None
+
+
+def _extract_signup_field_value(joined_text: str, label: str, stop_labels: list[str]) -> str | None:
+    stop_pattern = "|".join(re.escape(stop_label) for stop_label in stop_labels)
+    match = re.search(rf"{re.escape(label)}\s+(.+?)(?:\s+(?:{stop_pattern})|$)", joined_text)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    if value.startswith("请输入") or value.startswith("请选择"):
+        return None
+    return value or None
+
+
+def _extract_signup_certificate_type(joined_text: str) -> str | None:
+    value = _extract_signup_field_value(joined_text, "证件类型", ["证件号码"])
+    if value is None:
+        return None
+    if "身份证" in value:
+        return "身份证"
+    return value
 
 
 def _extract_activity_publisher(joined_text: str) -> str | None:
