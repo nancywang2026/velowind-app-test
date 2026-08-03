@@ -5,6 +5,7 @@ from velowind_appium.modules import (
     favorite_note,
     like_note,
     open_first_home_message,
+    open_system_message_page,
     share_note_to_moments,
     submit_message_comment,
 )
@@ -36,3 +37,13 @@ def test_logged_in_user_can_browse_comment_and_interact_with_note(driver, ios_co
     assert like_counts[0] != like_counts[1], "Expected the like count to change after tapping the like action"
     assert favorite_counts[0] != favorite_counts[1], "Expected the favorite count to change after tapping the favorite action"
     assert share_target == "朋友圈", "Expected the note to use the Moments share target"
+
+
+@pytest.mark.full
+def test_user_can_view_system_message_detail(driver, ios_config, step):
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    snapshot = step("open-system-message-page", lambda: open_system_message_page(driver, timeout=20), capture=True)
+
+    assert snapshot.is_basic_system_message_visible(), f"Expected system message detail fields to be visible, got: {snapshot}"

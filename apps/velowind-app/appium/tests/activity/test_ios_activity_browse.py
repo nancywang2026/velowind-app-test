@@ -1,6 +1,7 @@
 import pytest
 
 from velowind_appium.modules import (
+    ActivitySignupAlreadyExistsError,
     browse_activity_detail,
     build_activity_signup_draft,
     fill_activity_signup_form,
@@ -10,9 +11,12 @@ from velowind_appium.modules import (
     open_activity_signup,
     open_activity_search,
     open_activity_tab,
+    open_my_activity_reaction_list,
+    open_my_activity_signup_status,
     read_activity_signup_snapshot,
     search_activities,
     select_activity_category,
+    submit_activity_signup_order,
     switch_activity_category_navigation,
     wait_for_activity_feed,
 )
@@ -97,3 +101,83 @@ def test_user_can_fill_activity_signup_identity_fields(driver, ios_config, step)
     snapshot = step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
 
     assert snapshot.matches_draft(draft), f"Expected signup form to echo draft values, got: {snapshot}"
+
+
+@pytest.mark.full
+def test_user_can_submit_activity_signup_to_payment_page(driver, ios_config, step):
+    draft = build_activity_signup_draft()
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
+    step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
+    step("open-first-activity-detail", lambda: open_first_activity_detail(driver, timeout=20), capture=True)
+    step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
+    step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
+    if "已经报名，无需重复报名" in driver.page_source:
+        pytest.skip("The current account already has an activity signup for this session")
+    try:
+        snapshot = step("submit-activity-signup-order", lambda: submit_activity_signup_order(driver, timeout=25), capture=True)
+    except ActivitySignupAlreadyExistsError as error:
+        pytest.skip(str(error))
+
+    assert snapshot.is_order_submission_complete(), f"Expected signup submission to reach payment/order page, got: {snapshot}"
+
+
+@pytest.mark.full
+def test_user_can_view_my_activity_signup_status(driver, ios_config, step):
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    snapshot = step(
+        "open-my-activity-signup-status",
+        lambda: open_my_activity_signup_status(driver, timeout=25),
+        capture=True,
+    )
+
+    assert snapshot.is_signup_status_visible(), f"Expected My Activity signup status to be visible, got: {snapshot}"
+    assert snapshot.status in {"待支付", "支付未完成", "报名成功", "报名待支付", "已报名"}
+
+
+@pytest.mark.full
+def test_user_can_open_my_activity_signup_list(driver, ios_config, step):
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    snapshot = step(
+        "open-my-activity-signup-list",
+        lambda: open_my_activity_signup_status(driver, timeout=25),
+        capture=True,
+    )
+
+    assert snapshot.page_visible, f"Expected My Activity page to be visible, got: {snapshot}"
+    assert snapshot.signup_tab_visible, f"Expected signup tab to be visible, got: {snapshot}"
+    assert snapshot.registration_visible, f"Expected at least one signup record to be visible, got: {snapshot}"
+
+
+@pytest.mark.full
+def test_user_can_open_my_activity_liked_list(driver, ios_config, step):
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    snapshot = step(
+        "open-my-activity-liked-list",
+        lambda: open_my_activity_reaction_list(driver, tab_name="点赞", timeout=25),
+        capture=True,
+    )
+
+    assert snapshot.is_basic_reaction_list_visible(), f"Expected My Activity liked list to be visible, got: {snapshot}"
+
+
+@pytest.mark.full
+def test_user_can_open_my_activity_favorite_list(driver, ios_config, step):
+    dismiss_common_system_alerts(driver, step)
+
+    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    snapshot = step(
+        "open-my-activity-favorite-list",
+        lambda: open_my_activity_reaction_list(driver, tab_name="收藏", timeout=25),
+        capture=True,
+    )
+
+    assert snapshot.is_basic_reaction_list_visible(), f"Expected My Activity favorite list to be visible, got: {snapshot}"

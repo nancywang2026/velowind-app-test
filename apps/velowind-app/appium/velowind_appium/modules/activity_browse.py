@@ -32,6 +32,7 @@ ACTIVITY_SEARCH_INPUT_XPATHS = [
 ACTIVITY_SEARCH_SUBMIT_TEXTS = ["搜索", "Search"]
 ACTIVITY_DETAIL_READY_IDS = ["activity-route-detail-v3-hero-carousel", "activity-detail-page"]
 ACTIVITY_SIGNUP_READY_TEXTS = ["活动报名", "报名信息", "提交订单"]
+ACTIVITY_ORDER_PAYMENT_TEXTS = ["支付中心", "确认支付", "订单支付", "去支付", "立即支付", "待支付"]
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,47 @@ class ActivitySignupSnapshot:
             and self.certificate_number == draft.certificate_number
             and self.phone == draft.phone
         )
+
+
+@dataclass(frozen=True)
+class ActivityOrderSnapshot:
+    payment_page_visible: bool
+    payment_method_visible: bool
+    amount_visible: bool
+    payment_action_visible: bool
+    order_status_visible: bool
+
+    def is_order_submission_complete(self) -> bool:
+        return self.payment_page_visible and self.amount_visible and (
+            self.payment_action_visible or self.order_status_visible
+        )
+
+
+@dataclass(frozen=True)
+class MyActivitySignupSnapshot:
+    page_visible: bool
+    signup_tab_visible: bool
+    registration_visible: bool
+    status: str | None
+    payment_action_visible: bool
+
+    def is_signup_status_visible(self) -> bool:
+        return self.page_visible and self.signup_tab_visible and self.registration_visible and bool(self.status)
+
+
+@dataclass(frozen=True)
+class MyActivityReactionSnapshot:
+    page_visible: bool
+    tab_visible: bool
+    list_item_visible: bool
+    empty_state_visible: bool
+
+    def is_basic_reaction_list_visible(self) -> bool:
+        return self.page_visible and self.tab_visible and (self.list_item_visible or self.empty_state_visible)
+
+
+class ActivitySignupAlreadyExistsError(AssertionError):
+    pass
 
 
 def build_activity_signup_draft() -> ActivitySignupDraft:
@@ -289,6 +331,10 @@ def activity_signup_is_visible(page_source: str) -> bool:
     return all(text in page_source for text in ACTIVITY_SIGNUP_READY_TEXTS)
 
 
+def activity_signup_already_exists(page_source: str) -> bool:
+    return "已经报名，无需重复报名" in page_source
+
+
 def _activity_signup_consent_prompt_visible(page_source: str) -> bool:
     return all(text in page_source for text in ["报名提示", "同意并继续"])
 
@@ -325,6 +371,81 @@ def fill_activity_signup_form(
             return snapshot
         time.sleep(0.3)
     raise AssertionError(f"Activity signup form did not echo the draft values: {snapshot}")
+
+
+def submit_activity_signup_order(driver: WebDriver, timeout: int = 25) -> ActivityOrderSnapshot:
+    if not _tap_submit_activity_order(driver):
+        raise AssertionError("Unable to tap the activity signup submit order action")
+    end_at = time.monotonic() + timeout
+    snapshot = parse_activity_order_snapshot(_safe_page_source(driver))
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if activity_signup_already_exists(page_source):
+            raise ActivitySignupAlreadyExistsError("The current account already has an activity signup for this session")
+        snapshot = parse_activity_order_snapshot(page_source)
+        if snapshot.is_order_submission_complete():
+            return snapshot
+        time.sleep(0.3)
+    raise AssertionError(f"Activity signup order submission did not reach payment/order page: {snapshot}")
+
+
+def open_my_activity_signup_status(driver: WebDriver, timeout: int = 20) -> MyActivitySignupSnapshot:
+    snapshot = parse_my_activity_signup_snapshot(_safe_page_source(driver))
+    if snapshot.is_signup_status_visible():
+        return snapshot
+
+    if not _my_activity_page_visible(_safe_page_source(driver)):
+        if not _tap_me_tab(driver):
+            raise AssertionError("Unable to tap the Me tab")
+        if not _wait_until(lambda: _me_page_visible(_safe_page_source(driver)), timeout=timeout):
+            raise AssertionError("Me page did not become visible")
+        if not _tap_my_activity_entry(driver):
+            raise AssertionError("Unable to tap My Activity entry")
+        if not _wait_until(lambda: _my_activity_page_visible(_safe_page_source(driver)), timeout=timeout):
+            raise AssertionError("My Activity page did not become visible")
+
+    if not _tap_my_activity_signup_tab(driver):
+        raise AssertionError("Unable to tap My Activity signup tab")
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        snapshot = parse_my_activity_signup_snapshot(_safe_page_source(driver))
+        if snapshot.is_signup_status_visible():
+            return snapshot
+        time.sleep(0.3)
+    raise AssertionError(f"My Activity signup status did not become visible: {snapshot}")
+
+
+def open_my_activity_reaction_list(
+    driver: WebDriver,
+    *,
+    tab_name: str,
+    timeout: int = 20,
+) -> MyActivityReactionSnapshot:
+    snapshot = parse_my_activity_reaction_snapshot(_safe_page_source(driver), tab_name=tab_name)
+    if snapshot.is_basic_reaction_list_visible():
+        return snapshot
+
+    if not _my_activity_page_visible(_safe_page_source(driver)):
+        if not _tap_me_tab(driver):
+            raise AssertionError("Unable to tap the Me tab")
+        if not _wait_until(lambda: _me_page_visible(_safe_page_source(driver)), timeout=timeout):
+            raise AssertionError("Me page did not become visible")
+        if not _tap_my_activity_entry(driver):
+            raise AssertionError("Unable to tap My Activity entry")
+        if not _wait_until(lambda: _my_activity_page_visible(_safe_page_source(driver)), timeout=timeout):
+            raise AssertionError("My Activity page did not become visible")
+
+    if not _tap_my_activity_reaction_tab(driver, tab_name):
+        raise AssertionError(f"Unable to tap My Activity {tab_name} tab")
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        snapshot = parse_my_activity_reaction_snapshot(_safe_page_source(driver), tab_name=tab_name)
+        if snapshot.is_basic_reaction_list_visible():
+            return snapshot
+        time.sleep(0.3)
+    raise AssertionError(f"My Activity {tab_name} list did not become visible: {snapshot}")
 
 
 def parse_activity_signup_snapshot(page_source: str) -> ActivitySignupSnapshot:
@@ -374,6 +495,46 @@ def parse_activity_detail_snapshot(page_source: str) -> ActivityDetailSnapshot:
         route_visible=all(text in joined_visible_text for text in ["路线说明", "活动概览"]),
         comments_visible="活动评论" in joined_visible_text or "前往评论页查看真实活动评论" in joined_visible_text,
         sessions_visible=any(text in joined_visible_text for text in ["请选择场次", "场次信息", "集合地点"]),
+    )
+
+
+def parse_activity_order_snapshot(page_source: str) -> ActivityOrderSnapshot:
+    visible_texts = _extract_texts(page_source, visible_only=True)
+    joined_visible_text = " ".join(visible_texts)
+    return ActivityOrderSnapshot(
+        payment_page_visible=any(text in joined_visible_text for text in ["支付中心", "确认支付", "订单支付"]),
+        payment_method_visible=any(text in joined_visible_text for text in ["微信支付", "支付宝", "支付方式"]),
+        amount_visible="¥" in joined_visible_text or "报名费用" in joined_visible_text or "支付金额" in joined_visible_text,
+        payment_action_visible=any(text in joined_visible_text for text in ["去支付", "立即支付", "确认支付"]),
+        order_status_visible=any(text in joined_visible_text for text in ["待支付", "支付未完成", "报名成功", "报名待支付"]),
+    )
+
+
+def parse_my_activity_signup_snapshot(page_source: str) -> MyActivitySignupSnapshot:
+    visible_texts = _extract_texts(page_source, visible_only=True)
+    joined_visible_text = " ".join(visible_texts)
+    status = next(
+        (text for text in ["待支付", "支付未完成", "报名成功", "报名待支付", "已报名"] if text in joined_visible_text),
+        None,
+    )
+    return MyActivitySignupSnapshot(
+        page_visible="我的活动" in joined_visible_text,
+        signup_tab_visible="报名" in joined_visible_text,
+        registration_visible=status is not None or any(text in joined_visible_text for text in ["支付报名费", "报名详情"]),
+        status=status,
+        payment_action_visible=any(text in joined_visible_text for text in ["支付报名费", "去支付", "立即支付", "确认支付"]),
+    )
+
+
+def parse_my_activity_reaction_snapshot(page_source: str, *, tab_name: str) -> MyActivityReactionSnapshot:
+    visible_texts = _extract_texts(page_source, visible_only=True)
+    joined_visible_text = " ".join(visible_texts)
+    empty_texts = [f"暂无{tab_name}活动", f"还没有{tab_name}", "暂无内容", "暂无数据"]
+    return MyActivityReactionSnapshot(
+        page_visible="我的活动" in joined_visible_text,
+        tab_visible=tab_name in joined_visible_text,
+        list_item_visible=any(text in joined_visible_text for text in ["总里程", "难度等级", "场次", "浙江省", "湖南省"]),
+        empty_state_visible=any(text in joined_visible_text for text in empty_texts),
     )
 
 
@@ -568,6 +729,39 @@ def _tap_signup_consent(driver: WebDriver) -> bool:
     if tap_text_if_present(driver, "同意并继续", timeout=1):
         return True
     return tap_by_coordinate_ratios(driver, [(0.73, 0.955), (0.75, 0.94), (0.68, 0.95)])
+
+
+def _tap_submit_activity_order(driver: WebDriver) -> bool:
+    if tap_text_if_present(driver, "提交订单", timeout=2):
+        return True
+    return tap_by_coordinate_ratios(driver, [(0.78, 0.955), (0.78, 0.93), (0.73, 0.94)])
+
+
+def _tap_me_tab(driver: WebDriver) -> bool:
+    if tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=2):
+        return True
+    return tap_by_coordinate_ratios(driver, [(0.88, 0.93), (0.90, 0.94)])
+
+
+def _tap_my_activity_entry(driver: WebDriver) -> bool:
+    if tap_text_if_present(driver, "我的活动", timeout=2):
+        return True
+    return tap_by_coordinate_ratios(driver, [(0.50, 0.31), (0.25, 0.31)])
+
+
+def _tap_my_activity_signup_tab(driver: WebDriver) -> bool:
+    if tap_text_if_present(driver, "报名", timeout=2):
+        return True
+    return tap_by_coordinate_ratios(driver, [(0.40, 0.17), (0.43, 0.15)])
+
+
+def _tap_my_activity_reaction_tab(driver: WebDriver, tab_name: str) -> bool:
+    if tab_name not in {"点赞", "收藏"}:
+        raise ValueError(f"Unsupported My Activity reaction tab: {tab_name}")
+    if tap_text_if_present(driver, tab_name, timeout=2):
+        return True
+    ratios = [(0.40, 0.17), (0.43, 0.15)] if tab_name == "点赞" else [(0.62, 0.17), (0.62, 0.15)]
+    return tap_by_coordinate_ratios(driver, ratios)
 
 
 def _fill_signup_text_field_by_placeholder(driver: WebDriver, placeholder: str, value: str) -> bool:
@@ -826,6 +1020,16 @@ def _extract_activity_publisher(joined_text: str) -> str | None:
         return None
     before_marker = joined_text.split(marker, 1)[0].split()
     return before_marker[-1] if before_marker else None
+
+
+def _me_page_visible(page_source: str) -> bool:
+    if "手机号登录" in page_source or "密码登录" in page_source:
+        return False
+    return "我的" in page_source and any(text in page_source for text in ["编辑资料", "设置", "我的活动", "草稿箱"])
+
+
+def _my_activity_page_visible(page_source: str) -> bool:
+    return "我的活动" in page_source and any(text in page_source for text in ["发布", "报名", "点赞", "收藏"])
 
 
 def _activity_detail_hero_visible(page_source: str) -> bool:

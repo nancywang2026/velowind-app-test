@@ -295,3 +295,143 @@ def test_fill_activity_signup_form_enters_draft_and_waits_for_echo(monkeypatch):
         ("field", "请输入证件号码", draft.certificate_number),
         ("field", "请输入通知手机号", draft.phone),
     ]
+
+
+def test_parse_activity_order_snapshot_detects_payment_center():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="支付中心" visible="true" />
+      <XCUIElementTypeStaticText name="订单支付" visible="true" />
+      <XCUIElementTypeStaticText name="报名费用 ¥0.01" visible="true" />
+      <XCUIElementTypeStaticText name="微信支付" visible="true" />
+      <XCUIElementTypeStaticText name="支付宝" visible="true" />
+      <XCUIElementTypeStaticText name="去支付" visible="true" />
+    </AppiumAUT>
+    """
+
+    snapshot = activity_browse.parse_activity_order_snapshot(page_source)
+
+    assert snapshot.payment_page_visible
+    assert snapshot.payment_method_visible
+    assert snapshot.amount_visible
+    assert snapshot.payment_action_visible
+    assert snapshot.is_order_submission_complete()
+
+
+def test_activity_signup_already_exists_is_detected():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="已经报名，无需重复报名。" visible="true" />
+    </AppiumAUT>
+    """
+
+    assert activity_browse.activity_signup_already_exists(page_source)
+
+
+def test_parse_my_activity_signup_snapshot_detects_pending_signup_status():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="我的活动" visible="true" />
+      <XCUIElementTypeStaticText name="发布" visible="true" />
+      <XCUIElementTypeStaticText name="报名" visible="true" />
+      <XCUIElementTypeOther name="张家界大环线2天1晚 8月04日 周二 09:25 待支付 支付报名费 ¥0.01" visible="true" />
+    </AppiumAUT>
+    """
+
+    snapshot = activity_browse.parse_my_activity_signup_snapshot(page_source)
+
+    assert snapshot.page_visible
+    assert snapshot.signup_tab_visible
+    assert snapshot.registration_visible
+    assert snapshot.status == "待支付"
+    assert snapshot.payment_action_visible
+    assert snapshot.is_signup_status_visible()
+
+
+def test_open_my_activity_signup_status_taps_me_activity_and_signup_tab(monkeypatch):
+    calls = []
+    page = {"source": "首页 活动 消息 我的"}
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return page["source"]
+
+    def tap_me(driver):
+        calls.append("me")
+        page["source"] = "我的 编辑资料 设置 我的活动 草稿箱"
+        return True
+
+    def tap_entry(driver):
+        calls.append("my-activity")
+        page["source"] = "我的活动 发布 报名 点赞 收藏"
+        return True
+
+    def tap_signup_tab(driver):
+        calls.append("signup-tab")
+        page["source"] = "我的活动 发布 报名 张家界大环线2天1晚 待支付 支付报名费 ¥0.01"
+        return True
+
+    monkeypatch.setattr(activity_browse, "_tap_me_tab", tap_me, raising=False)
+    monkeypatch.setattr(activity_browse, "_tap_my_activity_entry", tap_entry, raising=False)
+    monkeypatch.setattr(activity_browse, "_tap_my_activity_signup_tab", tap_signup_tab, raising=False)
+    monkeypatch.setattr(activity_browse.time, "sleep", lambda seconds: None)
+
+    snapshot = activity_browse.open_my_activity_signup_status(FakeDriver(), timeout=3)
+
+    assert snapshot.status == "待支付"
+    assert calls == ["me", "my-activity", "signup-tab"]
+
+
+def test_parse_my_activity_reaction_snapshot_detects_liked_tab_with_empty_state():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="我的活动" visible="true" />
+      <XCUIElementTypeStaticText name="报名" visible="true" />
+      <XCUIElementTypeStaticText name="点赞" visible="true" />
+      <XCUIElementTypeStaticText name="收藏" visible="true" />
+      <XCUIElementTypeStaticText name="暂无点赞活动" visible="true" />
+    </AppiumAUT>
+    """
+
+    snapshot = activity_browse.parse_my_activity_reaction_snapshot(page_source, tab_name="点赞")
+
+    assert snapshot.page_visible
+    assert snapshot.tab_visible
+    assert snapshot.empty_state_visible
+    assert snapshot.is_basic_reaction_list_visible()
+
+
+def test_open_my_activity_reaction_list_taps_requested_tab(monkeypatch):
+    calls = []
+    page = {"source": "首页 活动 消息 我的"}
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return page["source"]
+
+    def tap_me(driver):
+        calls.append("me")
+        page["source"] = "我的 编辑资料 设置 我的活动 草稿箱"
+        return True
+
+    def tap_entry(driver):
+        calls.append("my-activity")
+        page["source"] = "我的活动 报名 点赞 收藏 发布"
+        return True
+
+    def tap_reaction_tab(driver, tab_name):
+        calls.append(("reaction-tab", tab_name))
+        page["source"] = f"我的活动 报名 点赞 收藏 暂无{tab_name}活动"
+        return True
+
+    monkeypatch.setattr(activity_browse, "_tap_me_tab", tap_me, raising=False)
+    monkeypatch.setattr(activity_browse, "_tap_my_activity_entry", tap_entry, raising=False)
+    monkeypatch.setattr(activity_browse, "_tap_my_activity_reaction_tab", tap_reaction_tab, raising=False)
+    monkeypatch.setattr(activity_browse.time, "sleep", lambda seconds: None)
+
+    snapshot = activity_browse.open_my_activity_reaction_list(FakeDriver(), tab_name="点赞", timeout=3)
+
+    assert snapshot.is_basic_reaction_list_visible()
+    assert calls == ["me", "my-activity", ("reaction-tab", "点赞")]

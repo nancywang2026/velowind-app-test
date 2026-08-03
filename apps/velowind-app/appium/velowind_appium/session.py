@@ -38,6 +38,8 @@ HOME_BLOCKING_TEXTS = [
     "选择分享方式",
     "微信好友",
     "朋友圈",
+    "系统消息",
+    "系统通知",
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]
@@ -156,7 +158,7 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
 
     if step is not None:
         if not _home_or_login_visible(driver):
-            step("wait-home-feed-ready", _wait_home)
+            step("recover-home-session", _recover_to_home)
         return bool(step("prepare-login-and-home", _prepare))
 
     return bool(_prepare())
@@ -270,9 +272,15 @@ def _me_content_page_visible(page_source: str) -> bool:
     if not page_source:
         return False
     return (
-        all(text in page_source for text in ["我的笔记", "收藏", "点赞"])
+        "我的笔记" in page_source
         or all(text in page_source for text in ["我的活动", "发布", "报名"])
         or all(text in page_source for text in ["草稿箱", "我的发布"])
+        or all(text in page_source for text in ["个人资料", "昵称", "手机号"])
+        or all(text in page_source for text in ["兴趣偏好", "骑行"])
+        or all(text in page_source for text in ["设置", "账号与安全", "退出登录"])
+        or all(text in page_source for text in ["账号与安全", "绑定手机号", "账号注销"])
+        or all(text in page_source for text in ["成为领队", "寻风集领队", "申请状态"])
+        or any(text in page_source for text in ["我的卡券", "优惠券"])
     )
 
 

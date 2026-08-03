@@ -17,6 +17,7 @@ import yaml
 
 from velowind_appium.actions import (
     swipe_vertical,
+    tap_accessibility_id_or_text_if_present,
     tap_if_present,
     tap_text_if_present,
     wait_for_any_accessibility_id_or_text,
@@ -147,6 +148,20 @@ VIEW_COUNT_PATTERN = re.compile(r"浏览(?:量)?[^\d<\"]*(\d+)")
 COMMENT_COUNT_PATTERN = re.compile(r"评论(?:数)?[^\d<\"]*(\d+)")
 COUNT_ONLY_PATTERN = re.compile(r"^(?:浏览|评论)\s*(\d+)$")
 BOTTOM_ACTION_PATTERN = re.compile(r"^.+\s+(\d+)\s+(\d+)\s+(\d+)$")
+SYSTEM_MESSAGE_TIME_PATTERN = re.compile(r"^\d{2}-\d{2}\s+\d{2}:\d{2}$")
+SYSTEM_MESSAGE_SKIP_TEXTS = {
+    "消息",
+    "系统消息",
+    "系统通知",
+    "笔记",
+    "活动",
+    "我的",
+    "笔记 活动",
+    "消息 我的",
+    "笔记 活动 消息 我的",
+    "Vertical scroll bar, 1 page",
+    "Horizontal scroll bar, 1 page",
+}
 CROPPER_VISIBLE_PATTERNS = [
     'name="publish-note-image-picker-cropper-viewport" enabled="true" visible="true"',
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -174,6 +189,18 @@ class MessageDetailSnapshot:
     comments: list[str]
     empty_comment_hint: str | None
     bottom_action_counts: list[str]
+
+
+@dataclass(frozen=True)
+class SystemMessageSnapshot:
+    page_visible: bool
+    category: str | None
+    timestamp: str | None
+    title: str | None
+    body: str | None
+
+    def is_basic_system_message_visible(self) -> bool:
+        return bool(self.page_visible and self.category and self.timestamp and self.title and self.body)
 
 
 @dataclass(frozen=True)
@@ -546,6 +573,61 @@ def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> Messag
         time.sleep(0.2)
 
     raise AssertionError(f"Message detail did not expose all expected fields: {last_snapshot}")
+
+
+def open_system_message_page(driver: WebDriver, timeout: int = 15) -> SystemMessageSnapshot:
+    snapshot = parse_system_message_snapshot(_safe_page_source(driver))
+    if snapshot.is_basic_system_message_visible():
+        return snapshot
+
+    if not _tap_messages_tab(driver):
+        raise AssertionError("Unable to tap the Messages tab")
+
+    if not _wait_until(lambda: "系统消息" in _safe_page_source(driver), timeout=timeout):
+        raise AssertionError("Messages page did not expose the System Messages entry")
+
+    if not tap_text_if_present(driver, "系统消息", timeout=2):
+        raise AssertionError("Unable to tap the System Messages entry")
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        snapshot = parse_system_message_snapshot(_safe_page_source(driver))
+        if snapshot.is_basic_system_message_visible():
+            return snapshot
+        time.sleep(0.3)
+    raise AssertionError(f"System message page did not expose expected detail fields: {snapshot}")
+
+
+def parse_system_message_snapshot(page_source: str) -> SystemMessageSnapshot:
+    texts = _extract_visible_message_texts(page_source)
+    joined_text = " ".join(texts)
+    timestamp_index = next((index for index, text in enumerate(texts) if SYSTEM_MESSAGE_TIME_PATTERN.match(text)), None)
+    category = None
+    title = None
+    body = None
+    timestamp = texts[timestamp_index] if timestamp_index is not None else None
+
+    if timestamp_index is not None:
+        for candidate in reversed(texts[max(0, timestamp_index - 4):timestamp_index]):
+            if _looks_like_system_message_value(candidate):
+                category = candidate
+                break
+        following = [
+            text
+            for text in texts[timestamp_index + 1:]
+            if _looks_like_system_message_value(text) and not SYSTEM_MESSAGE_TIME_PATTERN.match(text)
+        ]
+        if following:
+            title = following[0]
+            body = following[1] if len(following) > 1 else title
+
+    return SystemMessageSnapshot(
+        page_visible="系统消息" in joined_text,
+        category=category,
+        timestamp=timestamp,
+        title=title,
+        body=body,
+    )
 
 
 def submit_message_comment(driver: WebDriver, comment_text: str, timeout: int = 20) -> None:
@@ -2913,6 +2995,61 @@ def _extract_strings(page_source: str) -> list[str]:
     return cleaned
 
 
+def _extract_visible_message_texts(page_source: str) -> list[str]:
+    if not page_source:
+        return []
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        extracted = _extract_strings(page_source)
+        return extracted or _combine_system_message_date_tokens(page_source.split())
+
+    texts: list[str] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        raw_text = (
+            element.attrib.get("text", "")
+            or element.attrib.get("name", "")
+            or element.attrib.get("label", "")
+            or element.attrib.get("value", "")
+        )
+        normalized = " ".join(html.unescape(raw_text).split())
+        if not normalized or normalized in seen:
+            continue
+        if len(normalized) > 160 and any(token in normalized for token in ["全国 推荐", "Vertical scroll bar"]):
+            continue
+        seen.add(normalized)
+        texts.append(normalized)
+    return texts
+
+
+def _combine_system_message_date_tokens(texts: list[str]) -> list[str]:
+    combined: list[str] = []
+    index = 0
+    while index < len(texts):
+        if (
+            index + 1 < len(texts)
+            and re.fullmatch(r"\d{2}-\d{2}", texts[index])
+            and re.fullmatch(r"\d{2}:\d{2}", texts[index + 1])
+        ):
+            combined.append(f"{texts[index]} {texts[index + 1]}")
+            index += 2
+            continue
+        combined.append(texts[index])
+        index += 1
+    return combined
+
+
+def _looks_like_system_message_value(text: str) -> bool:
+    if not text or text in SYSTEM_MESSAGE_SKIP_TEXTS:
+        return False
+    if "条未读" in text or "Vertical scroll bar" in text or "Horizontal scroll bar" in text:
+        return False
+    return True
+
+
 def _extract_title(texts: list[str]) -> str | None:
     for text in texts:
         if _looks_like_title(text):
@@ -3035,6 +3172,10 @@ def _looks_like_title(text: str) -> bool:
 
 def _contains_detail_meta(text: str) -> bool:
     return any(keyword in text for keyword in ("浏览", "评论", "留言", "图票"))
+
+
+def _tap_messages_tab(driver: WebDriver) -> bool:
+    return tap_accessibility_id_or_text_if_present(driver, "bottom-nav-messages", "消息", timeout=5)
 
 
 def _safe_page_source(driver: WebDriver) -> str:
