@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 
 from appium.webdriver.webdriver import WebDriver
+from appium.webdriver.common.appiumby import AppiumBy
+from selenium.common.exceptions import NoSuchElementException, WebDriverException
 
 from velowind_appium.actions import safe_back, tap_accessibility_id_or_text_if_present, tap_text_if_present
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
@@ -82,7 +85,7 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
     tap_text_if_present(driver, "同意", timeout=1)
 
     def _go_home():
-        return _tap_home_tab(driver, timeout=5)
+        return _tap_home_tab(driver, timeout=5) or _tap_home_tab_by_coordinate(driver)
 
     def _wait_home():
         if _home_visible(driver):
@@ -242,6 +245,8 @@ def _home_or_login_visible(driver: WebDriver) -> bool:
         return False
     if any(text in page_source for text in HOME_BLOCKING_TEXTS):
         return False
+    if all(text in page_source for text in ["笔记", "活动", "消息", "我的"]):
+        return True
     return any(text in page_source for text in ["首页", "笔记", "全国", "推荐", "密码登录", "手机号登录", "请输入手机号"])
 
 
@@ -285,10 +290,58 @@ def _me_content_page_visible(page_source: str) -> bool:
 
 
 def _tap_home_tab(driver: WebDriver, timeout: int = 3) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android" and (
+        _tap_android_home_tab_text(driver) or _tap_android_home_tab_by_coordinate(driver)
+    ):
+        return True
     return (
         tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=timeout)
         or tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1)
     )
+
+
+def _tap_android_home_tab_text(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    for text in ["笔记", "首页"]:
+        for xpath in [
+            f'//android.widget.TextView[@text="{text}"]',
+            f'//android.view.ViewGroup[.//android.widget.TextView[@text="{text}"]]',
+        ]:
+            try:
+                element = driver.find_element(AppiumBy.XPATH, xpath)
+                if _tap_android_element_center(driver, element):
+                    return True
+                element.click()
+                return True
+            except (AttributeError, NoSuchElementException, WebDriverException):
+                continue
+    return False
+
+
+def _tap_android_element_center(driver: WebDriver, element) -> bool:
+    bounds = ""
+    try:
+        bounds = element.get_attribute("bounds") or ""
+    except (AttributeError, WebDriverException):
+        bounds = ""
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", bounds)
+    try:
+        if match:
+            left, top, right, bottom = (int(value) for value in match.groups())
+            x = (left + right) // 2
+            y = (top + bottom) // 2
+        else:
+            rect = element.rect
+            x = int(rect["x"] + rect["width"] / 2)
+            y = int(rect["y"] + rect["height"] / 2)
+        driver.execute_script("mobile: tap", {"x": x, "y": y})
+        _android_adb_tap(driver, x, y)
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
 
 
 def _android_launcher_visible(driver: WebDriver) -> bool:
@@ -299,6 +352,45 @@ def _android_launcher_visible(driver: WebDriver) -> bool:
     return "com.google.android.apps.nexuslauncher" in page_source
 
 
+def _tap_android_home_tab_by_coordinate(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    try:
+        rect = driver.get_window_rect()
+        x = int(rect["width"] * 0.10)
+        y = int(rect["height"] * 0.94)
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": x,
+                "y": y,
+            },
+        )
+        _android_adb_tap(driver, x, y)
+        return True
+    except Exception:
+        return False
+
+
+def _android_adb_tap(driver: WebDriver, x: int, y: int) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    udid = str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+    if not udid:
+        return False
+    try:
+        subprocess.run(
+            ["adb", "-s", udid, "shell", "input", "tap", str(x), str(y)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def _tap_home_tab_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
@@ -306,7 +398,7 @@ def _tap_home_tab_by_coordinate(driver: WebDriver) -> bool:
             "mobile: tap",
             {
                 "x": int(rect["width"] * 0.12),
-                "y": int(rect["height"] * 0.93),
+                "y": int(rect["height"] * 0.90),
             },
         )
         return True

@@ -13,6 +13,31 @@ def test_save_draft_dialog_is_visible_detects_prompt_text():
     assert draft_flow.save_draft_dialog_is_visible(page_source) is True
 
 
+def test_save_draft_dialog_is_visible_detects_android_prompt_buttons():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="是否将笔记保存至草稿箱吗?" />
+      <android.widget.TextView text="取消" />
+      <android.widget.TextView text="保存草稿" />
+    </hierarchy>
+    """
+
+    assert draft_flow.save_draft_dialog_is_visible(page_source) is True
+
+
+def test_inline_save_draft_action_is_visible_on_android_editor():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="发布笔记" />
+      <android.widget.TextView text="测试 - 草稿标题" />
+      <android.widget.TextView text="存草稿" />
+      <android.widget.TextView text="发布笔记" />
+    </hierarchy>
+    """
+
+    assert draft_flow.inline_save_draft_action_is_visible(page_source) is True
+
+
 def test_me_page_is_visible_detects_profile_text():
     page_source = """
     <AppiumAUT>

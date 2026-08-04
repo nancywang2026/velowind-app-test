@@ -214,6 +214,23 @@ def test_parse_android_detail_snapshot_extracts_text_and_bottom_counts():
     assert snapshot.bottom_action_counts == ["0", "0", "0"]
 
 
+def test_android_detail_visible_while_real_content_is_loading():
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="post-detail-banner-pager" />
+      <android.widget.TextView text="正在加载" />
+      <android.widget.TextView text="正在加载真实详情内容。" />
+    </hierarchy>
+    """
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return page_source
+
+    assert message_detail.message_detail_is_visible(FakeDriver()) is True
+
+
 def test_parse_android_detail_snapshot_reads_count_before_label():
     page_source = """
     <hierarchy>
@@ -327,6 +344,30 @@ def test_parse_detail_snapshot_extracts_title_counts_and_comments():
     assert snapshot.comments == ["用户A：不错，周末见"]
     assert snapshot.empty_comment_hint is None
     assert snapshot.bottom_action_counts == []
+
+
+def test_parse_detail_snapshot_extracts_android_comment_body():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="云南" bounds="[42,1331][220,1400]" />
+      <android.widget.TextView text="共 1 条评论" bounds="[42,1841][1238,1910]" />
+      <android.widget.TextView text="Nancy" bounds="[165,2121][292,2173]" />
+      <android.widget.TextView text="云南" bounds="[165,2190][300,2250]" />
+      <android.widget.TextView text="44 分钟前" bounds="[165,2280][320,2330]" />
+      <android.widget.TextView text="回复" bounds="[920,2280][980,2330]" />
+      <android.widget.TextView text="删除" bounds="[1020,2280][1080,2330]" />
+      <android.widget.TextView text="0" bounds="[1180,2280][1220,2330]" />
+      <android.widget.TextView text="Nancy" bounds="[150,2520][300,2600]" />
+      <android.widget.TextView text="1" bounds="[750,2520][790,2600]" />
+      <android.widget.TextView text="1" bounds="[930,2520][970,2600]" />
+      <android.widget.TextView text="1" bounds="[1110,2520][1150,2600]" />
+    </hierarchy>
+    """
+
+    snapshot = parse_detail_snapshot(page_source)
+
+    assert snapshot.comment_count == "1"
+    assert snapshot.comments == ["云南"]
 
 
 def test_parse_detail_snapshot_extracts_bottom_action_counts():
@@ -2165,6 +2206,65 @@ def test_choose_android_location_refinds_and_taps_row_center_after_keyboard_clos
     assert center_taps == [refreshed_result]
 
 
+def test_choose_android_location_falls_back_to_matching_result_row_when_text_taps_do_not_select(monkeypatch):
+    waits = iter([False, False, True])
+    visible_area_taps = []
+    center_taps = []
+    row_taps = []
+
+    class FakeElement:
+        def __init__(self, name, rect):
+            self._name = name
+            self.rect = rect
+
+        def get_attribute(self, attribute):
+            if attribute in {"text", "name", "label", "value"}:
+                return self._name
+            return None
+
+    title = FakeElement(
+        "长白山国家级自然保护区",
+        {"x": 203, "y": 541, "width": 835, "height": 58},
+    )
+    row = FakeElement("", {"x": 161, "y": 509, "width": 919, "height": 185})
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, xpath):
+            if (
+                by == message_detail.AppiumBy.XPATH
+                and 'contains(@text, "长白山国家级自然保护区")' in xpath
+                and "ancestor::android.view.ViewGroup" in xpath
+            ):
+                return row
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_find_location_result_elements", lambda driver: [title])
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_location_result",
+        lambda driver, element: visible_area_taps.append(element) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_element_center",
+        lambda driver, element: center_taps.append(element) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_rect_center",
+        lambda driver, rect: row_taps.append(rect) or True,
+    )
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: next(waits))
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "标记地点 搜索地点 长白山")
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert visible_area_taps == [title]
+    assert center_taps == [title]
+    assert row_taps == [{"x": 161.0, "y": 509.0, "width": 919.0, "height": 185.0}]
+
+
 def test_location_picker_visible_ignores_collapsed_unselected_row():
     page_source = 'name="不标记地点" label="不标记地点" enabled="true" visible="true"'
 
@@ -2269,6 +2369,44 @@ def test_search_note_location_keeps_android_picker_open(monkeypatch):
 
     assert message_detail._search_note_location_from_picker(FakeDriver(), "云南洱海") is True
     assert events == ["click", "clear", ("type", "云南洱海")]
+
+
+def test_search_note_location_waits_for_android_results_before_returning(monkeypatch):
+    events = []
+    result_batches = iter([[], [object()]])
+
+    class FakeElement:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def send_keys(self, value):
+            events.append(("type", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    def fake_wait_until(predicate, timeout):
+        events.append(("wait-results", timeout))
+        assert predicate() is False
+        assert predicate() is True
+        return True
+
+    monkeypatch.setattr(message_detail, "_find_location_search_input", lambda driver: FakeElement())
+    monkeypatch.setattr(message_detail, "_find_location_result_elements", lambda driver: next(result_batches))
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "标记地点 搜索地点 长白山 搜索中...")
+    monkeypatch.setattr(message_detail, "_wait_until", fake_wait_until)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    assert message_detail._search_note_location_from_picker(FakeDriver(), "长白山") is True
+    assert events == [
+        "click",
+        "clear",
+        ("type", "长白山"),
+        ("wait-results", 10),
+    ]
 
 
 def test_fill_note_location_skips_when_configured_to_not_mark_location(monkeypatch):

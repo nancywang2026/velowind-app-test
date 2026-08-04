@@ -486,7 +486,12 @@ def _search_region_drawer(driver: WebDriver, query: str) -> bool:
     ]:
         try:
             _replace_text(driver.find_element(AppiumBy.XPATH, xpath), query)
-            _dismiss_region_search_keyboard(driver)
+            _wait_until(lambda: query in _safe_page_source(driver), timeout=2)
+            capabilities = getattr(driver, "capabilities", {}) or {}
+            if str(capabilities.get("platformName", "")).lower() != "android":
+                _dismiss_region_search_keyboard(driver)
+            else:
+                time.sleep(0.5)
             return True
         except (NoSuchElementException, WebDriverException, AttributeError):
             continue
@@ -532,14 +537,29 @@ def _select_activity_region(driver: WebDriver, province: str, city: str) -> None
     if not _tap_form_field(driver, "选择所属省份", fallback_point=(111, 499)):
         return
     if not _wait_until(lambda: "搜索省份或城市" in _safe_page_source(driver), timeout=3):
-        _choose_specific_overlay_option(driver, _province_option_texts(province))
-        _fill_city(driver, city)
+        if _tap_android_field_container(driver, "选择所属省份") and _wait_until(
+            lambda: "搜索省份或城市" in _safe_page_source(driver),
+            timeout=3,
+        ):
+            pass
+        else:
+            _choose_specific_overlay_option(driver, _province_option_texts(province))
+            _fill_city(driver, city)
+            if _activity_region_selected(_safe_page_source(driver), province, city):
+                return
+            raise AssertionError(f"Unable to select activity region: {province} {city}")
+    if _select_region_from_search_results(driver, province, city):
         return
     if not _select_province_from_open_region_drawer(driver, province):
         raise AssertionError(f"Unable to select province from the activity region drawer: {province}")
     if not _select_city_from_open_region_drawer(driver, city):
         raise AssertionError(f"Unable to select city from the activity region drawer: {city}")
-    if not tap_text_if_present(driver, "确认地区", timeout=2):
+    if tap_text_if_present(driver, "确认地区", timeout=2):
+        return
+    if _tap_region_search_result(driver, province, city):
+        _wait_until(lambda: _activity_region_selected(_safe_page_source(driver), province, city), timeout=3)
+        return
+    if not _activity_region_selected(_safe_page_source(driver), province, city):
         raise AssertionError("Unable to confirm the activity region selection")
 
 
@@ -561,20 +581,122 @@ def _select_province_from_region_drawer(driver: WebDriver, province: str) -> boo
 
 
 def _select_province_from_open_region_drawer(driver: WebDriver, province: str) -> bool:
-    if _tap_region_option(driver, _province_option_texts(province), timeout=FAST_OPTIONAL_TAP_TIMEOUT):
+    option_texts = _province_option_texts(province)
+    if _tap_region_option(driver, option_texts, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
         return True
     if not _search_region_drawer(driver, _normalize_region_query(province)):
         return False
 
-    return _tap_region_option(driver, _province_option_texts(province), timeout=2)
+    _wait_until(lambda: any(text in _safe_page_source(driver) for text in option_texts), timeout=3)
+    return _tap_region_option(driver, option_texts, timeout=2)
 
 
 def _select_city_from_open_region_drawer(driver: WebDriver, city: str) -> bool:
-    if _tap_region_option(driver, _city_option_texts(city), timeout=FAST_OPTIONAL_TAP_TIMEOUT):
+    option_texts = _city_option_texts(city)
+    if _tap_region_option(driver, option_texts, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
         return True
-    if not _wait_until(lambda: any(text in _safe_page_source(driver) for text in _city_option_texts(city)), timeout=3):
+    if not _wait_until(lambda: any(text in _safe_page_source(driver) for text in option_texts), timeout=3):
         _search_region_drawer(driver, _normalize_region_query(city))
-    return _tap_region_option(driver, _city_option_texts(city), timeout=2)
+        _wait_until(lambda: any(text in _safe_page_source(driver) for text in option_texts), timeout=3)
+    return _tap_region_option(driver, option_texts, timeout=2)
+
+
+def _select_region_from_search_results(driver: WebDriver, province: str, city: str) -> bool:
+    if not _search_region_drawer(driver, _normalize_region_query(city)):
+        return False
+    _wait_until(lambda: "搜索结果" in _safe_page_source(driver), timeout=3)
+    if not _tap_region_search_result(driver, province, city):
+        return False
+    return _wait_until(lambda: _activity_region_selected(_safe_page_source(driver), province, city), timeout=3)
+
+
+def _tap_android_field_container(driver: WebDriver, text: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    for xpath in [
+        f'//*[contains(@text, "{text}")]/ancestor::android.view.ViewGroup[1]',
+        f'//*[contains(@text, "{text}")]/parent::android.view.ViewGroup',
+    ]:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            rect = element.rect
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": rect["x"] + rect["width"] * 0.88,
+                    "y": rect["y"] + rect["height"] / 2,
+                },
+            )
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _tap_region_search_result(driver: WebDriver, province: str, city: str) -> bool:
+    page_source = _safe_page_source(driver)
+    if "搜索结果" not in page_source:
+        return False
+
+    province_candidates = _province_option_texts(province)
+    city_candidates = _city_option_texts(city)
+    for province_text in province_candidates:
+        for city_text in city_candidates:
+            for xpath in [
+                (
+                    f'//*[contains(@text, "{province_text}") and contains(@text, "{city_text}")]'
+                    f' | //*[contains(@name, "{province_text}") and contains(@name, "{city_text}")]'
+                    f' | //*[contains(@label, "{province_text}") and contains(@label, "{city_text}")]'
+                    f' | //*[contains(@value, "{province_text}") and contains(@value, "{city_text}")]'
+                ),
+                (
+                    f'//*[contains(@text, "{city_text}")]/following::*[contains(@text, "{province_text}")][1]'
+                    f' | //*[contains(@name, "{city_text}")]/following::*[contains(@name, "{province_text}")][1]'
+                    f' | //*[contains(@label, "{city_text}")]/following::*[contains(@label, "{province_text}")][1]'
+                    f' | //*[contains(@value, "{city_text}")]/following::*[contains(@value, "{province_text}")][1]'
+                ),
+            ]:
+                try:
+                    _tap_region_result_element(driver, driver.find_element(AppiumBy.XPATH, xpath))
+                    return True
+                except (NoSuchElementException, WebDriverException, AttributeError):
+                    continue
+            for xpath in [
+                f'//*[contains(@text, "{city_text}")]/ancestor::android.view.ViewGroup[1]',
+                f'//*[contains(@text, "{province_text}")]/ancestor::android.view.ViewGroup[1]',
+                f'//*[contains(@name, "{city_text}")]/ancestor::XCUIElementTypeOther[1]',
+                f'//*[contains(@label, "{city_text}")]/ancestor::XCUIElementTypeOther[1]',
+                f'//*[contains(@value, "{city_text}")]/ancestor::XCUIElementTypeOther[1]',
+            ]:
+                try:
+                    _tap_region_result_element(driver, driver.find_element(AppiumBy.XPATH, xpath))
+                    return True
+                except (NoSuchElementException, WebDriverException, AttributeError):
+                    continue
+    return False
+
+
+def _tap_region_result_element(driver: WebDriver, element) -> None:
+    rect = element.rect
+    driver.execute_script(
+        "mobile: tap",
+        {
+            "x": rect["x"] + rect["width"] * 0.92,
+            "y": rect["y"] + rect["height"] / 2,
+        },
+    )
+
+
+def _activity_region_selected(page_source: str, province: str, city: str) -> bool:
+    if not page_source:
+        return False
+    normalized_source = html.unescape(page_source)
+    if "选择地区" in normalized_source or "搜索省份或城市" in normalized_source:
+        return False
+    return any(text in normalized_source for text in _province_option_texts(province)) and any(
+        text in normalized_source for text in _city_option_texts(city)
+    )
 
 
 def _tap_region_option(driver: WebDriver, texts: list[str], timeout: int = 2) -> bool:
@@ -1746,7 +1868,7 @@ def _tap_submit_button_center(driver: WebDriver) -> bool:
     try:
         elements = driver.find_elements(
             AppiumBy.XPATH,
-            '//*[@name="提交审核" or @label="提交审核" or @value="提交审核"]',
+            '//*[@text="提交审核" or @name="提交审核" or @label="提交审核" or @value="提交审核"]',
         )
     except (AttributeError, WebDriverException):
         return False

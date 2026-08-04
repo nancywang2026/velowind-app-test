@@ -239,6 +239,38 @@ def test_build_android_capabilities_uses_installed_app_when_no_apk(monkeypatch):
     assert capabilities["appium:forceAppLaunch"] is True
 
 
+def test_build_android_capabilities_can_skip_device_initialization(monkeypatch):
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-android-appium.yaml")
+    monkeypatch.setenv("VW_ANDROID_UDID", "YHK7EERSGAPZX87X")
+    monkeypatch.setenv("VW_ANDROID_APP", "/tmp/velowind.apk")
+    monkeypatch.setenv("VW_ANDROID_SKIP_DEVICE_INITIALIZATION", "1")
+
+    capabilities = build_android_capabilities(load_android_config())
+
+    assert capabilities["appium:skipDeviceInitialization"] is True
+
+
+def test_load_android_config_reads_target_skip_device_initialization(monkeypatch, tmp_path):
+    config_file = tmp_path / "android-appium.yaml"
+    config_file.write_text(
+        """
+target: physical
+app_package: com.velowind.rider
+app_activity: .MainActivity
+physical:
+  udid: YHK7EERSGAPZX87X
+  skip_device_initialization: true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("VW_ANDROID_SKIP_DEVICE_INITIALIZATION", raising=False)
+
+    capabilities = build_android_capabilities(load_android_config())
+
+    assert capabilities["appium:skipDeviceInitialization"] is True
+
+
 def test_build_android_capabilities_requires_udid(monkeypatch):
     monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-android-appium.yaml")
     monkeypatch.delenv("VW_ANDROID_UDID", raising=False)

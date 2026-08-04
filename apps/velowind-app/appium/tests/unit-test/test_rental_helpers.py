@@ -1,5 +1,6 @@
 from velowind_appium.modules import rental_orders
 from velowind_appium.modules import rental_home_entry
+from velowind_appium.modules import rental_order_confirm
 from velowind_appium.modules import rental_vehicle_list
 from velowind_appium.modules.rental_common import visible_text_hit_points, visible_text_hit_points_containing
 
@@ -54,6 +55,26 @@ def test_extract_rental_order_summary_from_android_text_nodes():
     assert summary.payment_incomplete is True
     assert summary.repay_available is True
     assert summary.remaining_payment_time == "09:31"
+
+
+def test_submit_rental_order_uses_remaining_timeout_for_payment_wait(monkeypatch):
+    waits = []
+
+    monkeypatch.setattr(rental_order_confirm, "wait_for_rental_order_confirm_page", lambda driver, timeout: None)
+    monkeypatch.setattr(
+        rental_order_confirm,
+        "tap_first_available",
+        lambda driver, accessibility_ids, texts, timeout: True,
+    )
+    monkeypatch.setattr(
+        rental_order_confirm,
+        "wait_for_rental_payment_center_page",
+        lambda driver, timeout: waits.append(timeout),
+    )
+
+    rental_order_confirm.submit_rental_order(object(), timeout=25)
+
+    assert waits and waits[0] > 20
 
 
 def test_summary_is_complete_requires_all_order_fields():

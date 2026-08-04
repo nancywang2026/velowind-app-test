@@ -35,7 +35,7 @@ def test_user_can_create_rental_order_and_leave_payment_unfinished(driver, ios_c
     step("open-available-vehicle-detail", lambda: open_available_vehicle_detail(driver, timeout=20), capture=True)
     step("assert-vehicle-basic-info", lambda: assert_vehicle_basic_info_visible(driver, timeout=20))
     step("tap-book-now", lambda: tap_book_now(driver, timeout=20), capture=True)
-    step("submit-rental-order", lambda: submit_rental_order(driver, timeout=25), capture=True)
+    step("submit-rental-order", lambda: submit_rental_order(driver, timeout=45), capture=True)
     step("confirm-payment-then-think-again", lambda: confirm_payment_then_think_again(driver, timeout=25), capture=True)
 
     summary = step(

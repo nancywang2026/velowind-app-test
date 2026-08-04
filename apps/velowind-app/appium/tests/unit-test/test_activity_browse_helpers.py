@@ -146,6 +146,45 @@ def test_activity_text_search_result_texts_returns_visible_keyword_cards_only():
     ]
 
 
+def test_open_activity_search_coordinate_fallback_targets_android_header_icon(monkeypatch):
+    events = []
+    page_sources = iter(["activity-feed", "activity-feed", "activity-search"])
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def get_window_rect(self):
+            return {"width": 1080, "height": 2400}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(activity_browse, "_activity_search_visible", lambda source: source == "activity-search")
+    monkeypatch.setattr(activity_browse, "_safe_page_source", lambda driver: next(page_sources, "activity-search"))
+
+    activity_browse.open_activity_search(FakeDriver(), timeout=0.1)
+
+    assert events == [("mobile: tap", {"x": 1004, "y": 160})]
+
+
+def test_tap_activity_search_submit_falls_back_to_keyboard_search(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+            return False
+
+        def hide_keyboard(self, **kwargs):
+            events.append(("hide_keyboard", kwargs))
+
+    monkeypatch.setattr(activity_browse, "tap_text_if_present", lambda *args, **kwargs: False)
+    monkeypatch.setattr(activity_browse, "tap_by_coordinate_ratios", lambda *args, **kwargs: False)
+
+    assert activity_browse._tap_activity_search_submit(FakeDriver()) is True
+    assert ("hide_keyboard", {"key_name": "Search"}) in events
+
+
 def test_parse_activity_detail_snapshot_extracts_visible_route_fields():
     page_source = """
     <AppiumAUT>
@@ -167,6 +206,59 @@ def test_parse_activity_detail_snapshot_extracts_visible_route_fields():
     assert snapshot.title == "张家界大环线2天1晚"
     assert snapshot.location == "浙江省·张家界市"
     assert snapshot.publisher == "Nancy"
+    assert snapshot.is_basic_detail_complete()
+
+
+def test_activity_detail_visible_while_android_content_is_loading():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="活动详情" />
+      <android.widget.ProgressBar text="0.0" />
+      <android.widget.FrameLayout resource-id="activity-discovery-v2-filter-pager" />
+    </hierarchy>
+    """
+
+    assert activity_browse.activity_detail_is_visible(page_source) is True
+
+
+def test_read_activity_detail_waits_past_android_loading_shell(monkeypatch):
+    states = [
+        """
+        <hierarchy>
+          <android.widget.TextView text="活动详情" />
+          <android.widget.ProgressBar text="0.0" />
+        </hierarchy>
+        """,
+        """
+        <hierarchy>
+          <android.widget.FrameLayout resource-id="activity-route-detail-v3-hero-carousel" />
+          <android.widget.ImageView resource-id="image" />
+          <android.widget.TextView text="张家界大环线2天1晚" bounds="[0,220][500,280]" />
+          <android.widget.TextView text="浙江省·张家界市" />
+          <android.widget.TextView text="Nancy" />
+          <android.widget.TextView text="路线主理人" />
+          <android.widget.TextView text="总里程" />
+          <android.widget.TextView text="参考时长" />
+          <android.widget.TextView text="风险等级" />
+          <android.widget.TextView text="风景标签" />
+          <android.widget.TextView text="沿途景点" />
+          <android.widget.TextView text="路线说明" />
+          <android.widget.TextView text="活动概览" />
+          <android.widget.TextView text="活动评论" />
+          <android.widget.TextView text="请选择场次" />
+        </hierarchy>
+        """,
+    ]
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return states.pop(0) if len(states) > 1 else states[0]
+
+    monkeypatch.setattr(activity_browse.time, "sleep", lambda seconds: None)
+
+    snapshot = activity_browse.read_activity_detail_snapshot(FakeDriver(), timeout=3)
+
     assert snapshot.is_basic_detail_complete()
 
 
@@ -213,10 +305,28 @@ def test_parse_activity_signup_snapshot_extracts_registration_fields():
     assert snapshot.is_basic_signup_complete()
 
 
+def test_parse_activity_signup_snapshot_accepts_self_registration_summary():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="活动报名" visible="true" />
+      <XCUIElementTypeOther name="8月05日 周三 - 8月05日 周三 09:50 - 18:50 集合地点 张家界国家森林公园 报名截止 8月04日 周二 18:45 活动名额 剩余 19 / 20 服务配置 领骑 补给车 保险" visible="true" />
+      <XCUIElementTypeOther name="报名信息 本人" visible="true" />
+      <XCUIElementTypeOther name="报名规则 取消规则 无罚金 报名说明 请确认报名信息真实有效，提交后将按活动规则处理；如涉及支付或审核，请留意后续状态变化。" visible="true" />
+      <XCUIElementTypeOther name="报名费用 ¥0.01 / 人 提交订单" visible="true" />
+    </AppiumAUT>
+    """
+
+    snapshot = activity_browse.parse_activity_signup_snapshot(page_source)
+
+    assert snapshot.registration_fields_visible
+    assert snapshot.self_registration_selected
+    assert snapshot.is_basic_signup_complete()
+
+
 def test_parse_activity_signup_snapshot_extracts_entered_identity_fields():
     page_source = """
     <AppiumAUT>
-      <XCUIElementTypeOther name="活动报名 报名信息 姓名 自动化报名测试 证件类型 身份证 证件号码 110101199001011237 通知手机号 13800138000 报名规则 取消规则 报名说明 报名费用 ¥0.01 / 人 提交订单" visible="true" />
+      <XCUIElementTypeOther name="活动报名 报名信息 姓名 自动化报名测试 证件类型 身份证 证件号码 110000199001010013 通知手机号 13800138000 报名规则 取消规则 报名说明 报名费用 ¥0.01 / 人 提交订单" visible="true" />
     </AppiumAUT>
     """
     draft = activity_browse.build_activity_signup_draft()
@@ -236,7 +346,7 @@ def test_parse_activity_signup_snapshot_prefers_text_field_values_over_container
       <XCUIElementTypeOther name="报名信息 姓名 证件类型 身份证 证件号码 通知手机号" visible="true" />
       <XCUIElementTypeTextField value="自动化报名测试" visible="true" placeholderValue="请输入报名人姓名" />
       <XCUIElementTypeStaticText name="身份证" label="身份证" value="身份证" visible="true" />
-      <XCUIElementTypeTextField value="110101199001011237" visible="true" placeholderValue="请输入证件号码" />
+      <XCUIElementTypeTextField value="110000199001010013" visible="true" placeholderValue="请输入证件号码" />
       <XCUIElementTypeTextField value="13800138000" visible="true" placeholderValue="请输入通知手机号" />
       <XCUIElementTypeOther name="报名规则 取消规则 报名说明 报名费用 ¥0.01 / 人 提交订单" visible="true" />
     </AppiumAUT>
@@ -295,6 +405,34 @@ def test_fill_activity_signup_form_enters_draft_and_waits_for_echo(monkeypatch):
         ("field", "请输入证件号码", draft.certificate_number),
         ("field", "请输入通知手机号", draft.phone),
     ]
+
+
+def test_fill_activity_signup_form_accepts_selected_self_registration(monkeypatch):
+    draft = activity_browse.build_activity_signup_draft()
+    calls = []
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return (
+                "活动报名 8月05日 周三 - 8月05日 周三 09:50 - 18:50 "
+                "集合地点 张家界国家森林公园 活动名额 剩余 19 / 20 "
+                "服务配置 领骑 补给车 保险 报名信息 本人 "
+                "报名规则 取消规则 报名说明 报名费用 ¥0.01 / 人 提交订单"
+            )
+
+    monkeypatch.setattr(
+        activity_browse,
+        "_fill_signup_text_field_by_placeholder",
+        lambda *args, **kwargs: calls.append(args) or False,
+        raising=False,
+    )
+
+    snapshot = activity_browse.fill_activity_signup_form(FakeDriver(), draft, timeout=3)
+
+    assert snapshot.self_registration_selected
+    assert snapshot.is_basic_signup_complete()
+    assert calls == []
 
 
 def test_parse_activity_order_snapshot_detects_payment_center():

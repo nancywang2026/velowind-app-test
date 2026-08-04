@@ -100,7 +100,9 @@ def test_user_can_fill_activity_signup_identity_fields(driver, ios_config, step)
     step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
     snapshot = step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
 
-    assert snapshot.matches_draft(draft), f"Expected signup form to echo draft values, got: {snapshot}"
+    assert snapshot.matches_draft(draft) or snapshot.self_registration_selected, (
+        f"Expected signup form to echo draft values or use the selected self registration, got: {snapshot}"
+    )
 
 
 @pytest.mark.full

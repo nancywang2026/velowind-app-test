@@ -33,6 +33,7 @@ ACTIVITY_SEARCH_SUBMIT_TEXTS = ["搜索", "Search"]
 ACTIVITY_DETAIL_READY_IDS = ["activity-route-detail-v3-hero-carousel", "activity-detail-page"]
 ACTIVITY_SIGNUP_READY_TEXTS = ["活动报名", "报名信息", "提交订单"]
 ACTIVITY_ORDER_PAYMENT_TEXTS = ["支付中心", "确认支付", "订单支付", "去支付", "立即支付", "待支付"]
+VIRTUAL_SIGNUP_ID_CARD_NUMBER = "110000199001010013"
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,7 @@ class ActivitySignupSnapshot:
     certificate_type: str | None = None
     certificate_number: str | None = None
     phone: str | None = None
+    self_registration_selected: bool = False
 
     def is_basic_signup_complete(self) -> bool:
         return all(
@@ -169,7 +171,7 @@ def build_activity_signup_draft() -> ActivitySignupDraft:
     return ActivitySignupDraft(
         name="自动化报名测试",
         certificate_type="身份证",
-        certificate_number="110101199001011237",
+        certificate_number=VIRTUAL_SIGNUP_ID_CARD_NUMBER,
         phone="13800138000",
     )
 
@@ -238,11 +240,13 @@ def activity_feed_all_results_match_category(page_source: str, category_name: st
 def open_activity_search(driver: WebDriver, timeout: int = 10) -> None:
     if _activity_search_visible(_safe_page_source(driver)):
         return
+    if _tap_activity_search_entry_by_coordinate(driver):
+        return
     for accessibility_id in ACTIVITY_SEARCH_ENTRY_IDS:
         if tap_if_present(driver, accessibility_id, timeout=1):
             break
     else:
-        tap_by_coordinate_ratios(driver, [(0.925, 0.103), (0.91, 0.10)])
+        _tap_activity_search_entry_by_coordinate(driver)
     if not _wait_until(lambda: _activity_search_visible(_safe_page_source(driver)), timeout=timeout):
         raise AssertionError("Activity search page did not appear")
 
@@ -294,7 +298,7 @@ def open_first_activity_detail(driver: WebDriver, timeout: int = 20) -> None:
 def activity_detail_is_visible(page_source: str) -> bool:
     return any(marker in page_source for marker in ACTIVITY_DETAIL_READY_IDS) or (
         "路线说明" in page_source and "确认报名" in page_source
-    )
+    ) or _android_activity_detail_loading_shell_visible(page_source)
 
 
 def browse_activity_detail(driver: WebDriver, timeout: int = 25) -> ActivityDetailSnapshot:
@@ -352,6 +356,10 @@ def fill_activity_signup_form(
 ) -> ActivitySignupSnapshot:
     if not activity_signup_is_visible(_safe_page_source(driver)):
         raise AssertionError("Activity signup page is not visible")
+
+    snapshot = parse_activity_signup_snapshot(_safe_page_source(driver))
+    if snapshot.self_registration_selected and snapshot.is_basic_signup_complete():
+        return snapshot
 
     steps = [
         lambda: _fill_signup_text_field_by_placeholder(driver, "请输入报名人姓名", draft.name),
@@ -458,9 +466,9 @@ def parse_activity_signup_snapshot(page_source: str) -> ActivitySignupSnapshot:
         schedule_visible=bool(re.search(r"\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}", joined_visible_text)),
         quota_visible=all(text in joined_visible_text for text in ["活动名额", "剩余"]),
         services_visible="服务配置" in joined_visible_text,
-        registration_fields_visible=all(
-            text in joined_visible_text
-            for text in ["报名信息", "姓名", "证件类型", "证件号码", "通知手机号"]
+        registration_fields_visible=(
+            all(text in joined_visible_text for text in ["报名信息", "姓名", "证件类型", "证件号码", "通知手机号"])
+            or all(text in joined_visible_text for text in ["报名信息", "本人"])
         ),
         rules_visible=all(text in joined_visible_text for text in ["报名规则", "取消规则", "报名说明"]),
         fee_visible="报名费用" in joined_visible_text and "¥" in joined_visible_text,
@@ -472,13 +480,27 @@ def parse_activity_signup_snapshot(page_source: str) -> ActivitySignupSnapshot:
         or _extract_signup_field_value(joined_visible_text, "证件号码", ["通知手机号"]),
         phone=_extract_signup_input_value_by_placeholder(page_source, "请输入通知手机号")
         or _extract_signup_field_value(joined_visible_text, "通知手机号", ["报名规则", "取消规则", "报名说明"]),
+        self_registration_selected=all(text in joined_visible_text for text in ["报名信息", "本人"]),
     )
 
 
 def read_activity_detail_snapshot(driver: WebDriver, timeout: int = 20) -> ActivityDetailSnapshot:
-    if not _wait_until(lambda: activity_detail_is_visible(_safe_page_source(driver)), timeout=timeout):
-        raise AssertionError("Activity detail page did not become visible")
-    return parse_activity_detail_snapshot(_safe_page_source(driver))
+    end_at = time.monotonic() + timeout
+    last_snapshot = ActivityDetailSnapshot(None, None, None, False, False, False, False, False, False)
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if not page_source:
+            time.sleep(0.2)
+            continue
+        last_snapshot = parse_activity_detail_snapshot(page_source)
+        if last_snapshot.is_basic_detail_complete():
+            return last_snapshot
+        if activity_detail_is_visible(page_source) and not _android_activity_detail_loading_shell_visible(page_source):
+            return last_snapshot
+        time.sleep(0.2)
+    if last_snapshot.title or last_snapshot.location:
+        return last_snapshot
+    raise AssertionError("Activity detail page did not become visible")
 
 
 def parse_activity_detail_snapshot(page_source: str) -> ActivityDetailSnapshot:
@@ -496,6 +518,10 @@ def parse_activity_detail_snapshot(page_source: str) -> ActivityDetailSnapshot:
         comments_visible="活动评论" in joined_visible_text or "前往评论页查看真实活动评论" in joined_visible_text,
         sessions_visible=any(text in joined_visible_text for text in ["请选择场次", "场次信息", "集合地点"]),
     )
+
+
+def _android_activity_detail_loading_shell_visible(page_source: str) -> bool:
+    return "活动详情" in page_source and "android.widget.ProgressBar" in page_source
 
 
 def parse_activity_order_snapshot(page_source: str) -> ActivityOrderSnapshot:
@@ -661,6 +687,28 @@ def _activity_search_visible(page_source: str) -> bool:
     return "请输入内容" in page_source and "搜索" in page_source
 
 
+def _tap_activity_search_entry_by_coordinate(driver: WebDriver) -> bool:
+    try:
+        rect = driver.get_window_rect()
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        platform = str(capabilities.get("platformName", "")).lower()
+        ratios = (
+            [(0.93, 0.067), (0.91, 0.072), (0.95, 0.067), (0.925, 0.06)]
+            if platform == "android"
+            else [(0.925, 0.103), (0.91, 0.10)]
+        )
+        for x_ratio, y_ratio in ratios:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": int(rect["width"] * x_ratio), "y": int(rect["height"] * y_ratio)},
+            )
+            if _wait_until(lambda: _activity_search_visible(_safe_page_source(driver)), timeout=0.8):
+                return True
+        return False
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
 def _find_activity_search_input(driver: WebDriver, timeout: int = 10):
     end_at = time.monotonic() + timeout
     last_error: Exception | None = None
@@ -710,6 +758,8 @@ def _tap_activity_search_submit(driver: WebDriver) -> bool:
     for text in ACTIVITY_SEARCH_SUBMIT_TEXTS:
         if tap_text_if_present(driver, text, timeout=1):
             return True
+    if _tap_activity_keyboard_search(driver):
+        return True
     if tap_by_coordinate_ratios(driver, [(0.86, 0.103), (0.84, 0.10)]):
         return True
     try:
@@ -717,6 +767,20 @@ def _tap_activity_search_submit(driver: WebDriver) -> bool:
         return True
     except WebDriverException:
         return False
+
+
+def _tap_activity_keyboard_search(driver: WebDriver) -> bool:
+    for kwargs in [
+        {"key_name": "Search"},
+        {"key_name": "Return"},
+        {"strategy": "pressKey", "key_name": "Search"},
+    ]:
+        try:
+            driver.hide_keyboard(**kwargs)
+            return True
+        except WebDriverException:
+            continue
+    return False
 
 
 def _tap_confirm_signup(driver: WebDriver) -> bool:
