@@ -1272,6 +1272,40 @@ def test_tap_session_location_field_requires_location_modal_to_open(monkeypatch)
     assert ("tap-text", "点击选择或搜索集合地点") in events
 
 
+def test_tap_session_location_field_uses_android_bounds_when_container_tap_fails(monkeypatch):
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView class="android.widget.TextView" text="集合地点" displayed="true" bounds="[81,1420][250,1470]" />
+      <android.view.ViewGroup class="android.view.ViewGroup" displayed="true" bounds="[81,1490][1199,1628]">
+        <android.widget.TextView class="android.widget.TextView" text="点击选择或搜索集合地点" displayed="true" bounds="[110,1534][690,1584]" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+    driver = FakeDriver(page_source, width=1280, height=2856)
+    checks = {"value": 0}
+
+    def fake_page_source(received):
+        checks["value"] += 1
+        if checks["value"] >= 2:
+            return '搜索地点 <android.widget.EditText text="搜索地点" />'
+        return received.page_source
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", fake_page_source)
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda *args, **kwargs: False)
+    monkeypatch.setattr(activity_sessions, "_tap_session_location_container", lambda *args, **kwargs: False)
+
+    assert activity_sessions._tap_session_location_field(
+        driver,
+        ["集合地点"],
+        ["点击选择或搜索集合地点"],
+    ) is True
+
+    assert driver.scripts == [
+        ("mobile: clickGesture", {"x": 400, "y": 1559}),
+    ]
+
+
 def test_choose_session_location_waits_for_picker_to_close_without_pressing_back(monkeypatch):
     driver = FakeDriver("集合地点 搜索地点 张家界景区")
     events = []

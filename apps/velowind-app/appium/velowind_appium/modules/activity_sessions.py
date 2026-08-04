@@ -259,6 +259,11 @@ def _tap_session_location_field(driver: WebDriver, keywords: list[str], placehol
             if _session_location_modal_visible(_safe_page_source(driver)):
                 return True
 
+    if _tap_android_session_location_field_by_source(driver, keywords + placeholders):
+        time.sleep(0.5)
+        if _session_location_modal_visible(_safe_page_source(driver)):
+            return True
+
     try:
         rect = driver.get_window_rect()
         driver.execute_script(
@@ -272,6 +277,80 @@ def _tap_session_location_field(driver: WebDriver, keywords: list[str], placehol
         return _session_location_modal_visible(_safe_page_source(driver))
     except (WebDriverException, KeyError, TypeError, AttributeError):
         return False
+
+
+def _tap_android_session_location_field_by_source(driver: WebDriver, keywords: list[str]) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<android." not in page_source:
+        return False
+    point = _android_session_location_field_point(page_source, keywords)
+    if point is None:
+        return False
+    x, y = point
+    try:
+        driver.execute_script("mobile: clickGesture", {"x": x, "y": y})
+        return True
+    except (WebDriverException, AttributeError):
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+            return True
+        except (WebDriverException, AttributeError):
+            return False
+
+
+def _android_session_location_field_point(page_source: str, keywords: list[str]) -> tuple[int, int] | None:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    elements = list(root.iter())
+    for index, element in enumerate(elements):
+        attributes = element.attrib
+        if attributes.get("displayed") == "false":
+            continue
+        label_text = attributes.get("text", "")
+        if not any(keyword and keyword in label_text for keyword in keywords):
+            continue
+        label_bounds = _android_bounds_rect(attributes.get("bounds", ""))
+        if label_bounds is None:
+            continue
+        value_point = _next_android_location_value_point(elements[index + 1 :], label_bounds)
+        if value_point is not None:
+            return value_point
+    return None
+
+
+def _next_android_location_value_point(
+    elements: list[ElementTree.Element],
+    label_bounds: tuple[int, int, int, int],
+) -> tuple[int, int] | None:
+    label_left, _label_top, label_right, label_bottom = label_bounds
+    label_center_x = (label_left + label_right) // 2
+    container_fallback: tuple[int, int] | None = None
+    for element in elements:
+        attributes = element.attrib
+        if attributes.get("displayed") == "false":
+            continue
+        bounds = _android_bounds_rect(attributes.get("bounds", ""))
+        if bounds is None:
+            continue
+        left, top, right, bottom = bounds
+        width = right - left
+        height = bottom - top
+        if top < label_bottom or top - label_bottom > 140:
+            continue
+        if width < 220 or height < 40 or height > 180:
+            continue
+        if right < label_center_x:
+            continue
+        text = attributes.get("text", "")
+        if text and any(token in text for token in ["点击选择", "搜索集合地点", "搜索地点"]):
+            return (left + right) // 2, (top + bottom) // 2
+        element_class = attributes.get("class", "")
+        if container_fallback is None and (element_class == "android.view.ViewGroup" or element.tag.endswith("ViewGroup")):
+            container_fallback = (left + right) // 2, (top + bottom) // 2
+    return container_fallback
 
 
 def _tap_session_location_container(driver: WebDriver, keyword: str) -> bool:

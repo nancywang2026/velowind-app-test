@@ -588,7 +588,14 @@ def test_select_activity_region_selects_province_then_city_in_region_drawer(monk
         return False
 
     monkeypatch.setattr(activity, "_tap_region_option", fake_tap_region_option)
-    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: events.append(("tap", text)) or text == "确认地区")
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap", text))
+        if text == "确认地区":
+            state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "tap_text_if_present", fake_tap_text)
 
     activity._select_activity_region(object(), "湖南", "张家界市")
 
@@ -633,7 +640,14 @@ def test_select_activity_region_waits_for_province_after_drawer_search(monkeypat
 
     monkeypatch.setattr(activity, "_search_region_drawer", fake_search_region_drawer)
     monkeypatch.setattr(activity, "_tap_region_option", fake_tap_region_option)
-    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: events.append(("tap", text)) or text == "确认地区")
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap", text))
+        if text == "确认地区":
+            state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "tap_text_if_present", fake_tap_text)
 
     activity._select_activity_region(object(), "湖南", "张家界市")
 
@@ -671,6 +685,175 @@ def test_select_activity_region_taps_search_result_when_confirm_button_is_absent
 
     assert any(event[0] == "mobile: tap" for event in events if isinstance(event, tuple))
     assert state["page"] == "发布活动 所属省份 湖南省 城市名称 张家界市"
+
+
+def test_tap_region_search_result_uses_android_xml_bounds_fallback(monkeypatch):
+    events = []
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="选择地区" displayed="true" bounds="[42,194][1007,256]" />
+      <android.widget.EditText text="张家界" hint="搜索省份或城市" displayed="true" bounds="[140,299][978,389]" />
+      <android.widget.TextView text="搜索结果" displayed="true" bounds="[42,474][981,536]" />
+      <android.view.ViewGroup bounds="[0,562][1050,712]" displayed="true">
+        <android.widget.TextView text="张家界" displayed="true" bounds="[42,580][936,639]" />
+        <android.widget.TextView text="湖南省 · 张家界市" displayed="true" bounds="[42,646][936,695]" />
+        <com.horcrux.svg.SvgView displayed="true" bounds="[955,611][1007,663]" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+        def find_element(self, _by, _xpath):
+            raise activity.NoSuchElementException("missing")
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(activity, "_android_adb_tap", lambda driver, x, y: events.append(("adb-tap", x, y)) or True)
+
+    assert activity._tap_region_search_result(FakeDriver(), "湖南", "张家界市") is True
+    assert ("adb-tap", 981, 637) in events
+
+
+def test_tap_region_search_result_prefers_semantic_android_result_row(monkeypatch):
+    events = []
+    state = {"page": "选择地区 搜索省份或城市 搜索结果 张家界 湖南省 · 张家界市"}
+
+    class FakeElement:
+        rect = {"x": 0, "y": 562, "width": 1050, "height": 150}
+
+        def click(self):
+            events.append("row-click")
+            state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+
+    class FakeDriver:
+        def find_element(self, _by, xpath):
+            events.append(("find", xpath))
+            if "ancestor::android.view.ViewGroup" in xpath and "湖南" in xpath and "张家界" in xpath:
+                return FakeElement()
+            raise activity.NoSuchElementException("missing")
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert activity._tap_region_search_result(FakeDriver(), "湖南", "张家界市") is True
+    assert events[-1] == "row-click"
+    assert not any(event[0] == "mobile: tap" for event in events if isinstance(event, tuple))
+
+
+def test_tap_region_search_result_continues_when_semantic_android_row_click_is_ignored(monkeypatch):
+    events = []
+    state = {"page": "选择地区 搜索省份或城市 搜索结果 张家界 湖南省 · 张家界市"}
+
+    class FakeRow:
+        rect = {"x": 0, "y": 562, "width": 1050, "height": 150}
+
+        def click(self):
+            events.append("row-click")
+
+    class FakeCity:
+        rect = {"x": 42, "y": 580, "width": 894, "height": 59}
+
+        def click(self):
+            events.append("city-click")
+            state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+
+    class FakeDriver:
+        def find_element(self, _by, xpath):
+            events.append(("find", xpath))
+            if "ancestor::android.view.ViewGroup" in xpath and "湖南" in xpath and "张家界" in xpath:
+                return FakeRow()
+            if 'android.widget.TextView[@text="张家界"]' in xpath:
+                return FakeCity()
+            raise activity.NoSuchElementException("missing")
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert activity._tap_region_search_result(FakeDriver(), "湖南", "张家界市") is True
+    assert "row-click" in events
+    assert ("find", '//android.widget.TextView[@text="张家界"]') in events
+    assert events[-1] == "city-click"
+
+
+def test_tap_region_search_result_taps_android_city_title_center_when_click_is_ignored(monkeypatch):
+    events = []
+    state = {"page": "选择地区 搜索省份或城市 搜索结果 张家界 湖南省 · 张家界市"}
+
+    class FakeElement:
+        rect = {"x": 42, "y": 580, "width": 894, "height": 59}
+
+        def click(self):
+            events.append("click")
+
+    class FakeDriver:
+        def find_element(self, _by, xpath):
+            events.append(("find", xpath))
+            if "ancestor::android.view.ViewGroup" in xpath or 'android.widget.TextView[@text="张家界"]' in xpath:
+                return FakeElement()
+            raise activity.NoSuchElementException("missing")
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+            if script == "mobile: tap" and payload == {"x": 489.0, "y": 609.5}:
+                state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity.time, "sleep", lambda _seconds: None)
+
+    assert activity._tap_region_search_result(FakeDriver(), "湖南", "张家界市") is True
+    assert ("mobile: tap", {"x": 489.0, "y": 609.5}) in events
+
+
+def test_tap_region_search_result_continues_to_android_adb_arrow_when_appium_tap_is_ignored(monkeypatch):
+    events = []
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="选择地区" displayed="true" bounds="[42,194][1007,256]" />
+      <android.widget.EditText text="张家界" hint="搜索省份或城市" displayed="true" bounds="[140,299][978,389]" />
+      <android.widget.TextView text="搜索结果" displayed="true" bounds="[42,474][981,536]" />
+      <android.view.ViewGroup bounds="[0,562][1050,712]" displayed="true">
+        <android.widget.TextView text="张家界" displayed="true" bounds="[42,580][936,639]" />
+        <android.widget.TextView text="湖南省 · 张家界市" displayed="true" bounds="[42,646][936,695]" />
+        <com.horcrux.svg.SvgView displayed="true" bounds="[955,611][1007,663]" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    class FakeElement:
+        rect = {"x": 0, "y": 562, "width": 1050, "height": 150}
+
+        def click(self):
+            events.append("click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+        def find_element(self, _by, xpath):
+            events.append(("find", xpath))
+            if "ancestor::android.view.ViewGroup" in xpath:
+                return FakeElement()
+            raise activity.NoSuchElementException("missing")
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(activity.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(activity, "_android_adb_tap", lambda driver, x, y: events.append(("adb-tap", x, y)) or True)
+
+    assert activity._tap_region_search_result(FakeDriver(), "湖南", "张家界市") is True
+    assert ("mobile: tap", {"x": 966.0, "y": 637.0}) in events
+    assert ("adb-tap", 981, 637) in events
 
 
 def test_activity_region_selected_rejects_open_search_drawer():
@@ -714,6 +897,168 @@ def test_select_activity_region_prefers_city_search_result(monkeypatch):
     assert not any(event[0] == "province" for event in events)
 
 
+def test_select_region_from_search_results_submits_android_keyboard_before_tapping(monkeypatch):
+    events = []
+    state = {"page": "选择地区 搜索省份或城市"}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+    def fake_search(driver, query):
+        events.append(("search", query))
+        state["page"] = "选择地区 搜索省份或城市 张家界"
+        return True
+
+    def fake_submit(driver):
+        events.append("enter")
+        state["page"] = "选择地区 搜索省份或城市 搜索结果 张家界 湖南省 · 张家界市"
+        return True
+
+    def fake_tap_result(driver, province, city):
+        events.append(("tap-result", province, city))
+        state["page"] = "发布活动 所属省份 湖南省 城市名称 张家界市"
+        return True
+
+    monkeypatch.setattr(activity, "_search_region_drawer", fake_search)
+    monkeypatch.setattr(activity, "_android_submit_region_search", fake_submit)
+    monkeypatch.setattr(activity, "_tap_region_search_result", fake_tap_result)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert activity._select_region_from_search_results(FakeDriver(), "湖南", "张家界市") is True
+    assert events == [
+        ("search", "张家界"),
+        "enter",
+        ("tap-result", "湖南", "张家界市"),
+    ]
+
+
+def test_select_activity_region_on_android_uses_ios_style_confirm_after_ignored_search_result(monkeypatch):
+    events = []
+    state = {"page": "选择地区 搜索省份或城市 搜索结果 张家界 湖南省 · 张家界市 确认地区"}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: events.append(("open", text)) or True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(activity, "_select_region_from_search_results", lambda driver, province, city: False)
+    monkeypatch.setattr(
+        activity,
+        "_tap_region_option",
+        lambda driver, texts, timeout=2: events.append(("option", tuple(texts))) or "张家界" in texts,
+    )
+
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap", text))
+        if text == "确认地区":
+            state["page"] = "发布活动 所属省份 湖南省 城市名称 张家界市"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "tap_text_if_present", fake_tap_text)
+
+    activity._select_activity_region(FakeDriver(), "湖南", "张家界市")
+
+    assert ("option", ("张家界市", "张家界")) in events
+    assert ("tap", "确认地区") in events
+
+
+def test_region_drawer_visible_accepts_android_displayed_attribute(monkeypatch):
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="选择地区" displayed="true" bounds="[42,194][1007,256]" />
+      <android.widget.EditText text="搜索省份或城市" hint="搜索省份或城市" displayed="true" bounds="[140,299][978,389]" />
+    </hierarchy>
+    """
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: page_source)
+
+    assert activity._region_drawer_is_visible(object()) is True
+
+
+def test_search_region_drawer_uses_android_adb_text_when_send_keys_does_not_update_page(monkeypatch):
+    events = []
+    state = {"typed": False}
+
+    class FakeSearchInput:
+        def click(self):
+            events.append("click-search")
+
+        def clear(self):
+            events.append("clear-search")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+        def find_element(self, _by, xpath):
+            events.append(("find", xpath))
+            if "搜索省份或城市" in xpath:
+                return FakeSearchInput()
+            raise activity.NoSuchElementException("missing")
+
+    def fake_wait_until(predicate, timeout):
+        events.append(("wait", timeout))
+        return predicate()
+
+    def fake_page_source(driver):
+        if state["typed"]:
+            return "选择地区 搜索省份或城市 搜索结果 张家界 湖南省 · 张家界市"
+        return "选择地区 搜索省份或城市"
+
+    def fake_android_adb_input_text(driver, value):
+        events.append(("adb-text", value))
+        if value == "张家界":
+            state["typed"] = True
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "_safe_page_source", fake_page_source)
+    monkeypatch.setattr(activity, "_wait_until", fake_wait_until)
+    monkeypatch.setattr(activity, "_android_adb_input_text", fake_android_adb_input_text, raising=False)
+
+    assert activity._search_region_drawer(FakeDriver(), "张家界") is True
+    assert ("send-keys", "张家界") in events
+    assert ("adb-text", "张家界") in events
+
+
+def test_search_region_drawer_returns_false_when_android_text_input_never_takes(monkeypatch):
+    events = []
+
+    class FakeSearchInput:
+        def click(self):
+            events.append("click-search")
+
+        def clear(self):
+            events.append("clear-search")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+        def find_element(self, _by, xpath):
+            if "搜索省份或城市" in xpath:
+                return FakeSearchInput()
+            raise activity.NoSuchElementException("missing")
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "选择地区 搜索省份或城市")
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: events.append(("wait", timeout)) or predicate())
+    monkeypatch.setattr(
+        activity,
+        "_android_adb_input_text",
+        lambda driver, value: events.append(("adb-text", value)) or False,
+        raising=False,
+    )
+
+    assert activity._search_region_drawer(FakeDriver(), "张家界") is False
+
+
 def test_select_activity_region_retries_android_field_container_when_drawer_does_not_open(monkeypatch):
     events = []
     state = {"page": "发布活动 所属省份 选择所属省份 城市名称 例如：杭州"}
@@ -737,15 +1082,106 @@ def test_select_activity_region_retries_android_field_container_when_drawer_does
     monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: events.append(("open", text)) or True)
     monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
     monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: events.append(("wait", timeout)) or predicate())
-    monkeypatch.setattr(activity, "_select_province_from_open_region_drawer", lambda driver, province: events.append(("province", province)) or True)
-    monkeypatch.setattr(activity, "_select_city_from_open_region_drawer", lambda driver, city: events.append(("city", city)) or True)
-    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: events.append(("tap", text)) or text == "确认地区")
+    def fake_select_region_from_search_results(driver, province, city):
+        events.append(("search-result", province, city))
+        state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+        return True
+
+    monkeypatch.setattr(activity, "_select_region_from_search_results", fake_select_region_from_search_results)
+    monkeypatch.setattr(
+        activity,
+        "_select_province_from_open_region_drawer",
+        lambda driver, province: events.append(("province", province)) or True,
+    )
+    monkeypatch.setattr(
+        activity,
+        "_select_city_from_open_region_drawer",
+        lambda driver, city: events.append(("city", city)) or True,
+    )
 
     activity._select_activity_region(FakeDriver(), "湖南", "张家界市")
 
     assert any(event[0] == "mobile: tap" for event in events if isinstance(event, tuple))
-    assert ("province", "湖南") in events
-    assert ("city", "张家界市") in events
+    assert ("search-result", "湖南", "张家界市") in events
+    assert ("province", "湖南") not in events
+    assert ("city", "张家界市") not in events
+
+
+def test_select_activity_region_does_not_accept_unclosed_region_drawer(monkeypatch):
+    state = {"page": "选择地区 搜索省份或城市 当前选择地区 暂未选择地区 C 重庆"}
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(activity, "_select_region_from_search_results", lambda driver, province, city: False)
+    monkeypatch.setattr(activity, "_select_province_from_open_region_drawer", lambda driver, province: True)
+    monkeypatch.setattr(activity, "_select_city_from_open_region_drawer", lambda driver, city: True)
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: text == "确认地区")
+    monkeypatch.setattr(activity, "_tap_region_search_result", lambda driver, province, city: False)
+
+    with pytest.raises(AssertionError, match="Unable to confirm the activity region selection"):
+        activity._select_activity_region(object(), "湖南", "张家界市")
+
+
+def test_tap_region_option_prefers_exact_ios_visible_static_text(monkeypatch):
+    taps = []
+
+    class FakeElement:
+        rect = {"x": 13, "y": 788, "width": 304, "height": 19}
+
+        def is_displayed(self):
+            return True
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_elements(self, by, xpath):
+            assert 'contains(' not in xpath
+            assert '@name="重庆"' in xpath
+            return [FakeElement()]
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: False)
+
+    assert activity._tap_region_option(FakeDriver(), ["重庆"]) is True
+    assert taps == [("mobile: tap", {"x": 165.0, "y": 797.5})]
+
+
+def test_dismiss_region_search_keyboard_does_not_back_out_of_ios_drawer():
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def hide_keyboard(self, **kwargs):
+            events.append(("hide", kwargs))
+            raise activity.WebDriverException("keyboard command unavailable")
+
+        def back(self):
+            events.append("back")
+
+    activity._dismiss_region_search_keyboard(FakeDriver())
+
+    assert "back" not in events
+
+
+def test_region_drawer_visible_requires_visible_search_field(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="选择所属省份" label="选择所属省份" value="选择所属省份" />
+      <XCUIElementTypeStaticText visible="false" name="搜索省份或城市" label="搜索省份或城市" value="搜索省份或城市" />
+      <XCUIElementTypeStaticText visible="false" name="选择地区" label="选择地区" value="选择地区" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        pass
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: page_source)
+
+    assert activity._region_drawer_is_visible(FakeDriver()) is False
 
 
 def test_select_activity_region_fails_when_fallback_does_not_select_values(monkeypatch):
@@ -1058,6 +1494,7 @@ def test_select_province_chooses_specific_overlay_option(monkeypatch):
 
 def test_select_province_searches_new_region_drawer(monkeypatch):
     events = []
+    state = {"query": ""}
 
     class FakeSearchInput:
         def click(self):
@@ -1068,6 +1505,7 @@ def test_select_province_searches_new_region_drawer(monkeypatch):
 
         def send_keys(self, value):
             events.append(("search", value))
+            state["query"] = value
 
     class FakeDriver:
         def find_element(self, _by, xpath):
@@ -1077,7 +1515,7 @@ def test_select_province_searches_new_region_drawer(monkeypatch):
             raise activity.NoSuchElementException("missing")
 
     monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: True)
-    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "选择地区 搜索省份或城市")
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: f"选择地区 搜索省份或城市 {state['query']}")
     monkeypatch.setattr(
         activity,
         "_choose_specific_overlay_option",

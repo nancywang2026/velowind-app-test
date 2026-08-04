@@ -43,9 +43,12 @@ HOME_BLOCKING_TEXTS = [
     "朋友圈",
     "系统消息",
     "系统通知",
+    "内容通知",
+    "活动通知",
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]
+MESSAGE_TAB_BLOCKING_TEXTS = {"系统消息", "系统通知"}
 
 
 def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
@@ -66,17 +69,46 @@ def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumC
     tap_text_if_present(driver, "同意并继续", timeout=2)
     tap_text_if_present(driver, "同意", timeout=1)
 
-    if not tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=8):
-        if not login_required_from_page_source(_safe_page_source(driver)):
+    me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=8)
+    if not me_tab_opened:
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        is_android = str(capabilities.get("platformName", "")).lower() == "android"
+        if is_android:
+            for _ in range(3):
+                if not (_android_adb_back(driver) or safe_back(driver)):
+                    break
+                time.sleep(0.3)
+                if not _home_visible(driver):
+                    _tap_home_tab(driver, timeout=2)
+                    time.sleep(0.3)
+                if _home_visible(driver):
+                    me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=3)
+                    break
+            if not me_tab_opened and not login_required_from_page_source(_safe_page_source(driver)):
+                ensure_logged_in_on_home(driver, ios_config)
+                me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=5)
+        if not me_tab_opened and not login_required_from_page_source(_safe_page_source(driver)):
             raise AssertionError("Unable to open the Me tab before running regression cases")
-    if login_required_from_page_source(_safe_page_source(driver)):
+    if _login_required_after_short_wait(driver):
         if not ensure_logged_in_if_needed(driver, ios_config):
             raise AssertionError("Unable to log in from the Me tab before running regression cases")
 
     _tap_home_tab(driver, timeout=8)
     if not _home_visible(driver):
-        wait_for_home_feed(driver, timeout=20)
+        try:
+            wait_for_home_feed(driver, timeout=20)
+        except Exception:
+            ensure_logged_in_on_home(driver, ios_config)
     return True
+
+
+def _login_required_after_short_wait(driver: WebDriver, timeout: float = 3.0) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        if login_required_from_page_source(_safe_page_source(driver)):
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:
@@ -144,7 +176,7 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         if _relaunch_from_android_launcher():
             return False
 
-        if _go_home():
+        if _home_or_login_visible(driver) and _go_home():
             try:
                 _wait_home()
                 return False
@@ -243,7 +275,7 @@ def _home_or_login_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _me_content_page_visible(page_source):
         return False
-    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+    if _home_blocking_text_present(page_source, allow_message_tab=True):
         return False
     if all(text in page_source for text in ["笔记", "活动", "消息", "我的"]):
         return True
@@ -254,7 +286,7 @@ def _home_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _me_content_page_visible(page_source):
         return False
-    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+    if _home_blocking_text_present(page_source):
         return False
     return (
         all(text in page_source for text in ["活动", "消息", "我的"])
@@ -266,11 +298,18 @@ def _publish_entry_ready(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _me_content_page_visible(page_source):
         return False
-    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+    if _home_blocking_text_present(page_source):
         return False
     return all(text in page_source for text in ["活动", "消息", "我的"]) and any(
         text in page_source for text in ["首页", "笔记", "全国", "推荐"]
     )
+
+
+def _home_blocking_text_present(page_source: str, *, allow_message_tab: bool = False) -> bool:
+    blockers = HOME_BLOCKING_TEXTS
+    if allow_message_tab:
+        blockers = [text for text in HOME_BLOCKING_TEXTS if text not in MESSAGE_TAB_BLOCKING_TEXTS]
+    return any(text in page_source for text in blockers)
 
 
 def _me_content_page_visible(page_source: str) -> bool:

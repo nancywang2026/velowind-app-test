@@ -38,6 +38,35 @@ def test_find_matching_visible_texts_skips_standalone_topic_tags():
     ]
 
 
+def test_find_matching_visible_texts_skips_ios_page_container_values():
+    page_source = """
+    <App>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" name="我的笔记 长白山真的有种让人瞬间安静下来的魔力 #长白山 我 0 4 想去一趟洱海" label="我的笔记 长白山真的有种让人瞬间安静下来的魔力 #长白山 我 0 4 想去一趟洱海" visible="true" />
+      <XCUIElementTypeOther type="XCUIElementTypeOther" name="我的笔记 长白山真的有种让人瞬间安静下来的魔力 #长白山 我 0 4 想去一趟洱海" label="我的笔记 长白山真的有种让人瞬间安静下来的魔力 #长白山 我 0 4 想去一趟洱海">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" name="长白山真的有种让人瞬间安静下来的魔力 #长白山 我 0 4" label="长白山真的有种让人瞬间安静下来的魔力 #长白山 我 0 4">
+          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="长白山真的有种让人瞬间安静下来的魔力" label="长白山真的有种让人瞬间安静下来的魔力" visible="true" />
+          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="#长白山" label="#长白山" />
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </App>
+    """
+
+    assert find_matching_visible_texts(page_source, ["长白山"]) == [
+        "长白山真的有种让人瞬间安静下来的魔力"
+    ]
+
+
+def test_find_matching_visible_texts_skips_invisible_ios_texts():
+    page_source = """
+    <App>
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="屏幕外长白山笔记" label="屏幕外长白山笔记" visible="false" />
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="屏幕内长白山笔记" label="屏幕内长白山笔记" visible="true" />
+    </App>
+    """
+
+    assert find_matching_visible_texts(page_source, ["长白山"]) == ["屏幕内长白山笔记"]
+
+
 def test_confirm_destructive_action_taps_confirm_text_after_action(monkeypatch):
     events = []
     monkeypatch.setattr(

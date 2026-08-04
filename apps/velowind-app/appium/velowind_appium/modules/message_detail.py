@@ -150,6 +150,7 @@ COMMENT_COUNT_PATTERN = re.compile(r"评论(?:数)?[^\d<\"]*(\d+)")
 COUNT_ONLY_PATTERN = re.compile(r"^(?:浏览|评论)\s*(\d+)$")
 BOTTOM_ACTION_PATTERN = re.compile(r"^.+\s+(\d+)\s+(\d+)\s+(\d+)$")
 SYSTEM_MESSAGE_TIME_PATTERN = re.compile(r"^\d{2}-\d{2}\s+\d{2}:\d{2}$")
+ANDROID_COMMENT_TIME_PATTERN = re.compile(r"^(?:刚刚|\d+\s*(?:秒|分钟|小时|天|周|个月|年)前)$")
 SYSTEM_MESSAGE_SKIP_TEXTS = {
     "消息",
     "系统消息",
@@ -546,6 +547,8 @@ def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
     comments = _dedupe_preserve_order([*_extract_comments(texts), *_extract_android_comments(page_source)])
     empty_comment_hint = next((text for text in texts if "还没有评论" in text), None)
     bottom_action_counts = _extract_android_bottom_action_counts(page_source) or _extract_bottom_action_counts(texts)
+    if comment_count is None and len(bottom_action_counts) >= 3:
+        comment_count = bottom_action_counts[2]
     return MessageDetailSnapshot(
         title=title,
         body=body,
@@ -610,7 +613,7 @@ def parse_system_message_snapshot(page_source: str) -> SystemMessageSnapshot:
 
     if timestamp_index is not None:
         for candidate in reversed(texts[max(0, timestamp_index - 4):timestamp_index]):
-            if _looks_like_system_message_value(candidate):
+            if candidate in {"系统通知", "内容通知", "活动通知"} or _looks_like_system_message_value(candidate):
                 category = candidate
                 break
         following = [
@@ -750,6 +753,9 @@ def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
         raise AssertionError("Share sheet did not appear after tapping the share entry point")
     if not _tap_share_target(driver, "朋友圈"):
         raise AssertionError("Unable to find the Moments share target")
+    if not _confirm_share_after_target(driver, timeout=timeout):
+        raise AssertionError("Unable to confirm the Moments share")
+    _return_to_home_after_share(driver, timeout=timeout)
     return "朋友圈"
 
 
@@ -3172,11 +3178,12 @@ def _extract_android_comments(page_source: str) -> list[str]:
     for text, _left, _top, _right, bottom in entries:
         if "评论" in text and ("共" in text or text.startswith("评论")):
             comment_header_bottom = max(comment_header_bottom, bottom)
-    if comment_header_bottom <= 0:
-        return []
 
     bottom_action_entries = _android_bottom_action_entries(page_source)
     bottom_bar_top = min((entry[2] for entry in bottom_action_entries), default=None)
+    if comment_header_bottom <= 0:
+        return _extract_android_structured_comment_bodies(entries, bottom_bar_top)
+
     comments: list[str] = []
     excluded = {"回复", "删除", "写留言", "评论", "点赞", "收藏", "分享", "赞", "消息", "我的", "活动", "笔记"}
     for text, left, top, _right, _bottom in entries:
@@ -3203,6 +3210,43 @@ def _extract_android_comments(page_source: str) -> list[str]:
         if text == "Nancy" and below_texts:
             continue
         comments.append(text)
+    return _dedupe_preserve_order(comments)
+
+
+def _extract_android_structured_comment_bodies(
+    entries: list[tuple[str, int, int, int, int]],
+    bottom_bar_top: int | None,
+) -> list[str]:
+    comments: list[str] = []
+    excluded = {"回复", "删除", "写留言", "评论", "点赞", "收藏", "分享", "赞", "消息", "我的", "活动", "笔记"}
+    for text, left, top, _right, _bottom in entries:
+        if not ANDROID_COMMENT_TIME_PATTERN.fullmatch(text):
+            continue
+        if bottom_bar_top is not None and top >= bottom_bar_top - 120:
+            continue
+        row_actions = [
+            entry[0]
+            for entry in entries
+            if entry[1] > left + 300 and abs(entry[2] - top) <= 35 and entry[0] in {"回复", "删除"}
+        ]
+        if not row_actions:
+            continue
+        same_column_above = [
+            entry
+            for entry in entries
+            if abs(entry[1] - left) <= 30 and 0 < top - entry[2] <= 180
+        ]
+        for candidate, _candidate_left, _candidate_top, _candidate_right, _candidate_bottom in reversed(same_column_above):
+            if (
+                candidate in excluded
+                or candidate in GENERIC_DETAIL_TEXTS
+                or candidate.isdigit()
+                or ANDROID_COMMENT_TIME_PATTERN.fullmatch(candidate)
+                or _contains_detail_meta(candidate)
+            ):
+                continue
+            comments.append(candidate)
+            break
     return _dedupe_preserve_order(comments)
 
 
@@ -3576,6 +3620,8 @@ def _find_bottom_action_elements(driver: WebDriver) -> list:
 def _tap_detail_share_button(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "android":
+        if _tap_android_detail_share_button_from_source(driver):
+            return True
         try:
             rect = driver.get_window_rect()
             driver.execute_script(
@@ -3611,6 +3657,42 @@ def _tap_detail_share_button(driver: WebDriver) -> bool:
     return False
 
 
+def _tap_android_detail_share_button_from_source(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<android." not in page_source:
+        return False
+    try:
+        rect = driver.get_window_rect()
+        screen_width = int(rect.get("width") or 0)
+    except (AttributeError, TypeError, ValueError, WebDriverException):
+        screen_width = 0
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for tag in re.findall(r"<android\.view\.ViewGroup\b[^>]*>", page_source):
+        bounds_match = re.search(r'\bbounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"', tag)
+        if not bounds_match:
+            continue
+        left, top, right, bottom = (int(value) for value in bounds_match.groups())
+        width = right - left
+        height = bottom - top
+        if not (60 <= width <= 180 and 45 <= height <= 140):
+            continue
+        if not (120 <= top <= 380):
+            continue
+        if screen_width and left < screen_width * 0.65:
+            continue
+        candidates.append((left, top, right, bottom))
+
+    if not candidates:
+        return False
+    left, top, right, bottom = max(candidates, key=lambda bounds: (bounds[2], bounds[0]))
+    try:
+        driver.execute_script("mobile: tap", {"x": int((left + right) / 2), "y": int((top + bottom) / 2)})
+        return True
+    except WebDriverException:
+        return False
+
+
 def _share_sheet_visible(page_source: str) -> bool:
     return any(token in page_source for token in ["朋友圈", "微信好友", "发送给朋友", "微信"])
 
@@ -3628,6 +3710,54 @@ def _tap_share_target(driver: WebDriver, target_text: str) -> bool:
         except (NoSuchElementException, WebDriverException):
             continue
     return False
+
+
+def _confirm_share_after_target(driver: WebDriver, timeout: int = 20) -> bool:
+    if _wait_until(lambda: _share_returned_to_detail(driver), timeout=3):
+        return True
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        for text in ["发送", "发表", "分享", "确定"]:
+            if tap_text_if_present(driver, text, timeout=1):
+                return _wait_until(lambda: _share_returned_to_detail(driver), timeout=timeout)
+        if _tap_android_share_confirm_by_coordinate(driver):
+            return _wait_until(lambda: _share_returned_to_detail(driver), timeout=timeout)
+        if _share_returned_to_detail(driver):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _share_returned_to_detail(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    return not _share_sheet_visible(page_source) and message_detail_is_visible(driver)
+
+
+def _tap_android_share_confirm_by_coordinate(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    try:
+        rect = driver.get_window_rect()
+        driver.execute_script(
+            "mobile: tap",
+            {"x": int(rect["width"] * 0.88), "y": int(rect["height"] * 0.08)},
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
+
+
+def _return_to_home_after_share(driver: WebDriver, timeout: int = 20) -> bool:
+    if not message_detail_is_visible(driver):
+        return True
+    try:
+        driver.back()
+    except WebDriverException:
+        if not _tap_android_top_back(driver):
+            return False
+    return _wait_until(lambda: not message_detail_is_visible(driver), timeout=timeout)
 
 
 def _find_comment_input(driver: WebDriver, timeout: int):

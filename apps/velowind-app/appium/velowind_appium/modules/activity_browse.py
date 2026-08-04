@@ -238,15 +238,17 @@ def activity_feed_all_results_match_category(page_source: str, category_name: st
 
 
 def open_activity_search(driver: WebDriver, timeout: int = 10) -> None:
-    if _activity_search_visible(_safe_page_source(driver)):
+    page_source = _safe_page_source(driver)
+    if _activity_search_visible(page_source):
         return
-    if _tap_activity_search_entry_by_coordinate(driver):
+    _tap_activity_search_entry_by_coordinate(driver, page_source=page_source)
+    if _wait_until(lambda: _activity_search_visible(_safe_page_source(driver)), timeout=2):
         return
     for accessibility_id in ACTIVITY_SEARCH_ENTRY_IDS:
         if tap_if_present(driver, accessibility_id, timeout=1):
             break
     else:
-        _tap_activity_search_entry_by_coordinate(driver)
+        _tap_activity_search_entry_by_coordinate(driver, page_source=_safe_page_source(driver))
     if not _wait_until(lambda: _activity_search_visible(_safe_page_source(driver)), timeout=timeout):
         raise AssertionError("Activity search page did not appear")
 
@@ -271,11 +273,37 @@ def activity_text_search_result_texts(page_source: str, keyword: str) -> list[st
     normalized_keyword = " ".join(keyword.split())
     if not normalized_keyword:
         return []
-    return [
+    card_matches = [
         text
         for text in extract_visible_activity_card_texts(page_source)
         if normalized_keyword in text
     ]
+    if card_matches:
+        return card_matches
+    return _android_visible_text_search_matches(page_source, normalized_keyword)
+
+
+def _android_visible_text_search_matches(page_source: str, keyword: str) -> list[str]:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+    matches: list[str] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        text = element.attrib.get("text", "").strip()
+        if not text or keyword not in text:
+            continue
+        if element.attrib.get("displayed") == "false" or element.attrib.get("visible") == "false":
+            continue
+        if text in ACTIVITY_CATEGORY_TEXTS or text in ACTIVITY_CARD_MARKERS:
+            continue
+        normalized = " ".join(text.split())
+        if normalized in seen:
+            continue
+        matches.append(normalized)
+        seen.add(normalized)
+    return matches
 
 
 def open_first_activity_detail(driver: WebDriver, timeout: int = 20) -> None:
@@ -687,13 +715,17 @@ def _activity_search_visible(page_source: str) -> bool:
     return "请输入内容" in page_source and "搜索" in page_source
 
 
-def _tap_activity_search_entry_by_coordinate(driver: WebDriver) -> bool:
+def _tap_activity_search_entry_by_coordinate(driver: WebDriver, page_source: str = "") -> bool:
     try:
+        for x, y in _android_activity_search_entry_points(page_source):
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+            if _wait_until(lambda: _activity_search_visible(_safe_page_source(driver)), timeout=0.8):
+                return True
         rect = driver.get_window_rect()
         capabilities = getattr(driver, "capabilities", {}) or {}
         platform = str(capabilities.get("platformName", "")).lower()
         ratios = (
-            [(0.93, 0.067), (0.91, 0.072), (0.95, 0.067), (0.925, 0.06)]
+            [(0.926, 0.059), (0.92, 0.06), (0.844, 0.122), (0.84, 0.12), (0.85, 0.125)]
             if platform == "android"
             else [(0.925, 0.103), (0.91, 0.10)]
         )
@@ -707,6 +739,52 @@ def _tap_activity_search_entry_by_coordinate(driver: WebDriver) -> bool:
         return False
     except (AttributeError, KeyError, TypeError, WebDriverException):
         return False
+
+
+def _android_activity_search_entry_points(page_source: str) -> list[tuple[int, int]]:
+    if not page_source:
+        return []
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    root_width = int(root.attrib.get("width", "0") or 0)
+    root_height = int(root.attrib.get("height", "0") or 0)
+    candidates: list[tuple[int, int, int]] = []
+
+    def has_svg_descendant(element: ElementTree.Element) -> bool:
+        return any(
+            (child.attrib.get("class") or child.tag) == "com.horcrux.svg.SvgView"
+            for child in element.iter()
+        )
+
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        if (element.attrib.get("class") or element.tag) != "android.view.ViewGroup" or not has_svg_descendant(element):
+            continue
+        rect = _bounds_rect_from_attrs(element.attrib)
+        if rect is None:
+            continue
+        x, y, width, height = rect
+        if width < 48 or width > 180 or height < 48 or height > 150:
+            continue
+        if root_width and x < int(root_width * 0.70):
+            continue
+        if root_height and y > int(root_height * 0.16):
+            continue
+        candidates.append((width * height, x + width // 2, y + height // 2))
+
+    points: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for _, x, y in sorted(candidates):
+        point = (x, y)
+        if point in seen:
+            continue
+        points.append(point)
+        seen.add(point)
+    return points
 
 
 def _find_activity_search_input(driver: WebDriver, timeout: int = 10):
@@ -834,6 +912,7 @@ def _fill_signup_text_field_by_placeholder(driver: WebDriver, placeholder: str, 
         f'//XCUIElementTypeTextView[@value="{placeholder}" or @name="{placeholder}" or @label="{placeholder}"]',
         f'//*[contains(@name, "{placeholder}") or contains(@label, "{placeholder}") or contains(@value, "{placeholder}")]/following::XCUIElementTypeTextField[1]',
         f'//*[contains(@name, "{placeholder}") or contains(@label, "{placeholder}") or contains(@value, "{placeholder}")]/following::XCUIElementTypeTextView[1]',
+        f'//android.widget.EditText[@hint="{placeholder}" or @text="{placeholder}"]',
     ]:
         try:
             _replace_text(driver.find_element(AppiumBy.XPATH, xpath), value)
@@ -1049,9 +1128,9 @@ def _extract_signup_input_value_by_placeholder(page_source: str, placeholder: st
     for element in root.iter():
         if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
             continue
-        if element.attrib.get("placeholderValue") != placeholder:
+        if element.attrib.get("placeholderValue") != placeholder and element.attrib.get("hint") != placeholder:
             continue
-        value = " ".join(element.attrib.get("value", "").split())
+        value = " ".join((element.attrib.get("value", "") or element.attrib.get("text", "")).split())
         if not value or value == placeholder:
             return None
         return value
@@ -1113,6 +1192,18 @@ def _rect_from_attrs(attrs: dict[str, str]) -> tuple[int, int, int, int] | None:
     if width <= 0 or height <= 0:
         return None
     return (x, y, width, height)
+
+
+def _bounds_rect_from_attrs(attrs: dict[str, str]) -> tuple[int, int, int, int] | None:
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", attrs.get("bounds", ""))
+    if not match:
+        return None
+    x1, y1, x2, y2 = [int(value) for value in match.groups()]
+    width = x2 - x1
+    height = y2 - y1
+    if width <= 0 or height <= 0:
+        return None
+    return (x1, y1, width, height)
 
 
 def _safe_page_source(driver: WebDriver) -> str:

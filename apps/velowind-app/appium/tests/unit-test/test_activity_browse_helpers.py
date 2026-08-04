@@ -68,6 +68,22 @@ def test_activity_search_extracts_android_result_title_from_parent_card():
     ]
 
 
+def test_activity_search_accepts_android_split_title_and_location_results():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="全部活动" displayed="true" />
+      <android.widget.TextView text="张家界大环线2天1晚" displayed="true" bounds="[45,249][846,315]" />
+      <android.widget.TextView text="浙江省·张家界市" displayed="true" bounds="[90,328][330,368]" />
+      <android.widget.TextView text="Nancy" displayed="true" />
+    </hierarchy>
+    """
+
+    assert activity_browse.activity_text_search_result_texts(page_source, "张家界") == [
+        "张家界大环线2天1晚",
+        "浙江省·张家界市",
+    ]
+
+
 def test_activity_feed_uses_category_tag_row_to_match_results():
     page_source = """
     <AppiumAUT>
@@ -164,7 +180,36 @@ def test_open_activity_search_coordinate_fallback_targets_android_header_icon(mo
 
     activity_browse.open_activity_search(FakeDriver(), timeout=0.1)
 
-    assert events == [("mobile: tap", {"x": 1004, "y": 160})]
+    assert events == [("mobile: tap", {"x": 1000, "y": 141})]
+
+
+def test_open_activity_search_coordinate_uses_android_search_icon_bounds(monkeypatch):
+    events = []
+    page_source = """
+    <hierarchy width="1280" height="2568">
+      <android.widget.HorizontalScrollView bounds="[265,196][1098,290]" displayed="true" />
+      <android.view.ViewGroup bounds="[1127,196][1238,290]" displayed="true">
+        <com.horcrux.svg.SvgView bounds="[1153,214][1212,272]" displayed="true" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+    page_sources = iter([page_source, "activity-search"])
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def get_window_rect(self):
+            return {"width": 1080, "height": 2400}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(activity_browse, "_activity_search_visible", lambda source: source == "activity-search")
+    monkeypatch.setattr(activity_browse, "_safe_page_source", lambda driver: next(page_sources, "activity-search"))
+
+    activity_browse.open_activity_search(FakeDriver(), timeout=0.1)
+
+    assert events == [("mobile: tap", {"x": 1182, "y": 243})]
 
 
 def test_tap_activity_search_submit_falls_back_to_keyboard_search(monkeypatch):
@@ -356,6 +401,59 @@ def test_parse_activity_signup_snapshot_prefers_text_field_values_over_container
     snapshot = activity_browse.parse_activity_signup_snapshot(page_source)
 
     assert snapshot.matches_draft(draft)
+
+
+def test_parse_activity_signup_snapshot_reads_android_edit_text_values_by_hint():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="活动报名" displayed="true" />
+      <android.widget.TextView text="报名信息" displayed="true" />
+      <android.widget.TextView text="姓名" displayed="true" />
+      <android.widget.EditText text="自动化报名测试" hint="请输入报名人姓名" displayed="true" />
+      <android.widget.TextView text="证件类型" displayed="true" />
+      <android.widget.TextView text="身份证" displayed="true" />
+      <android.widget.TextView text="证件号码" displayed="true" />
+      <android.widget.EditText text="110000199001010013" hint="请输入证件号码" displayed="true" />
+      <android.widget.TextView text="通知手机号" displayed="true" />
+      <android.widget.EditText text="13800138000" hint="请输入通知手机号" displayed="true" />
+      <android.widget.TextView text="报名规则" displayed="true" />
+      <android.widget.TextView text="取消规则" displayed="true" />
+      <android.widget.TextView text="报名说明" displayed="true" />
+      <android.widget.TextView text="报名费用" displayed="true" />
+      <android.widget.TextView text="¥0.01 / 人" displayed="true" />
+      <android.widget.TextView text="提交订单" displayed="true" />
+    </hierarchy>
+    """
+    draft = activity_browse.build_activity_signup_draft()
+
+    snapshot = activity_browse.parse_activity_signup_snapshot(page_source)
+
+    assert snapshot.matches_draft(draft)
+
+
+def test_fill_signup_text_field_by_placeholder_supports_android_hint(monkeypatch):
+    calls = []
+
+    class FakeElement:
+        pass
+
+    class FakeDriver:
+        def find_element(self, by, xpath):
+            calls.append((by, xpath))
+            if "android.widget.EditText" in xpath and '@hint="请输入报名人姓名"' in xpath:
+                return FakeElement()
+            raise activity_browse.NoSuchElementException("missing")
+
+    filled = []
+    monkeypatch.setattr(activity_browse, "_replace_text", lambda element, value: filled.append(value))
+    monkeypatch.setattr(activity_browse, "_hide_keyboard", lambda driver: None)
+
+    assert activity_browse._fill_signup_text_field_by_placeholder(
+        FakeDriver(),
+        "请输入报名人姓名",
+        "自动化报名测试",
+    )
+    assert filled == ["自动化报名测试"]
 
 
 def test_activity_signup_consent_prompt_is_detected():

@@ -291,6 +291,25 @@ def test_parse_system_message_snapshot_detects_first_visible_message():
     assert snapshot.is_basic_system_message_visible()
 
 
+def test_parse_system_message_snapshot_accepts_system_notification_category():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="系统消息" />
+      <android.widget.TextView text="系统通知" />
+      <android.widget.TextView text="08-04 15:15" />
+      <android.widget.TextView text="订单退款成功" />
+      <android.widget.TextView text="订单 RO17858276619742183FA 退款成功，退款金额：¥0.00，优惠券已退回账户" />
+    </hierarchy>
+    """
+
+    snapshot = message_detail.parse_system_message_snapshot(page_source)
+
+    assert snapshot.category == "系统通知"
+    assert snapshot.timestamp == "08-04 15:15"
+    assert snapshot.title == "订单退款成功"
+    assert snapshot.is_basic_system_message_visible()
+
+
 def test_open_system_message_page_taps_messages_tab_and_system_entry(monkeypatch):
     calls = []
     page = {"source": "首页 笔记 活动 消息 我的"}
@@ -380,6 +399,51 @@ def test_parse_detail_snapshot_extracts_bottom_action_counts():
     snapshot = parse_detail_snapshot(page_source)
 
     assert snapshot.bottom_action_counts == ["1", "0", "3"]
+
+
+def test_parse_detail_snapshot_uses_bottom_comment_action_count_when_comment_header_is_offscreen():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="Nancy" bounds="[164,560][308,617]" />
+      <android.widget.TextView text="测试 - 这条笔记不错！！ 0804120304" bounds="[164,930][933,1000]" />
+      <android.widget.TextView text="写留言" bounds="[173,260][330,330]" />
+      <android.widget.TextView text="3" bounds="[730,2520][775,2600]" />
+      <android.widget.TextView text="10" bounds="[930,2520][990,2600]" />
+      <android.widget.TextView text="6" bounds="[1110,2520][1150,2600]" />
+    </hierarchy>
+    """
+
+    snapshot = parse_detail_snapshot(page_source)
+
+    assert snapshot.comment_count == "6"
+    assert snapshot.bottom_action_counts == ["3", "10", "6"]
+
+
+def test_parse_detail_snapshot_extracts_visible_android_comments_when_header_is_offscreen():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="Nancy" bounds="[165,544][292,596]" />
+      <android.widget.TextView text="不错" bounds="[165,609][1208,674]" />
+      <android.widget.TextView text="5 分钟前" bounds="[165,692][305,738]" />
+      <android.widget.TextView text="回复" bounds="[916,690][994,739]" />
+      <android.widget.TextView text="删除" bounds="[1023,690][1101,739]" />
+      <android.widget.TextView text="0" bounds="[1183,690][1208,739]" />
+      <android.widget.TextView text="Nancy" bounds="[165,860][292,912]" />
+      <android.widget.TextView text="不错" bounds="[165,925][1208,990]" />
+      <android.widget.TextView text="6 分钟前" bounds="[165,1008][305,1054]" />
+      <android.widget.TextView text="回复" bounds="[916,1006][994,1055]" />
+      <android.widget.TextView text="删除" bounds="[1023,1006][1101,1055]" />
+      <android.widget.TextView text="0" bounds="[1183,1006][1208,1055]" />
+      <android.widget.TextView text="2" bounds="[751,2585][835,2657]" />
+      <android.widget.TextView text="8" bounds="[953,2585][1037,2657]" />
+      <android.widget.TextView text="6" bounds="[1154,2585][1238,2657]" />
+    </hierarchy>
+    """
+
+    snapshot = parse_detail_snapshot(page_source)
+
+    assert snapshot.comment_count == "6"
+    assert snapshot.comments == ["不错"]
 
 
 def test_build_changbaishan_note_draft_uses_requested_content():
@@ -929,9 +993,82 @@ def test_share_note_to_moments_taps_share_then_target(monkeypatch):
         "_tap_share_target",
         lambda driver, target_text: events.append(("tap-share-target", target_text)) or True,
     )
+    monkeypatch.setattr(
+        message_detail,
+        "_confirm_share_after_target",
+        lambda driver, timeout: events.append(("confirm-share", timeout)) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_return_to_home_after_share",
+        lambda driver, timeout: events.append(("return-home", timeout)) or True,
+    )
 
     assert message_detail.share_note_to_moments(object(), timeout=6) == "朋友圈"
-    assert events == ["tap-share", ("wait-until", 6), ("tap-share-target", "朋友圈")]
+    assert events == [
+        "tap-share",
+        ("wait-until", 6),
+        ("tap-share-target", "朋友圈"),
+        ("confirm-share", 6),
+        ("return-home", 6),
+    ]
+
+
+def test_tap_detail_share_button_uses_android_visible_header_icon_bounds(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def get_window_rect(self):
+            return {"width": 1280, "height": 2772}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(
+        message_detail,
+        "_safe_page_source",
+        lambda driver: """
+        <hierarchy width="1280" height="2568">
+          <android.view.ViewGroup bounds="[55,206][159,293]" />
+          <android.view.ViewGroup bounds="[1115,202][1226,297]" />
+        </hierarchy>
+        """,
+    )
+
+    assert message_detail._tap_detail_share_button(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 1170, "y": 249})]
+
+
+def test_confirm_share_after_target_uses_android_top_right_coordinate_when_wechat_xml_is_empty(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def get_window_rect(self):
+            return {"width": 1280, "height": 2772}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    state = {"tapped": False}
+
+    def fake_source(driver):
+        if state["tapped"]:
+            return "detail"
+        return '<hierarchy><android.view.View package="com.tencent.mm" displayed="false" /></hierarchy>'
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", fake_source)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: False)
+    monkeypatch.setattr(message_detail, "_share_returned_to_detail", lambda driver: message_detail._safe_page_source(driver) == "detail")
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    original_execute = FakeDriver.execute_script
+    FakeDriver.execute_script = lambda self, script, payload: (original_execute(self, script, payload), state.update(tapped=True))
+
+    assert message_detail._confirm_share_after_target(FakeDriver(), timeout=2) is True
+    assert events == [("mobile: tap", {"x": 1126, "y": 221})]
 
 
 def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeypatch):
@@ -1465,7 +1602,7 @@ def test_choose_local_photo_opens_requested_album_first(monkeypatch):
     ]
 
 
-def test_android_detail_share_taps_sticky_header_action():
+def test_android_detail_share_taps_sticky_header_action(monkeypatch):
     taps = []
 
     class FakeDriver:
@@ -1478,6 +1615,8 @@ def test_android_detail_share_taps_sticky_header_action():
         @staticmethod
         def execute_script(script, payload):
             taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "")
 
     assert message_detail._tap_detail_share_button(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 1026, "y": 216})]

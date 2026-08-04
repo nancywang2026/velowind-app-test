@@ -8,7 +8,11 @@ from velowind_appium.android_config import load_android_config
 from velowind_appium.android_driver import create_android_driver
 from velowind_appium.reporting import allure
 from velowind_appium.screenshots import capture_and_attach_debug_artifacts, capture_and_attach_page
-from .test_android_feature_walkthrough import prepare_android_home
+from velowind_appium.session import ensure_logged_in_from_me_then_home
+
+
+def prepare_logged_in_session(android_driver, android_config) -> bool:
+    return ensure_logged_in_from_me_then_home(android_driver, android_config)
 
 
 def should_capture_each_step() -> bool:
@@ -37,8 +41,8 @@ def android_driver(android_config):
 
 
 @pytest.fixture(autouse=True)
-def logged_in_session(android_driver, step):
-    prepare_android_home(android_driver, step)
+def logged_in_session(android_driver, android_config, step):
+    prepare_logged_in_session(android_driver, android_config)
     yield
 
 
