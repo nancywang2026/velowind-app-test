@@ -253,6 +253,42 @@ def test_dismiss_common_system_alerts_records_step_only_for_matched_alert(monkey
     assert step_calls == ["dismiss-alert-好"]
 
 
+def test_ensure_logged_in_on_home_closes_android_cancel_signup_dialog(monkeypatch):
+    state = {"page": "确认取消当前报名吗？ 无罚金 再想想 确认取消"}
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False,
+    )
+    monkeypatch.setattr(session, "_tap_top_back_by_coordinate", lambda driver: False)
+    monkeypatch.setattr(session, "_android_adb_back", lambda driver: False)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back") or False)
+
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap-text", text))
+        if text == "再想想":
+            state["page"] = "home"
+            return True
+        return False
+
+    monkeypatch.setattr(session, "tap_text_if_present", fake_tap_text)
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or True)
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert ("tap-text", "再想想") in events
+    assert "safe-back" not in events
+
+
 def test_pytest_runtest_makereport_captures_final_page_for_passed_test(monkeypatch):
     captured = []
 
