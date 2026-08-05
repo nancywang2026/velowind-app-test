@@ -1,6 +1,7 @@
 from velowind_appium.modules import rental_orders
 from velowind_appium.modules import rental_home_entry
 from velowind_appium.modules import rental_order_confirm
+from velowind_appium.modules import rental_store
 from velowind_appium.modules import rental_vehicle_list
 from velowind_appium.modules.rental_common import visible_text_hit_points, visible_text_hit_points_containing
 
@@ -170,6 +171,56 @@ def test_rental_home_visible_allows_home_rental_entry_text():
 
 def test_rental_entry_ids_include_android_floating_rent_entry():
     assert "floating-rent-entry" in rental_home_entry.RENTAL_ENTRY_IDS
+
+
+def test_wait_for_store_selected_checks_final_state_after_timeout(monkeypatch):
+    driver = _FakeRentalDriver("租车 服务门店 上海市 立即选车")
+
+    ticks = iter([0.0, 6.0])
+    monkeypatch.setattr(rental_store.time, "monotonic", lambda: next(ticks))
+
+    assert rental_store._wait_for_store_selected(driver, timeout=5) is True
+
+
+def test_choose_first_store_opens_store_picker_before_tapping_first_store(monkeypatch):
+    driver = _FakeRentalDriver("租车 服务门店 上海市 请选择服务门店 立即选车")
+    events = []
+
+    monkeypatch.setattr(rental_store, "wait_for_rental_store_page", lambda received, timeout=15: "store")
+    monkeypatch.setattr(rental_store, "tap_by_coordinate_ratios", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rental_store.time, "sleep", lambda seconds: None)
+
+    now = [0.0]
+
+    def fake_monotonic():
+        now[0] += 0.1
+        return now[0]
+
+    monkeypatch.setattr(rental_store.time, "monotonic", fake_monotonic)
+
+    def fake_tap_text_containing(received, keywords, timeout=2):
+        events.append(("tap-containing", tuple(keywords)))
+        if keywords == ["请选择服务门店"]:
+            driver.page_source = "租车 服务门店 上海市 请选择服务门店 虹桥店 吴中路1366号 立即选车"
+            return True
+        return False
+
+    def fake_tap_first_available(received, accessibility_ids, texts, timeout=2):
+        events.append(("tap-first", tuple(texts)))
+        if "虹桥店" in texts and "虹桥店" in driver.page_source:
+            driver.page_source = "租车 服务门店 上海市 虹桥店 立即选车"
+            return True
+        return False
+
+    monkeypatch.setattr(rental_store, "tap_by_text_containing", fake_tap_text_containing)
+    monkeypatch.setattr(rental_store, "tap_first_available", fake_tap_first_available)
+
+    rental_store.choose_first_store(driver, timeout=2)
+
+    assert events == [
+        ("tap-containing", ("请选择服务门店",)),
+        ("tap-first", ("第一个门店", "虹桥店")),
+    ]
 
 
 def test_visible_vehicle_detail_bookable_ignores_hidden_unavailable_vehicle_list():

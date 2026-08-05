@@ -32,6 +32,8 @@ ACTIVITY_SEARCH_INPUT_XPATHS = [
 ACTIVITY_SEARCH_SUBMIT_TEXTS = ["搜索", "Search"]
 ACTIVITY_DETAIL_READY_IDS = ["activity-route-detail-v3-hero-carousel", "activity-detail-page"]
 ACTIVITY_SIGNUP_READY_TEXTS = ["活动报名", "报名信息", "提交订单"]
+ACTIVITY_SIGNUP_ACTION_TEXTS = ["确认报名", "立即报名"]
+ACTIVITY_SIGNUP_UNAVAILABLE_TEXTS = ["报名结束", "名额已满", "已满员"]
 ACTIVITY_ORDER_PAYMENT_TEXTS = ["支付中心", "确认支付", "订单支付", "去支付", "立即支付", "待支付"]
 VIRTUAL_SIGNUP_ID_CARD_NUMBER = "110000199001010013"
 
@@ -323,6 +325,35 @@ def open_first_activity_detail(driver: WebDriver, timeout: int = 20) -> None:
     raise AssertionError("Unable to open the first activity detail")
 
 
+def open_first_signup_available_activity_detail(driver: WebDriver, timeout: int = 25) -> None:
+    page_source = _safe_page_source(driver)
+    if activity_detail_is_visible(page_source) and _activity_signup_action_available(page_source):
+        return
+    if activity_detail_is_visible(page_source):
+        _return_to_activity_feed(driver)
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        for tap_points in _activity_card_tap_point_groups(page_source):
+            if not _tap_activity_card_points(
+                driver,
+                tap_points,
+                verify_open=lambda: activity_detail_is_visible(_safe_page_source(driver)),
+                timeout=2,
+            ):
+                continue
+            state = _wait_for_activity_detail_signup_state(driver, timeout=min(4, max(0.5, end_at - time.monotonic())))
+            if state == "available":
+                return
+            _return_to_activity_feed(driver)
+        if time.monotonic() >= end_at:
+            break
+        swipe_vertical(driver, "up")
+        time.sleep(0.6)
+    raise AssertionError("Unable to open a signup-capable activity detail")
+
+
 def activity_detail_is_visible(page_source: str) -> bool:
     return any(marker in page_source for marker in ACTIVITY_DETAIL_READY_IDS) or (
         "路线说明" in page_source and "确认报名" in page_source
@@ -365,6 +396,10 @@ def activity_signup_is_visible(page_source: str) -> bool:
 
 def activity_signup_already_exists(page_source: str) -> bool:
     return "已经报名，无需重复报名" in page_source
+
+
+def activity_signup_unavailable(page_source: str) -> bool:
+    return any(text in page_source for text in ACTIVITY_SIGNUP_UNAVAILABLE_TEXTS)
 
 
 def _activity_signup_consent_prompt_visible(page_source: str) -> bool:
@@ -542,7 +577,7 @@ def parse_activity_detail_snapshot(page_source: str) -> ActivityDetailSnapshot:
         hero_image_visible=_activity_detail_hero_visible(page_source),
         metrics_visible=all(text in joined_visible_text for text in ["总里程", "参考时长", "风险等级"]),
         tags_visible=all(text in joined_visible_text for text in ["风景标签", "沿途景点"]),
-        route_visible=all(text in joined_visible_text for text in ["路线说明", "活动概览"]),
+        route_visible=_activity_detail_route_visible(joined_visible_text),
         comments_visible="活动评论" in joined_visible_text or "前往评论页查看真实活动评论" in joined_visible_text,
         sessions_visible=any(text in joined_visible_text for text in ["请选择场次", "场次信息", "集合地点"]),
     )
@@ -550,6 +585,12 @@ def parse_activity_detail_snapshot(page_source: str) -> ActivityDetailSnapshot:
 
 def _android_activity_detail_loading_shell_visible(page_source: str) -> bool:
     return "活动详情" in page_source and "android.widget.ProgressBar" in page_source
+
+
+def _activity_detail_route_visible(joined_visible_text: str) -> bool:
+    if all(text in joined_visible_text for text in ["路线说明", "活动概览"]):
+        return True
+    return "路线说明" in joined_visible_text and bool(re.search(r"\bDay\d+\b", joined_visible_text))
 
 
 def parse_activity_order_snapshot(page_source: str) -> ActivityOrderSnapshot:
@@ -632,28 +673,12 @@ def extract_visible_activity_card_texts(page_source: str) -> list[str]:
 
 
 def _extract_android_activity_card_texts(root: ElementTree.Element) -> list[str]:
-    def descendant_texts(element: ElementTree.Element) -> list[str]:
-        return [
-            child.attrib.get("text", "").strip()
-            for child in element.iter()
-            if child.attrib.get("displayed") != "false"
-            and child.attrib.get("visible") != "false"
-            and child.attrib.get("text", "").strip()
-        ]
-
-    def is_single_card_container(element: ElementTree.Element) -> bool:
-        values = descendant_texts(element)
-        return (
-            any(value in ACTIVITY_CATEGORY_TEXTS[1:] for value in values)
-            and all(values.count(marker) == 1 for marker in ACTIVITY_CARD_MARKERS)
-        )
-
     results: list[str] = []
     for element in root.iter():
-        if not is_single_card_container(element):
+        if not _android_single_activity_card_container(element):
             continue
-        values = descendant_texts(element)
-        if any(is_single_card_container(child) for child in element) and not _android_card_context_values(values):
+        values = _android_descendant_texts(element)
+        if any(_android_single_activity_card_container(child) for child in element) and not _android_card_context_values(values):
             continue
         category = next(value for value in values if value in ACTIVITY_CATEGORY_TEXTS[1:])
         ordered_values = (
@@ -663,6 +688,24 @@ def _extract_android_activity_card_texts(root: ElementTree.Element) -> list[str]
         )
         results.append(" ".join(ordered_values))
     return results
+
+
+def _android_descendant_texts(element: ElementTree.Element) -> list[str]:
+    return [
+        child.attrib.get("text", "").strip()
+        for child in element.iter()
+        if child.attrib.get("displayed") != "false"
+        and child.attrib.get("visible") != "false"
+        and child.attrib.get("text", "").strip()
+    ]
+
+
+def _android_single_activity_card_container(element: ElementTree.Element) -> bool:
+    values = _android_descendant_texts(element)
+    return (
+        any(value in ACTIVITY_CATEGORY_TEXTS[1:] for value in values)
+        and all(values.count(marker) == 1 for marker in ACTIVITY_CARD_MARKERS)
+    )
 
 
 def _android_card_context_values(values: list[str]) -> list[str]:
@@ -862,8 +905,9 @@ def _tap_activity_keyboard_search(driver: WebDriver) -> bool:
 
 
 def _tap_confirm_signup(driver: WebDriver) -> bool:
-    if tap_text_if_present(driver, "确认报名", timeout=2):
-        return True
+    for text in ACTIVITY_SIGNUP_ACTION_TEXTS:
+        if tap_text_if_present(driver, text, timeout=2):
+            return True
     return tap_by_coordinate_ratios(driver, [(0.78, 0.955), (0.82, 0.94), (0.74, 0.93)])
 
 
@@ -966,13 +1010,9 @@ def _tap_activity_category(driver: WebDriver, category_name: str) -> bool:
 
 
 def _tap_first_activity_card(driver: WebDriver, page_source: str, verify_open=None, timeout: float = 1.2) -> bool:
-    for x, y in _activity_card_tap_points(page_source):
-        try:
-            driver.execute_script("mobile: tap", {"x": x, "y": y})
-            if verify_open is None or _wait_until(verify_open, timeout=timeout):
-                return True
-        except WebDriverException:
-            continue
+    for tap_points in _activity_card_tap_point_groups(page_source):
+        if _tap_activity_card_points(driver, tap_points, verify_open=verify_open, timeout=timeout):
+            return True
     for ratio in [(0.50, 0.28), (0.50, 0.34), (0.50, 0.22)]:
         if not tap_by_coordinate_ratios(driver, [ratio]):
             continue
@@ -981,7 +1021,22 @@ def _tap_first_activity_card(driver: WebDriver, page_source: str, verify_open=No
     return False
 
 
+def _tap_activity_card_points(driver: WebDriver, tap_points: list[tuple[int, int]], verify_open=None, timeout: float = 1.2) -> bool:
+    for x, y in tap_points:
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+            if verify_open is None or _wait_until(verify_open, timeout=timeout):
+                return True
+        except WebDriverException:
+            continue
+    return False
+
+
 def _activity_card_tap_points(page_source: str) -> list[tuple[int, int]]:
+    return [point for group in _activity_card_tap_point_groups(page_source) for point in group]
+
+
+def _activity_card_tap_point_groups(page_source: str) -> list[list[tuple[int, int]]]:
     try:
         root = ElementTree.fromstring(page_source)
     except ElementTree.ParseError:
@@ -1006,8 +1061,20 @@ def _activity_card_tap_points(page_source: str) -> list[tuple[int, int]]:
         if width < 180 or height < 120:
             continue
         rects.append(rect)
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        if not _android_single_activity_card_container(element):
+            continue
+        rect = _bounds_rect_from_attrs(element.attrib)
+        if rect is None:
+            continue
+        x, y, width, height = rect
+        if width < 180 or height < 120:
+            continue
+        rects.append(rect)
 
-    points: list[tuple[int, int]] = []
+    groups: list[list[tuple[int, int]]] = []
     seen: set[tuple[int, int]] = set()
     for x, y, width, height in sorted(set(rects), key=lambda item: (item[1], item[0])):
         x_point = x + max(1, width // 2)
@@ -1015,13 +1082,47 @@ def _activity_card_tap_points(page_source: str) -> list[tuple[int, int]]:
             y + min(max(48, height // 3), height - 20),
             y + min(max(72, height // 2), height - 20),
         ]
+        group: list[tuple[int, int]] = []
         for y_point in y_candidates:
             point = (x_point, y_point)
             if point in seen:
                 continue
-            points.append(point)
+            group.append(point)
             seen.add(point)
-    return points
+        if group:
+            groups.append(group)
+    return groups
+
+
+def _activity_signup_action_available(page_source: str) -> bool:
+    return not activity_signup_unavailable(page_source) and any(text in page_source for text in ACTIVITY_SIGNUP_ACTION_TEXTS)
+
+
+def _wait_for_activity_detail_signup_state(driver: WebDriver, timeout: float = 4) -> str:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if _activity_signup_action_available(page_source):
+            return "available"
+        if activity_signup_unavailable(page_source):
+            return "unavailable"
+        if activity_signup_is_visible(page_source):
+            return "signup"
+        if activity_detail_is_visible(page_source) and not _android_activity_detail_loading_shell_visible(page_source):
+            return "unknown"
+        time.sleep(0.2)
+    return "unknown"
+
+
+def _return_to_activity_feed(driver: WebDriver) -> None:
+    try:
+        driver.back()
+    except WebDriverException:
+        return
+    if _wait_until(lambda: not activity_detail_is_visible(_safe_page_source(driver)), timeout=3):
+        return
+    if _is_ios_driver(driver) and tap_by_coordinate_ratios(driver, [(0.07, 0.10), (0.08, 0.11)]):
+        _wait_until(lambda: not activity_detail_is_visible(_safe_page_source(driver)), timeout=3)
 
 
 def _activity_ready_id_present(driver: WebDriver) -> bool:
@@ -1211,6 +1312,11 @@ def _safe_page_source(driver: WebDriver) -> str:
         return driver.page_source
     except WebDriverException:
         return ""
+
+
+def _is_ios_driver(driver: WebDriver) -> bool:
+    platform_name = (getattr(driver, "capabilities", {}) or {}).get("platformName", "")
+    return str(platform_name).lower() == "ios"
 
 
 def _wait_until(predicate, timeout: int = 10) -> bool:

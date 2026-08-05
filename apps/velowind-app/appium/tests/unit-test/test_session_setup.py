@@ -40,6 +40,7 @@ def test_ios_config_writes_allure_environment(monkeypatch, tmp_path):
     assert environment_file.exists()
     content = environment_file.read_text(encoding="utf-8")
     assert "Platform=iOS\n" in content
+    assert "Test Platform=iOS\n" in content
     assert "Device Kind=physical\n" in content
     assert "Target=device\n" in content
     assert "Device Name=Zhigang iPhone\n" in content
@@ -70,6 +71,7 @@ def test_android_config_writes_allure_environment(monkeypatch, tmp_path):
     assert loaded_config is config
     content = (results_dir / "environment.properties").read_text(encoding="utf-8")
     assert "Platform=Android\n" in content
+    assert "Test Platform=Android\n" in content
     assert "Device Kind=physical\n" in content
     assert "Target=physical\n" in content
     assert "Device Name=25060RK16C\n" in content
@@ -327,6 +329,27 @@ def test_home_visible_rejects_message_detail_overlay():
             self.page_source = source
 
     assert session._home_visible(FakeDriver(page_source)) is False
+
+
+def test_home_visible_rejects_android_message_detail_comment_region_with_cached_home_texts():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="骑行" />
+      <android.widget.TextView text="徒步" />
+      <android.widget.TextView text="活动" />
+      <android.widget.TextView text="消息" />
+      <android.widget.TextView text="我的" />
+      <android.widget.TextView text="回复" />
+      <android.widget.TextView text="删除" />
+    </hierarchy>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    assert session._home_visible(FakeDriver(page_source)) is False
+    assert session._home_or_login_visible(FakeDriver(page_source)) is False
 
 
 def test_home_visible_rejects_activity_detail_preview_overlay():

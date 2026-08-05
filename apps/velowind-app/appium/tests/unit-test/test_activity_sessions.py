@@ -1141,10 +1141,38 @@ def test_add_activity_session_retries_current_page_when_home_recovery_fails(monk
     monkeypatch.setattr(activity_sessions, "open_create_session_form", lambda *args, **kwargs: events.append("create"))
     monkeypatch.setattr(activity_sessions, "fill_session_form", lambda *args, **kwargs: events.append("fill"))
     monkeypatch.setattr(activity_sessions, "submit_session_form", lambda *args, **kwargs: "创建成功")
+    monkeypatch.setattr(activity_sessions, "publish_visible_activity_session_if_needed", lambda *args, **kwargs: events.append("publish") or True)
 
     assert activity_sessions.add_activity_session(driver, draft, config) == "创建成功"
 
-    assert events == ["dismiss", ("open", 1), "ensure-home", ("open", 2), "manage", "create", "fill"]
+    assert events == ["dismiss", ("open", 1), "ensure-home", ("open", 2), "manage", "create", "fill", "publish"]
+
+
+def test_publish_visible_activity_session_taps_shelf_and_confirms(monkeypatch):
+    driver = FakeDriver("管理场次 测试 - 场次 0805 未发布 上架", width=1080, height=2400)
+    events = []
+
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: driver.page_source)
+
+    def fake_tap_text(received, text, timeout=0.5):
+        events.append(("tap-text", text))
+        if text == "上架":
+            driver.page_source = "管理场次 测试 - 场次 0805 确认上架 取消 确定"
+            return True
+        if text == "确定":
+            driver.page_source = "管理场次 测试 - 场次 0805 已上架 下架"
+            return True
+        return False
+
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", fake_tap_text)
+
+    assert activity_sessions.publish_visible_activity_session_if_needed(driver, expected_title="测试 - 场次 0805", timeout=1) is True
+    assert events == [
+        ("tap-text", "上架"),
+        ("tap-text", "确认"),
+        ("tap-text", "确定"),
+    ]
 
 
 def test_fill_session_form_requires_each_visible_field(monkeypatch):
@@ -1688,6 +1716,25 @@ def test_scroll_my_activity_list_toward_approved_activity_goes_down_when_approve
     assert swipes == ["down"]
 
 
+def test_scroll_my_activity_list_uses_w3c_swipe_on_ios(monkeypatch):
+    driver = FakeDriver("我的活动 发布 一起去徒步吧 通过 上架", width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    assert activity_sessions._scroll_my_activity_list(driver) is True
+    assert driver.scripts == [
+        (
+            "swipe",
+            {
+                "start_x": 201,
+                "start_y": 716,
+                "end_x": 201,
+                "end_y": 297,
+                "duration": 450,
+            },
+        )
+    ]
+
+
 def test_ios_datetime_picker_wheel_step_uses_visible_wheel_element_center(monkeypatch):
     driver = FakeDriver(width=402, height=874)
     driver.capabilities = {"platformName": "iOS"}
@@ -1729,3 +1776,26 @@ def test_top_approved_badge_center_y_ignores_ios_page_container(monkeypatch):
     )
 
     assert activity_sessions._top_approved_badge_center_y(driver) == 322
+
+
+def test_tap_top_right_plus_uses_android_header_svg_bounds(monkeypatch):
+    page_source = """
+    <hierarchy width="1080" height="2400">
+      <android.widget.TextView text="管理场次" bounds="[435,106][647,172]" displayed="true" />
+      <android.view.ViewGroup bounds="[936,99][1028,181]" displayed="true">
+        <com.horcrux.svg.SvgView bounds="[961,119][1003,161]" displayed="true" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+    driver = FakeDriver(page_source, width=1080, height=2400)
+
+    assert activity_sessions._tap_top_right_plus(driver) is True
+    assert driver.scripts == [("mobile: tap", {"x": 982, "y": 140})]
+
+
+def test_tap_top_right_plus_uses_ios_manage_session_plus_coordinates():
+    driver = FakeDriver("管理场次 当前路线 一起去徒步吧 17个场次", width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    assert activity_sessions._tap_top_right_plus(driver) is True
+    assert driver.scripts == [("mobile: tap", {"x": 361, "y": 91})]

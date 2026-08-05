@@ -309,7 +309,7 @@ def _home_blocking_text_present(page_source: str, *, allow_message_tab: bool = F
     blockers = HOME_BLOCKING_TEXTS
     if allow_message_tab:
         blockers = [text for text in HOME_BLOCKING_TEXTS if text not in MESSAGE_TAB_BLOCKING_TEXTS]
-    return any(text in page_source for text in blockers)
+    return any(text in page_source for text in blockers) or all(text in page_source for text in ["回复", "删除"])
 
 
 def _me_content_page_visible(page_source: str) -> bool:

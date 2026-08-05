@@ -177,7 +177,6 @@ LOCATION_PICKER_VISIBLE_PATTERNS = [
     'name="搜索地点" label="搜索地点" enabled="true" visible="true"',
     'value="搜索地点"',
     'placeholderValue="搜索地点"',
-    "不标记地点",
 ]
 NOTE_TESTDATA_FILE = Path(__file__).resolve().parents[2] / "tests" / "message" / "testdata" / "publish_notes.yaml"
 
@@ -3677,7 +3676,7 @@ def _tap_android_detail_share_button_from_source(driver: WebDriver) -> bool:
         height = bottom - top
         if not (60 <= width <= 180 and 45 <= height <= 140):
             continue
-        if not (120 <= top <= 380):
+        if not (90 <= top <= 380):
             continue
         if screen_width and left < screen_width * 0.65:
             continue
@@ -3721,7 +3720,7 @@ def _confirm_share_after_target(driver: WebDriver, timeout: int = 20) -> bool:
         for text in ["发送", "发表", "分享", "确定"]:
             if tap_text_if_present(driver, text, timeout=1):
                 return _wait_until(lambda: _share_returned_to_detail(driver), timeout=timeout)
-        if _tap_android_share_confirm_by_coordinate(driver):
+        if _tap_share_confirm_by_coordinate(driver):
             return _wait_until(lambda: _share_returned_to_detail(driver), timeout=timeout)
         if _share_returned_to_detail(driver):
             return True
@@ -3734,9 +3733,9 @@ def _share_returned_to_detail(driver: WebDriver) -> bool:
     return not _share_sheet_visible(page_source) and message_detail_is_visible(driver)
 
 
-def _tap_android_share_confirm_by_coordinate(driver: WebDriver) -> bool:
+def _tap_share_confirm_by_coordinate(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
-    if str(capabilities.get("platformName", "")).lower() != "android":
+    if str(capabilities.get("platformName", "")).lower() not in {"android", "ios"}:
         return False
     try:
         rect = driver.get_window_rect()
@@ -3747,6 +3746,10 @@ def _tap_android_share_confirm_by_coordinate(driver: WebDriver) -> bool:
         return True
     except (AttributeError, KeyError, TypeError, WebDriverException):
         return False
+
+
+def _tap_android_share_confirm_by_coordinate(driver: WebDriver) -> bool:
+    return _tap_share_confirm_by_coordinate(driver)
 
 
 def _return_to_home_after_share(driver: WebDriver, timeout: int = 20) -> bool:

@@ -8,6 +8,7 @@ from velowind_appium.modules import (
     activity_feed_all_results_match_category,
     activity_text_search_result_texts,
     open_first_activity_detail,
+    open_first_signup_available_activity_detail,
     open_activity_signup,
     open_activity_search,
     open_activity_tab,
@@ -81,7 +82,7 @@ def test_user_can_open_activity_signup_form(driver, ios_config, step):
     step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
-    step("open-first-activity-detail", lambda: open_first_activity_detail(driver, timeout=20), capture=True)
+    step("open-first-signup-available-activity-detail", lambda: open_first_signup_available_activity_detail(driver, timeout=25), capture=True)
     step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
     snapshot = step("read-activity-signup", lambda: read_activity_signup_snapshot(driver, timeout=15), capture=True)
 
@@ -96,7 +97,7 @@ def test_user_can_fill_activity_signup_identity_fields(driver, ios_config, step)
     step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
-    step("open-first-activity-detail", lambda: open_first_activity_detail(driver, timeout=20), capture=True)
+    step("open-first-signup-available-activity-detail", lambda: open_first_signup_available_activity_detail(driver, timeout=25), capture=True)
     step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
     snapshot = step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
 
@@ -113,7 +114,7 @@ def test_user_can_submit_activity_signup_to_payment_page(driver, ios_config, ste
     step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
-    step("open-first-activity-detail", lambda: open_first_activity_detail(driver, timeout=20), capture=True)
+    step("open-first-signup-available-activity-detail", lambda: open_first_signup_available_activity_detail(driver, timeout=25), capture=True)
     step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
     step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
     if "已经报名，无需重复报名" in driver.page_source:

@@ -33,6 +33,7 @@ def build_allure_environment(platform: str, config) -> dict[str, str]:
     udid = str(getattr(config, "udid", "") or "")
     environment = {
         "Platform": platform_display_name(platform),
+        "Test Platform": platform_display_name(platform),
         "Device Kind": device_kind(platform, target, udid),
         "Target": target or "unknown",
     }

@@ -98,7 +98,7 @@ def test_android_publish_entry_coordinate_targets_pixel_10_plus_button(monkeypat
     assert taps == [("mobile: tap", {"x": 640, "y": 2670})]
 
 
-def test_ios_publish_entry_coordinate_keeps_existing_center_target():
+def test_ios_publish_entry_coordinate_keeps_existing_center_target(monkeypatch):
     taps = []
 
     class FakeDriver:
@@ -111,6 +111,8 @@ def test_ios_publish_entry_coordinate_keeps_existing_center_target():
         @staticmethod
         def execute_script(script, payload):
             taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: True)
 
     assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 589, "y": 2377})]
@@ -1041,6 +1043,34 @@ def test_tap_detail_share_button_uses_android_visible_header_icon_bounds(monkeyp
     assert taps == [("mobile: tap", {"x": 1170, "y": 249})]
 
 
+def test_tap_detail_share_button_uses_android_sticky_header_icon_near_status_bar(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def get_window_rect(self):
+            return {"width": 1080, "height": 2400}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(
+        message_detail,
+        "_safe_page_source",
+        lambda driver: """
+        <hierarchy width="1080" height="2400">
+          <android.view.ViewGroup bounds="[0,63][1080,223]" />
+          <android.view.ViewGroup bounds="[45,112][129,182]" />
+          <android.view.ViewGroup bounds="[944,107][1035,189]" />
+        </hierarchy>
+        """,
+    )
+
+    assert message_detail._tap_detail_share_button(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 989, "y": 148})]
+
+
 def test_confirm_share_after_target_uses_android_top_right_coordinate_when_wechat_xml_is_empty(monkeypatch):
     events = []
 
@@ -1066,6 +1096,35 @@ def test_confirm_share_after_target_uses_android_top_right_coordinate_when_wecha
     monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
     original_execute = FakeDriver.execute_script
     FakeDriver.execute_script = lambda self, script, payload: (original_execute(self, script, payload), state.update(tapped=True))
+
+    assert message_detail._confirm_share_after_target(FakeDriver(), timeout=2) is True
+    assert events == [("mobile: tap", {"x": 1126, "y": 221})]
+
+
+def test_confirm_share_after_target_uses_ios_top_right_coordinate_when_wechat_xml_is_empty(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def get_window_rect(self):
+            return {"width": 1280, "height": 2772}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+            state["tapped"] = True
+
+    state = {"tapped": False}
+
+    def fake_source(driver):
+        if state["tapped"]:
+            return "detail"
+        return '<hierarchy><android.view.View package="com.tencent.mm" displayed="false" /></hierarchy>'
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", fake_source)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: False)
+    monkeypatch.setattr(message_detail, "_share_returned_to_detail", lambda driver: message_detail._safe_page_source(driver) == "detail")
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
 
     assert message_detail._confirm_share_after_target(FakeDriver(), timeout=2) is True
     assert events == [("mobile: tap", {"x": 1126, "y": 221})]
@@ -2048,7 +2107,7 @@ def test_dismiss_editor_keyboard_uses_native_fallback_without_coordinate_tap(mon
     ]
 
 
-def test_tap_editor_done_targets_toolbar_control_center():
+def test_tap_editor_done_targets_toolbar_control_center(monkeypatch):
     events = []
 
     class FakeElement:
@@ -2062,6 +2121,7 @@ def test_tap_editor_done_targets_toolbar_control_center():
         def execute_script(self, script, payload):
             events.append(("execute", script, payload))
 
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda driver, text, timeout=2: False)
     assert message_detail._tap_editor_done(FakeDriver()) is True
     assert events == [
         (
@@ -2113,6 +2173,9 @@ def test_fill_note_location_opens_picker_from_unselected_row(monkeypatch):
     events = []
 
     monkeypatch.setattr(message_detail, "_prepare_note_location_section", lambda driver: events.append("prepared"))
+    monkeypatch.setattr(message_detail, "_dismiss_editor_keyboard", lambda driver: None)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "")
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
     monkeypatch.setattr(
         message_detail,
         "_tap_text_or_contains",

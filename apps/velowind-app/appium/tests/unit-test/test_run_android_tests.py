@@ -113,11 +113,16 @@ def test_android_full_suite_contains_required_regression_cases():
     suite = run_android_tests.load_test_suite(suite_file)
 
     assert suite.tests == [
+        "android_smoke/test_android_feature_walkthrough.py",
+        "message/test_ios_search_by_type.py",
         "message/test_ios_search_note.py",
-        "message/test_ios_home_note_interactions.py",
         "message/test_ios_publish_note.py",
+        "draft/test_ios_save_note_draft.py",
+        "message/test_ios_message_browse.py",
+        "message/test_ios_home_note_interactions.py",
         "activity/test_publish_activity.py",
         "activity/test_manage_activity_session.py",
+        "activity/test_ios_activity_browse.py",
         "rental/test_rental_order.py",
     ]
     assert suite.pytest_args == ["--maxfail=1"]

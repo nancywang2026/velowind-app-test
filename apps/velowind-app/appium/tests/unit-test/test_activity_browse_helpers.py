@@ -84,6 +84,49 @@ def test_activity_search_accepts_android_split_title_and_location_results():
     ]
 
 
+def test_activity_card_tap_points_include_android_split_card_container_bounds():
+    page_source = """
+    <hierarchy>
+      <android.widget.ScrollView displayed="true">
+        <android.view.ViewGroup displayed="true" bounds="[42,633][1238,1282]">
+          <android.widget.TextView text="南北驼梁徒步穿越" displayed="true" bounds="[45,633][846,699]" />
+          <android.widget.TextView text="河北省·石家庄市" displayed="true" />
+          <android.widget.TextView text="徒步" displayed="true" />
+          <android.widget.TextView text="总里程" displayed="true" />
+          <android.widget.TextView text="时长" displayed="true" />
+          <android.widget.TextView text="场次" displayed="true" />
+          <android.widget.TextView text="难度等级" displayed="true" />
+          <android.widget.TextView text="20" displayed="true" />
+          <android.widget.TextView text="2天" displayed="true" />
+          <android.widget.TextView text="0场" displayed="true" />
+        </android.view.ViewGroup>
+      </android.widget.ScrollView>
+    </hierarchy>
+    """
+
+    assert activity_browse._activity_card_tap_points(page_source) == [(640, 849), (640, 957)]
+
+
+def test_activity_card_tap_points_include_android_metric_container_when_title_is_sibling():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="南北驼梁徒步穿越" displayed="true" bounds="[45,633][846,699]" />
+      <android.view.ViewGroup displayed="true" bounds="[45,765][1035,1322]">
+        <android.widget.TextView text="徒步" displayed="true" />
+        <android.widget.TextView text="总里程" displayed="true" />
+        <android.widget.TextView text="时长" displayed="true" />
+        <android.widget.TextView text="场次" displayed="true" />
+        <android.widget.TextView text="难度等级" displayed="true" />
+        <android.widget.TextView text="126" displayed="true" />
+        <android.widget.TextView text="7天" displayed="true" />
+        <android.widget.TextView text="0场" displayed="true" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+
+    assert activity_browse._activity_card_tap_points(page_source) == [(540, 950), (540, 1043)]
+
+
 def test_activity_feed_uses_category_tag_row_to_match_results():
     page_source = """
     <AppiumAUT>
@@ -254,6 +297,33 @@ def test_parse_activity_detail_snapshot_extracts_visible_route_fields():
     assert snapshot.is_basic_detail_complete()
 
 
+def test_parse_activity_detail_snapshot_accepts_android_route_itinerary_without_overview_heading():
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="activity-route-detail-v3-hero-carousel" displayed="true" />
+      <android.widget.ImageView resource-id="image" displayed="true" />
+      <android.widget.TextView text="一起去徒步吧" displayed="true" bounds="[0,249][522,315]" />
+      <android.widget.TextView text="青海省·黄南藏族" displayed="true" />
+      <android.widget.TextView text="Nancy" displayed="true" />
+      <android.widget.TextView text="路线主理人" displayed="true" />
+      <android.widget.TextView text="总里程" displayed="true" />
+      <android.widget.TextView text="参考时长" displayed="true" />
+      <android.widget.TextView text="风险等级" displayed="true" />
+      <android.widget.TextView text="风景标签" displayed="true" />
+      <android.widget.TextView text="沿途景点" displayed="true" />
+      <android.widget.TextView text="Day1" displayed="true" />
+      <android.widget.TextView text="路线说明待补充" displayed="true" />
+      <android.widget.TextView text="活动评论" displayed="true" />
+      <android.widget.TextView text="集合地点" displayed="true" />
+    </hierarchy>
+    """
+
+    snapshot = activity_browse.parse_activity_detail_snapshot(page_source)
+
+    assert snapshot.route_visible is True
+    assert snapshot.is_basic_detail_complete()
+
+
 def test_activity_detail_visible_while_android_content_is_loading():
     page_source = """
     <hierarchy>
@@ -326,6 +396,70 @@ def test_tap_first_activity_card_tries_next_point_until_detail_opens(monkeypatch
 
     assert activity_browse._tap_first_activity_card(FakeDriver(), page_source, verify_open=verify_open) is True
     assert len(taps) == 2
+
+
+def test_open_first_signup_available_activity_detail_skips_ended_activity(monkeypatch):
+    feed_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="已结束活动 浙江省·张家界市 Nancy 骑行 总里程 128 时长 2天1晚 场次 2场 难度等级" visible="true" x="13" y="119" width="376" height="283" />
+      <XCUIElementTypeOther name="可报名活动 浙江省·湖州市 a admin 骑行 总里程 64 时长 1天 场次 1场 难度等级" visible="true" x="13" y="430" width="376" height="283" />
+    </AppiumAUT>
+    """
+    state = {"source": feed_source}
+    taps = []
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return state["source"]
+
+        def execute_script(self, script, payload):
+            taps.append((payload["x"], payload["y"]))
+            if payload["y"] < 430:
+                state["source"] = "activity-route-detail-v3-hero-carousel 活动详情 报名结束"
+            else:
+                state["source"] = "activity-route-detail-v3-hero-carousel 活动详情 确认报名"
+
+        def back(self):
+            state["source"] = feed_source
+
+    monkeypatch.setattr(activity_browse.time, "sleep", lambda seconds: None)
+
+    activity_browse.open_first_signup_available_activity_detail(FakeDriver(), timeout=3)
+
+    assert state["source"] == "activity-route-detail-v3-hero-carousel 活动详情 确认报名"
+    assert taps[0][1] < 430
+    assert taps[-1][1] >= 430
+
+
+def test_return_to_activity_feed_taps_ios_header_back_when_native_back_keeps_detail_open(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def back(self):
+            events.append("back")
+
+    wait_results = iter([False, True])
+    monkeypatch.setattr(activity_browse, "_wait_until", lambda condition, timeout: next(wait_results))
+    monkeypatch.setattr(
+        activity_browse,
+        "tap_by_coordinate_ratios",
+        lambda driver, ratios: events.append(("tap", ratios)) or True,
+    )
+
+    activity_browse._return_to_activity_feed(FakeDriver())
+
+    assert events == [
+        "back",
+        ("tap", [(0.07, 0.10), (0.08, 0.11)]),
+    ]
+
+
+def test_activity_signup_unavailable_detects_ended_action():
+    assert activity_browse.activity_signup_unavailable("activity-route-detail-v3-hero-carousel 报名结束") is True
+    assert activity_browse.activity_signup_unavailable("activity-route-detail-v3-hero-carousel 确认报名") is False
 
 
 def test_parse_activity_signup_snapshot_extracts_registration_fields():
