@@ -252,6 +252,60 @@ def test_browse_android_detail_scrolls_to_load_view_and_comment_metadata(monkeyp
     assert snapshot.comment_count == "0"
     assert events == ["up"]
 
+
+def test_parse_system_message_snapshot_detects_first_visible_message():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="系统消息" visible="true" />
+      <XCUIElementTypeStaticText name="活动通知" visible="true" />
+      <XCUIElementTypeStaticText name="07-31 17:45" visible="true" />
+      <XCUIElementTypeStaticText name="有新的活动报名" visible="true" />
+      <XCUIElementTypeStaticText name="有新的活动报名" visible="true" />
+    </AppiumAUT>
+    """
+
+    snapshot = message_detail.parse_system_message_snapshot(page_source)
+
+    assert snapshot.page_visible
+    assert snapshot.category == "活动通知"
+    assert snapshot.timestamp == "07-31 17:45"
+    assert snapshot.title == "有新的活动报名"
+    assert snapshot.body == "有新的活动报名"
+    assert snapshot.is_basic_system_message_visible()
+
+
+def test_open_system_message_page_taps_messages_tab_and_system_entry(monkeypatch):
+    calls = []
+    page = {"source": "首页 笔记 活动 消息 我的"}
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return page["source"]
+
+    def fake_tap_tab(driver, accessibility_id, text, timeout=3):
+        calls.append(("tap-tab", accessibility_id, text))
+        page["source"] = "消息 系统通知 系统消息"
+        return True
+
+    def fake_tap_text(driver, text, timeout=1):
+        calls.append(("tap-text", text))
+        page["source"] = "系统消息 活动通知 07-31 17:45 有新的活动报名"
+        return True
+
+    monkeypatch.setattr(message_detail, "tap_accessibility_id_or_text_if_present", fake_tap_tab, raising=False)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", fake_tap_text)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    snapshot = message_detail.open_system_message_page(FakeDriver(), timeout=3)
+
+    assert snapshot.is_basic_system_message_visible()
+    assert calls == [
+        ("tap-tab", "bottom-nav-messages", "消息"),
+        ("tap-text", "系统消息"),
+    ]
+
+
 def test_parse_detail_snapshot_extracts_title_counts_and_comments():
     page_source = """
     <AppiumAUT>

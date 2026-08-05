@@ -292,6 +292,150 @@ def test_home_and_publish_entry_reject_my_activities_overlay():
     assert session._publish_entry_ready(driver) is False
 
 
+def test_home_and_publish_entry_reject_profile_content_pages():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
+      <XCUIElementTypeStaticText name="个人资料" visible="true" />
+      <XCUIElementTypeStaticText name="昵称" visible="true" />
+      <XCUIElementTypeStaticText name="手机号" visible="true" />
+      <XCUIElementTypeStaticText name="实名认证状态" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
+def test_home_and_publish_entry_reject_interest_preferences_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
+      <XCUIElementTypeStaticText name="兴趣偏好" visible="true" />
+      <XCUIElementTypeStaticText name="骑行" visible="true" />
+      <XCUIElementTypeStaticText name="徒步" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
+def test_home_and_publish_entry_reject_my_coupons_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
+      <XCUIElementTypeStaticText name="我的卡券" visible="true" />
+      <XCUIElementTypeStaticText name="暂无卡券" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
+def test_home_and_publish_entry_reject_settings_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
+      <XCUIElementTypeStaticText name="设置" visible="true" />
+      <XCUIElementTypeStaticText name="语言 · 简体中文" visible="true" />
+      <XCUIElementTypeStaticText name="账号与安全" visible="true" />
+      <XCUIElementTypeStaticText name="退出登录" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
+def test_home_and_publish_entry_reject_account_security_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
+      <XCUIElementTypeStaticText name="账号与安全" visible="true" />
+      <XCUIElementTypeStaticText name="绑定手机号" visible="true" />
+      <XCUIElementTypeStaticText name="设置/修改密码" visible="true" />
+      <XCUIElementTypeStaticText name="账号注销" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
+def test_home_and_publish_entry_reject_leader_application_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="首页 活动 消息 我的" visible="false" />
+      <XCUIElementTypeStaticText name="成为领队" visible="true" />
+      <XCUIElementTypeStaticText name="寻风集领队，等你加入" visible="true" />
+      <XCUIElementTypeStaticText name="温馨提示" visible="true" />
+      <XCUIElementTypeStaticText name="申请状态" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
+def test_home_and_publish_entry_reject_system_message_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="全国 推荐 笔记 活动 消息 我的" visible="false" />
+      <XCUIElementTypeStaticText name="系统消息" visible="true" />
+      <XCUIElementTypeStaticText name="活动通知" visible="true" />
+      <XCUIElementTypeStaticText name="07-31 17:45" visible="true" />
+      <XCUIElementTypeStaticText name="有新的活动报名" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+    assert session._publish_entry_ready(driver) is False
+
+
 def test_home_and_publish_entry_reject_my_notes_overlay():
     page_source = """
     <AppiumAUT>
@@ -424,7 +568,7 @@ def test_ensure_logged_in_from_me_then_home_opens_me_before_login(monkeypatch):
         ("tap-tab", "bottom-nav-me", "我的"),
     ]
     assert "login" in events
-    assert ("tap-tab", "bottom-nav-home", "首页") in events
+    assert ("tap-tab", "bottom-nav-home", "笔记") in events
 
 
 def test_ensure_logged_in_from_me_then_home_can_login_when_me_tab_is_not_tappable(monkeypatch):
@@ -612,6 +756,38 @@ def test_ensure_logged_in_on_home_discards_unpublished_note_draft(monkeypatch):
 
     assert session.ensure_logged_in_on_home(object(), object()) is False
     assert events == ["top-back", "discard"]
+
+
+def test_ensure_logged_in_on_home_with_step_recovers_profile_page_before_waiting(monkeypatch):
+    state = {"page": "profile"}
+    events = []
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False,
+    )
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back") or state.update(page="home"))
+
+    def fake_wait_for_home_feed(driver, timeout=20):
+        assert state["page"] == "home", "waited for home before recovering from the profile page"
+        events.append("wait-home")
+        return True
+
+    def fake_step(label, action):
+        events.append(("step", label))
+        return action()
+
+    monkeypatch.setattr(session, "wait_for_home_feed", fake_wait_for_home_feed)
+
+    assert session.ensure_logged_in_on_home(object(), object(), step=fake_step) is False
+    assert events[0] == ("step", "recover-home-session")
 
 
 def test_ensure_logged_in_on_home_relaunches_android_app_from_launcher(monkeypatch):
