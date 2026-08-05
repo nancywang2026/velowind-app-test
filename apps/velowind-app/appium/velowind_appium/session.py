@@ -49,6 +49,7 @@ HOME_BLOCKING_TEXTS = [
     'hint="请输入内容"',
 ]
 MESSAGE_TAB_BLOCKING_TEXTS = {"系统消息", "系统通知"}
+ANDROID_RECOVERY_CANCEL_SIGNUP_DIALOG_TEXT = "确认取消当前报名吗"
 
 
 def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
@@ -66,6 +67,7 @@ def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
 
 def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumConfig) -> bool:
     dismiss_common_system_alerts(driver)
+    _dismiss_android_cancel_signup_dialog(driver)
     tap_text_if_present(driver, "同意并继续", timeout=2)
     tap_text_if_present(driver, "同意", timeout=1)
 
@@ -113,6 +115,7 @@ def _login_required_after_short_wait(driver: WebDriver, timeout: float = 3.0) ->
 
 def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:
     dismiss_common_system_alerts(driver)
+    _dismiss_android_cancel_signup_dialog(driver)
     tap_text_if_present(driver, "同意并继续", timeout=2)
     tap_text_if_present(driver, "同意", timeout=1)
 
@@ -141,6 +144,11 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         for _ in range(5):
             if _home_visible(driver):
                 return True
+            if _dismiss_android_cancel_signup_dialog(driver):
+                time.sleep(0.2)
+                if _home_visible(driver):
+                    return True
+                continue
             if _relaunch_from_android_launcher():
                 return True
             if not _home_or_login_visible(driver):
@@ -280,6 +288,16 @@ def _home_or_login_visible(driver: WebDriver) -> bool:
     if all(text in page_source for text in ["笔记", "活动", "消息", "我的"]):
         return True
     return any(text in page_source for text in ["首页", "笔记", "全国", "推荐", "密码登录", "手机号登录", "请输入手机号"])
+
+
+def _dismiss_android_cancel_signup_dialog(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    page_source = _safe_page_source(driver)
+    if ANDROID_RECOVERY_CANCEL_SIGNUP_DIALOG_TEXT not in page_source:
+        return False
+    return tap_text_if_present(driver, "再想想", timeout=0.5)
 
 
 def _home_visible(driver: WebDriver) -> bool:
