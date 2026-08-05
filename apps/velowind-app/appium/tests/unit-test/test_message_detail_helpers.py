@@ -1329,6 +1329,76 @@ def test_fill_input_near_label_supports_android_edit_text_hint(monkeypatch):
     assert events == ["click", "clear", ("send-keys", "洱海骑行计划"), "hide-keyboard"]
 
 
+def test_fill_note_body_taps_android_emulator_text_placeholder(monkeypatch):
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("click-body")
+
+        def clear(self):
+            events.append("clear-body")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {
+            "platformName": "Android",
+            "appium:udid": "emulator-5554",
+            "appium:deviceName": "Android Emulator",
+        }
+
+        def find_element(self, by, value):
+            if value == '//android.widget.EditText[@focused="true"]':
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    def tap_placeholder(driver, text, timeout=0):
+        if text == "添加正文":
+            events.append(("tap-text", text, timeout))
+            return True
+        return False
+
+    monkeypatch.setattr(message_detail, "_fill_input_near_label", lambda *args, **kwargs: False)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", tap_placeholder)
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    message_detail._fill_note_body(FakeDriver(), "长白山正文")
+
+    assert events == [
+        ("tap-text", "添加正文", 1),
+        "click-body",
+        "clear-body",
+        ("send-keys", "长白山正文"),
+        "hide-keyboard",
+    ]
+
+
+def test_fill_note_body_does_not_use_emulator_placeholder_on_android_physical(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {
+            "platformName": "Android",
+            "appium:udid": "R5CN12345",
+            "appium:deviceName": "Galaxy S24",
+        }
+
+        def find_element(self, by, value):
+            events.append(("find", value))
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_fill_input_near_label", lambda *args, **kwargs: False)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: events.append("tap") or True)
+
+    with pytest.raises(AssertionError, match="Unable to locate the note body input"):
+        message_detail._fill_note_body(FakeDriver(), "真机正文")
+
+    assert "tap" not in events
+
+
 def test_append_note_topics_uses_android_body_edit_text(monkeypatch):
     events = []
 

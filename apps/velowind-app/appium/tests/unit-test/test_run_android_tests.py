@@ -27,6 +27,32 @@ pytest_args:
     assert suite.pytest_args == ["--maxfail=1"]
 
 
+def test_load_android_test_suite_supports_file_methods(tmp_path):
+    suite_file = tmp_path / "suite.yaml"
+    suite_file.write_text(
+        """
+tests:
+  - file: android_smoke/test_android_feature_walkthrough.py
+    methods:
+      - test_android_home_categories_are_reachable
+      - test_android_bottom_tabs_are_reachable
+  - message/test_ios_publish_note.py
+pytest_args:
+  - --maxfail=1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    suite = run_android_tests.load_test_suite(suite_file)
+
+    assert suite.tests == [
+        "android_smoke/test_android_feature_walkthrough.py::test_android_home_categories_are_reachable",
+        "android_smoke/test_android_feature_walkthrough.py::test_android_bottom_tabs_are_reachable",
+        "message/test_ios_publish_note.py",
+    ]
+    assert suite.pytest_args == ["--maxfail=1"]
+
+
 def test_build_android_pytest_command_uses_suite_file(tmp_path):
     suite_file = tmp_path / "suite.yaml"
     suite_file.write_text(
@@ -113,17 +139,29 @@ def test_android_full_suite_contains_required_regression_cases():
     suite = run_android_tests.load_test_suite(suite_file)
 
     assert suite.tests == [
-        "android_smoke/test_android_feature_walkthrough.py",
-        "message/test_ios_search_by_type.py",
-        "message/test_ios_search_note.py",
-        "message/test_ios_publish_note.py",
-        "draft/test_ios_save_note_draft.py",
-        "message/test_ios_message_browse.py",
-        "message/test_ios_home_note_interactions.py",
-        "activity/test_publish_activity.py",
-        "activity/test_manage_activity_session.py",
-        "activity/test_ios_activity_browse.py",
-        "rental/test_rental_order.py",
+        "android_smoke/test_android_feature_walkthrough.py::test_android_home_categories_are_reachable",
+        "android_smoke/test_android_feature_walkthrough.py::test_android_bottom_tabs_are_reachable",
+        "message/test_ios_search_by_type.py::test_user_can_filter_notes_by_type",
+        "message/test_ios_search_note.py::test_user_can_search_and_open_note",
+        "message/test_ios_publish_note.py::test_user_can_publish_note_for_review",
+        "draft/test_ios_save_note_draft.py::test_user_can_save_note_as_draft_and_open_me_page",
+        "message/test_ios_message_browse.py::test_logged_in_user_can_browse_comment_and_interact_with_note",
+        "message/test_ios_message_browse.py::test_user_can_view_system_message_detail",
+        "message/test_ios_home_note_interactions.py::test_user_can_comment_on_first_home_note",
+        "message/test_ios_home_note_interactions.py::test_user_can_like_and_favorite_second_home_note",
+        "activity/test_publish_activity.py::test_user_can_publish_activity_for_review",
+        "activity/test_manage_activity_session.py::test_user_can_add_activity_session_from_my_approved_activity",
+        "activity/test_ios_activity_browse.py::test_user_can_filter_activities_by_cycling",
+        "activity/test_ios_activity_browse.py::test_user_can_search_activities_by_title_or_location",
+        "activity/test_ios_activity_browse.py::test_user_can_browse_activity_detail_fields",
+        "activity/test_ios_activity_browse.py::test_user_can_open_activity_signup_form",
+        "activity/test_ios_activity_browse.py::test_user_can_fill_activity_signup_identity_fields",
+        "activity/test_ios_activity_browse.py::test_user_can_submit_activity_signup_to_payment_page",
+        "activity/test_ios_activity_browse.py::test_user_can_view_my_activity_signup_status",
+        "activity/test_ios_activity_browse.py::test_user_can_open_my_activity_signup_list",
+        "activity/test_ios_activity_browse.py::test_user_can_open_my_activity_liked_list",
+        "activity/test_ios_activity_browse.py::test_user_can_open_my_activity_favorite_list",
+        "rental/test_rental_order.py::test_user_can_create_rental_order_and_leave_payment_unfinished",
     ]
     assert suite.pytest_args == ["--maxfail=1"]
 

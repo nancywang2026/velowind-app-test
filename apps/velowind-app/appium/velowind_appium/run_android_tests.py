@@ -87,22 +87,42 @@ def load_test_suite(path: Path) -> TestSuite:
     markers = raw_data.get("markers") or []
     pytest_args = raw_data.get("pytest_args") or []
 
-    for field_name, values in {
-        "tests": tests,
-        "markers": markers,
-        "pytest_args": pytest_args,
-    }.items():
+    for field_name, values in {"markers": markers, "pytest_args": pytest_args}.items():
         if not isinstance(values, list) or not all(isinstance(item, str) and item.strip() for item in values):
             raise ValueError(f"Test suite `{field_name}` must be a list of non-empty strings: {path}")
 
-    if not tests and not markers:
+    normalized_tests = _normalize_suite_tests(tests, path)
+
+    if not normalized_tests and not markers:
         raise ValueError(f"Test suite must specify at least one test or marker: {path}")
 
     return TestSuite(
-        tests=[item.strip() for item in tests],
+        tests=normalized_tests,
         markers=[item.strip() for item in markers],
         pytest_args=[item.strip() for item in pytest_args],
     )
+
+
+def _normalize_suite_tests(tests: object, path: Path) -> list[str]:
+    if not isinstance(tests, list):
+        raise ValueError(f"Test suite `tests` must be a list: {path}")
+
+    normalized: list[str] = []
+    for item in tests:
+        if isinstance(item, str) and item.strip():
+            normalized.append(item.strip())
+            continue
+        if isinstance(item, dict):
+            file_path = item.get("file")
+            methods = item.get("methods")
+            if not isinstance(file_path, str) or not file_path.strip():
+                raise ValueError(f"Test suite `tests[].file` must be a non-empty string: {path}")
+            if not isinstance(methods, list) or not all(isinstance(method, str) and method.strip() for method in methods):
+                raise ValueError(f"Test suite `tests[].methods` must be a list of non-empty strings: {path}")
+            normalized.extend(f"{file_path.strip()}::{method.strip()}" for method in methods)
+            continue
+        raise ValueError(f"Test suite `tests` must contain strings or file/methods mappings: {path}")
+    return normalized
 
 
 def _suite_test_paths(tests: list[str]) -> list[str]:

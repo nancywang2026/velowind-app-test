@@ -1591,6 +1591,8 @@ def _fill_note_body(driver: WebDriver, body: str) -> None:
     for keyword in BODY_FIELD_KEYWORDS:
         if _fill_input_near_label(driver, keyword, body, prefer_text_view=True):
             return
+    if _fill_android_emulator_note_body_from_placeholder(driver, body):
+        return
     for xpath in [
         '//XCUIElementTypeTextView[contains(@value, "正文") or contains(@value, "分享") or contains(@value, "内容")]',
         "//XCUIElementTypeTextView[1]",
@@ -1603,6 +1605,37 @@ def _fill_note_body(driver: WebDriver, body: str) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to locate the note body input")
+
+
+def _fill_android_emulator_note_body_from_placeholder(driver: WebDriver, body: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if not _is_android_emulator_capabilities(capabilities):
+        return False
+
+    for placeholder in ["添加正文", "输入正文", "请输入正文", "正文"]:
+        if not tap_text_if_present(driver, placeholder, timeout=1):
+            continue
+        time.sleep(0.2)
+        for xpath in [
+            '//android.widget.EditText[@focused="true"]',
+            '//android.widget.EditText[contains(@hint, "正文") or contains(@text, "正文")]',
+            "(//android.widget.EditText)[last()]",
+        ]:
+            try:
+                _replace_text(driver.find_element(AppiumBy.XPATH, xpath), body)
+                _hide_keyboard(driver)
+                return True
+            except (NoSuchElementException, WebDriverException):
+                continue
+    return False
+
+
+def _is_android_emulator_capabilities(capabilities: dict) -> bool:
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    udid = str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+    device_name = str(capabilities.get("appium:deviceName") or capabilities.get("deviceName") or "").lower()
+    return udid.startswith("emulator-") or "emulator" in device_name
 
 
 def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:

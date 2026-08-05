@@ -207,14 +207,16 @@ suite 文件支持三类字段：
 ```yaml
 tests:
   - smoke/test_ios_feature_walkthrough.py
-  - message/test_ios_publish_note.py
+  - file: message/test_ios_publish_note.py
+    methods:
+      - test_user_can_publish_note_for_review
 markers:
   - smoke
 pytest_args:
   - --maxfail=1
 ```
 
-- `tests`：相对 `apps/velowind-app/appium/tests/` 的测试文件路径
+- `tests`：相对 `apps/velowind-app/appium/tests/` 的测试文件路径；也支持 `{file, methods}` 写法细化到 pytest 方法级，runner 会展开成 `file.py::test_method`
 - `markers`：会拼成 `pytest -m "marker1 or marker2"`
 - `pytest_args`：补充透传给 pytest 的额外参数
 

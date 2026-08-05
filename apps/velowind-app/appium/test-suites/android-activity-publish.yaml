@@ -1,4 +1,0 @@
-tests:
-  - activity/test_publish_activity.py
-pytest_args:
-  - --maxfail=1
