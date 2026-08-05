@@ -39,6 +39,13 @@ HOME_BLOCKING_TEXTS = [
     "activity-route-detail-v3",
     "活动详情",
     "页面预览提示",
+    "租车",
+    "立即选车",
+    "服务门店",
+    "选择取还车日期",
+    "系统消息",
+    "系统通知",
+    "内容通知",
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]

@@ -119,6 +119,34 @@ def test_wait_for_home_feed_ignores_activity_detail_overlay(monkeypatch):
     assert home_feed.wait_for_home_feed(object(), timeout=3) == "home-feed-text"
 
 
+def test_wait_for_home_feed_rejects_rental_date_picker_overlay(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="全国 推荐 骑行 徒步 笔记 活动 消息 我的" />
+      <XCUIElementTypeOther name="租车 用车时间 服务门店 立即选车 选择取还车日期 取消 确定" />
+    </AppiumAUT>
+    """
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(home_feed, "_home_ready_id_present", lambda driver: False)
+
+    with pytest.raises(TimeoutException, match="Home feed did not become ready"):
+        home_feed.wait_for_home_feed(object(), timeout=0.01)
+
+
+def test_wait_for_home_feed_rejects_system_message_detail_overlay(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="全国 推荐 骑行 徒步 笔记 活动 消息 我的" visible="false" />
+      <XCUIElementTypeOther name="系统消息 内容通知 08-04 10:24 内容审核已通过" visible="true" />
+    </AppiumAUT>
+    """
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(home_feed, "_home_ready_id_present", lambda driver: False)
+
+    with pytest.raises(TimeoutException, match="Home feed did not become ready"):
+        home_feed.wait_for_home_feed(object(), timeout=0.01)
+
+
 def test_wait_for_home_feed_accepts_android_test_id_without_home_label(monkeypatch):
     page_source = '<android.widget.FrameLayout resource-id="post-home-feed-category-pager" />'
     monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: page_source)

@@ -50,7 +50,10 @@ def fill_note_draft_title(driver: WebDriver, title: str, timeout: int = 20) -> N
 def go_back_from_note_editor(driver: WebDriver, timeout: int = 10) -> None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        if save_draft_dialog_is_visible(_safe_page_source(driver)):
+        page_source = _safe_page_source(driver)
+        if save_draft_dialog_is_visible(page_source):
+            return
+        if inline_save_draft_action_is_visible(page_source) and _tap_inline_save_draft(driver):
             return
         if _tap_note_editor_back(driver):
             if _wait_until(lambda: save_draft_dialog_is_visible(_safe_page_source(driver)), timeout=2):
@@ -60,6 +63,8 @@ def go_back_from_note_editor(driver: WebDriver, timeout: int = 10) -> None:
 
 
 def wait_for_save_draft_dialog(driver: WebDriver, timeout: int = 10) -> None:
+    if inline_save_draft_action_is_visible(_safe_page_source(driver)):
+        return
     if not _wait_until(lambda: save_draft_dialog_is_visible(_safe_page_source(driver)), timeout=timeout):
         raise AssertionError("Save draft dialog did not appear")
 
@@ -67,7 +72,10 @@ def wait_for_save_draft_dialog(driver: WebDriver, timeout: int = 10) -> None:
 def choose_save_draft(driver: WebDriver, timeout: int = 10) -> None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        if not save_draft_dialog_is_visible(_safe_page_source(driver)):
+        page_source = _safe_page_source(driver)
+        if inline_save_draft_action_is_visible(page_source) and _tap_inline_save_draft(driver):
+            return
+        if not save_draft_dialog_is_visible(page_source):
             return
         for text in SAVE_DRAFT_CONFIRM_TEXTS:
             if tap_text_if_present(driver, text, timeout=1):
@@ -90,7 +98,16 @@ def open_me_page(driver: WebDriver, timeout: int = 12) -> None:
 
 
 def save_draft_dialog_is_visible(page_source: str) -> bool:
-    return all(token in page_source for token in ["保存草稿", "不保存"]) or "是否保存草稿" in page_source
+    return (
+        all(token in page_source for token in ["保存草稿", "不保存"])
+        or all(token in page_source for token in ["保存草稿", "取消"])
+        or "是否保存草稿" in page_source
+        or "是否将笔记保存至草稿箱" in page_source
+    )
+
+
+def inline_save_draft_action_is_visible(page_source: str) -> bool:
+    return "发布笔记" in page_source and "存草稿" in page_source
 
 
 def me_page_is_visible(page_source: str) -> bool:
@@ -118,6 +135,13 @@ def _tap_note_editor_back(driver: WebDriver) -> bool:
         return True
     if _back_with_driver_api(driver):
         return True
+    return False
+
+
+def _tap_inline_save_draft(driver: WebDriver) -> bool:
+    for text in SAVE_DRAFT_CONFIRM_TEXTS:
+        if tap_text_if_present(driver, text, timeout=1):
+            return True
     return False
 
 

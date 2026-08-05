@@ -67,7 +67,9 @@ def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config:
     open_manage_sessions_for_approved_activity(driver, timeout=timeout)
     open_create_session_form(driver, timeout=timeout)
     fill_session_form(driver, draft, timeout=timeout)
-    return submit_session_form(driver, expected_title=draft.title, timeout=timeout)
+    success_signal = submit_session_form(driver, expected_title=draft.title, timeout=timeout)
+    publish_visible_activity_session_if_needed(driver, expected_title=draft.title, timeout=min(timeout, 20))
+    return success_signal
 
 
 def open_my_activity_publish_list(driver: WebDriver, timeout: int = 30) -> None:
@@ -199,6 +201,40 @@ def submit_session_form(driver: WebDriver, *, expected_title: str, timeout: int 
     raise AssertionError("Activity session creation did not expose a success signal")
 
 
+def publish_visible_activity_session_if_needed(driver: WebDriver, *, expected_title: str | None = None, timeout: int = 20) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if "管理场次" not in page_source:
+            return False
+        if "上架" not in page_source:
+            return True
+        if expected_title and expected_title not in page_source and "未发布" not in page_source:
+            return True
+        if tap_text_if_present(driver, "上架", timeout=0.5):
+            time.sleep(0.4)
+            _confirm_activity_session_publish(driver)
+            return _wait_until(lambda: _activity_session_publish_result_visible(_safe_page_source(driver)), timeout=8)
+        try:
+            swipe_vertical(driver, direction="up")
+        except (WebDriverException, AttributeError):
+            return False
+        time.sleep(0.3)
+    return False
+
+
+def _confirm_activity_session_publish(driver: WebDriver) -> None:
+    for text in ["确认", "确定"]:
+        if tap_text_if_present(driver, text, timeout=0.5):
+            time.sleep(0.4)
+
+
+def _activity_session_publish_result_visible(page_source: str) -> bool:
+    if any(token in page_source for token in ["上架成功", "已上架", "已发布", "下架"]):
+        return True
+    return "管理场次" in page_source and "确认上架" not in page_source and "确定" not in page_source
+
+
 def _fill_session_field(driver: WebDriver, keywords: list[str], value: str) -> bool:
     for _ in range(5):
         for keyword in keywords:
@@ -259,6 +295,11 @@ def _tap_session_location_field(driver: WebDriver, keywords: list[str], placehol
             if _session_location_modal_visible(_safe_page_source(driver)):
                 return True
 
+    if _tap_android_session_location_field_by_source(driver, keywords + placeholders):
+        time.sleep(0.5)
+        if _session_location_modal_visible(_safe_page_source(driver)):
+            return True
+
     try:
         rect = driver.get_window_rect()
         driver.execute_script(
@@ -272,6 +313,80 @@ def _tap_session_location_field(driver: WebDriver, keywords: list[str], placehol
         return _session_location_modal_visible(_safe_page_source(driver))
     except (WebDriverException, KeyError, TypeError, AttributeError):
         return False
+
+
+def _tap_android_session_location_field_by_source(driver: WebDriver, keywords: list[str]) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<android." not in page_source:
+        return False
+    point = _android_session_location_field_point(page_source, keywords)
+    if point is None:
+        return False
+    x, y = point
+    try:
+        driver.execute_script("mobile: clickGesture", {"x": x, "y": y})
+        return True
+    except (WebDriverException, AttributeError):
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+            return True
+        except (WebDriverException, AttributeError):
+            return False
+
+
+def _android_session_location_field_point(page_source: str, keywords: list[str]) -> tuple[int, int] | None:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    elements = list(root.iter())
+    for index, element in enumerate(elements):
+        attributes = element.attrib
+        if attributes.get("displayed") == "false":
+            continue
+        label_text = attributes.get("text", "")
+        if not any(keyword and keyword in label_text for keyword in keywords):
+            continue
+        label_bounds = _android_bounds_rect(attributes.get("bounds", ""))
+        if label_bounds is None:
+            continue
+        value_point = _next_android_location_value_point(elements[index + 1 :], label_bounds)
+        if value_point is not None:
+            return value_point
+    return None
+
+
+def _next_android_location_value_point(
+    elements: list[ElementTree.Element],
+    label_bounds: tuple[int, int, int, int],
+) -> tuple[int, int] | None:
+    label_left, _label_top, label_right, label_bottom = label_bounds
+    label_center_x = (label_left + label_right) // 2
+    container_fallback: tuple[int, int] | None = None
+    for element in elements:
+        attributes = element.attrib
+        if attributes.get("displayed") == "false":
+            continue
+        bounds = _android_bounds_rect(attributes.get("bounds", ""))
+        if bounds is None:
+            continue
+        left, top, right, bottom = bounds
+        width = right - left
+        height = bottom - top
+        if top < label_bottom or top - label_bottom > 140:
+            continue
+        if width < 220 or height < 40 or height > 180:
+            continue
+        if right < label_center_x:
+            continue
+        text = attributes.get("text", "")
+        if text and any(token in text for token in ["点击选择", "搜索集合地点", "搜索地点"]):
+            return (left + right) // 2, (top + bottom) // 2
+        element_class = attributes.get("class", "")
+        if container_fallback is None and (element_class == "android.view.ViewGroup" or element.tag.endswith("ViewGroup")):
+            container_fallback = (left + right) // 2, (top + bottom) // 2
+    return container_fallback
 
 
 def _tap_session_location_container(driver: WebDriver, keyword: str) -> bool:
@@ -2019,12 +2134,65 @@ def _approved_badge_elements(driver: WebDriver) -> list:
 
 
 def _tap_top_right_plus(driver: WebDriver) -> bool:
+    point = _android_top_right_plus_point(_safe_page_source(driver))
+    if point is not None:
+        try:
+            driver.execute_script("mobile: tap", {"x": point[0], "y": point[1]})
+            return True
+        except WebDriverException:
+            pass
     try:
         rect = driver.get_window_rect()
-        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.92), "y": int(rect["height"] * 0.10)})
+        y_ratio = 0.105 if _is_ios_driver(driver) else 0.058
+        driver.execute_script("mobile: tap", {"x": int(rect["width"] * 0.90), "y": int(rect["height"] * y_ratio)})
         return True
     except (WebDriverException, KeyError, TypeError):
         return False
+
+
+def _android_top_right_plus_point(page_source: str) -> tuple[int, int] | None:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    root_rect = _bounds_rect_from_attrs(root.attrib)
+    root_width = root_rect[2] if root_rect is not None else int(root.attrib.get("width", "0") or 0)
+    root_height = root_rect[3] if root_rect is not None else int(root.attrib.get("height", "0") or 0)
+    candidates: list[tuple[int, int, int]] = []
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        if (element.attrib.get("class") or element.tag) != "android.view.ViewGroup":
+            continue
+        if not any((child.attrib.get("class") or child.tag) == "com.horcrux.svg.SvgView" for child in element.iter()):
+            continue
+        rect = _bounds_rect_from_attrs(element.attrib)
+        if rect is None:
+            continue
+        x, y, width, height = rect
+        if width < 48 or width > 140 or height < 48 or height > 140:
+            continue
+        if root_width and x < int(root_width * 0.78):
+            continue
+        if root_height and y > int(root_height * 0.12):
+            continue
+        candidates.append((width * height, x + width // 2, y + height // 2))
+    if not candidates:
+        return None
+    _, x, y = sorted(candidates)[0]
+    return (x, y)
+
+
+def _bounds_rect_from_attrs(attrs: dict[str, str]) -> tuple[int, int, int, int] | None:
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", attrs.get("bounds", ""))
+    if not match:
+        return None
+    x1, y1, x2, y2 = [int(value) for value in match.groups()]
+    width = x2 - x1
+    height = y2 - y1
+    if width <= 0 or height <= 0:
+        return None
+    return (x1, y1, width, height)
 
 
 def _tap_submit(driver: WebDriver) -> bool:
@@ -2042,6 +2210,16 @@ def _tap_submit(driver: WebDriver) -> bool:
 def _scroll_my_activity_list(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
+        if _is_ios_driver(driver):
+            center_x = int(rect["width"] * 0.5)
+            driver.swipe(
+                center_x,
+                int(rect["height"] * 0.82),
+                center_x,
+                int(rect["height"] * 0.34),
+                duration=450,
+            )
+            return True
         driver.execute_script(
             "mobile: dragGesture",
             {
@@ -2057,8 +2235,12 @@ def _scroll_my_activity_list(driver: WebDriver) -> bool:
         try:
             driver.execute_script("mobile: swipe", {"direction": "up"})
             return True
-        except WebDriverException:
-            return False
+        except (WebDriverException, AttributeError):
+            try:
+                swipe_vertical(driver, direction="up")
+                return True
+            except (WebDriverException, AttributeError):
+                return False
 
 
 def _scroll_my_activity_list_toward_approved_activity(driver: WebDriver) -> bool:

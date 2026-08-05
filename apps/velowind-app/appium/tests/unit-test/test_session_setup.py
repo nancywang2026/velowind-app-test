@@ -13,6 +13,70 @@ def test_load_test_config_uses_android_config_when_platform_is_android(monkeypat
     assert conftest.load_test_config() is expected
 
 
+def test_ios_config_writes_allure_environment(monkeypatch, tmp_path):
+    config = type(
+        "Config",
+        (),
+        {
+            "target": "device",
+            "udid": "00008150-0006799C2693401C",
+            "device_name": "Zhigang iPhone",
+            "platform_version": "26.2.1",
+            "server_url": "http://127.0.0.1:4723",
+            "artifact_dir": tmp_path / "artifacts",
+        },
+    )()
+    results_dir = tmp_path / "allure-results"
+    artifacts = type("Artifacts", (), {"results": results_dir})()
+
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "ios")
+    monkeypatch.setattr(conftest, "load_test_config", lambda: config)
+    monkeypatch.setattr(conftest, "allure_artifacts", lambda repo_root, platform: artifacts)
+
+    loaded_config = conftest.ios_config.__wrapped__()
+
+    assert loaded_config is config
+    environment_file = results_dir / "environment.properties"
+    assert environment_file.exists()
+    content = environment_file.read_text(encoding="utf-8")
+    assert "Platform=iOS\n" in content
+    assert "Test Platform=iOS\n" in content
+    assert "Device Kind=physical\n" in content
+    assert "Target=device\n" in content
+    assert "Device Name=Zhigang iPhone\n" in content
+
+
+def test_android_config_writes_allure_environment(monkeypatch, tmp_path):
+    config = type(
+        "Config",
+        (),
+        {
+            "target": "physical",
+            "udid": "YHK7EERSGAPZX87X",
+            "device_name": "25060RK16C",
+            "platform_version": "16",
+            "server_url": "http://127.0.0.1:4724",
+            "artifact_dir": tmp_path / "artifacts",
+        },
+    )()
+    results_dir = tmp_path / "allure-results"
+    artifacts = type("Artifacts", (), {"results": results_dir})()
+
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "android")
+    monkeypatch.setattr(conftest, "load_test_config", lambda: config)
+    monkeypatch.setattr(conftest, "allure_artifacts", lambda repo_root, platform: artifacts)
+
+    loaded_config = conftest.ios_config.__wrapped__()
+
+    assert loaded_config is config
+    content = (results_dir / "environment.properties").read_text(encoding="utf-8")
+    assert "Platform=Android\n" in content
+    assert "Test Platform=Android\n" in content
+    assert "Device Kind=physical\n" in content
+    assert "Target=physical\n" in content
+    assert "Device Name=25060RK16C\n" in content
+
+
 def test_create_test_driver_uses_android_driver_when_platform_is_android(monkeypatch):
     config = object()
     expected = object()
@@ -26,6 +90,7 @@ def test_prepare_logged_in_session_delegates_to_recoverable_home_setup(monkeypat
     driver = object()
     ios_config = object()
     calls = []
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "ios")
 
     def fake_ensure_logged_in_on_home(received_driver, received_config):
         calls.append((received_driver, received_config))
@@ -39,6 +104,26 @@ def test_prepare_logged_in_session_delegates_to_recoverable_home_setup(monkeypat
 
     assert conftest.prepare_logged_in_session(driver, ios_config) is True
     assert calls == [(driver, ios_config)]
+
+
+def test_prepare_logged_in_session_checks_me_tab_first_on_android(monkeypatch):
+    driver = object()
+    android_config = object()
+    calls = []
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "android")
+
+    def fake_ensure_logged_in_from_me_then_home(received_driver, received_config):
+        calls.append((received_driver, received_config))
+        return True
+
+    monkeypatch.setattr(
+        conftest,
+        "ensure_logged_in_from_me_then_home",
+        fake_ensure_logged_in_from_me_then_home,
+    )
+
+    assert conftest.prepare_logged_in_session(driver, android_config) is True
+    assert calls == [(driver, android_config)]
 
 
 def test_logged_in_session_skips_tests_without_driver_fixture(monkeypatch):
@@ -244,6 +329,27 @@ def test_home_visible_rejects_message_detail_overlay():
             self.page_source = source
 
     assert session._home_visible(FakeDriver(page_source)) is False
+
+
+def test_home_visible_rejects_android_message_detail_comment_region_with_cached_home_texts():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="骑行" />
+      <android.widget.TextView text="徒步" />
+      <android.widget.TextView text="活动" />
+      <android.widget.TextView text="消息" />
+      <android.widget.TextView text="我的" />
+      <android.widget.TextView text="回复" />
+      <android.widget.TextView text="删除" />
+    </hierarchy>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    assert session._home_visible(FakeDriver(page_source)) is False
+    assert session._home_or_login_visible(FakeDriver(page_source)) is False
 
 
 def test_home_visible_rejects_activity_detail_preview_overlay():
@@ -477,6 +583,23 @@ def test_home_and_publish_entry_reject_rental_page_overlay():
     assert session._publish_entry_ready(driver) is False
 
 
+def test_home_or_login_visible_rejects_rental_date_picker_over_note_home():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="全国 推荐 骑行 徒步 笔记 活动 消息 我的" />
+      <XCUIElementTypeOther name="租车 用车时间 服务门店 立即选车 选择取还车日期 取消 确定" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+
+
 def test_home_and_publish_entry_reject_note_search_overlay():
     page_source = """
     <AppiumAUT>
@@ -571,6 +694,35 @@ def test_ensure_logged_in_from_me_then_home_opens_me_before_login(monkeypatch):
     assert ("tap-tab", "bottom-nav-home", "笔记") in events
 
 
+def test_ensure_logged_in_from_me_then_home_waits_for_delayed_android_login(monkeypatch):
+    events = []
+    page_sources = iter(
+        [
+            "首页 推荐 活动 消息 我的",
+            "首页 推荐 活动 消息 我的",
+            "再逛逛 手机号登录 请输入手机号 密码登录 验证并登录",
+            "首页 推荐 活动 消息 我的",
+        ]
+    )
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: events.append(("tap-tab", accessibility_id, text)) or True,
+    )
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: next(page_sources))
+    monkeypatch.setattr(session, "ensure_logged_in_if_needed", lambda driver, config: events.append("login") or True)
+    monkeypatch.setattr(session, "_home_visible", lambda driver: True)
+
+    assert session.ensure_logged_in_from_me_then_home(FakeDriver(), object()) is True
+    assert "login" in events
+
+
 def test_ensure_logged_in_from_me_then_home_can_login_when_me_tab_is_not_tappable(monkeypatch):
     events = []
 
@@ -587,6 +739,164 @@ def test_ensure_logged_in_from_me_then_home_can_login_when_me_tab_is_not_tappabl
 
     assert session.ensure_logged_in_from_me_then_home(object(), object()) is True
     assert "login" in events
+
+
+def test_ensure_logged_in_from_me_then_home_recovers_android_search_page_before_opening_me(monkeypatch):
+    state = {"page": "search"}
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "ensure_logged_in_if_needed", lambda driver, config: False)
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or True)
+
+    def fake_tap_tab(driver, accessibility_id, text, timeout=3):
+        events.append(("tap-tab", accessibility_id, text, state["page"]))
+        if accessibility_id == "bottom-nav-me" and state["page"] == "home":
+            state["page"] = "me"
+            return True
+        if accessibility_id == "bottom-nav-home" and state["page"] == "me":
+            state["page"] = "home"
+            return True
+        return False
+
+    def fake_android_adb_back(driver):
+        events.append("android-adb-back")
+        if events.count("android-adb-back") >= 2:
+            state["page"] = "home"
+        return True
+
+    monkeypatch.setattr(session, "tap_accessibility_id_or_text_if_present", fake_tap_tab)
+    monkeypatch.setattr(session, "_android_adb_back", fake_android_adb_back)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back") or False)
+
+    assert session.ensure_logged_in_from_me_then_home(FakeDriver(), object()) is True
+    assert events.count("android-adb-back") == 2
+    assert ("tap-tab", "bottom-nav-me", "我的", "home") in events
+    assert ("tap-tab", "bottom-nav-home", "笔记", "me") in events
+
+
+def test_ensure_logged_in_from_me_then_home_uses_home_recovery_when_android_keyboard_blocks_tabs(monkeypatch):
+    state = {"page": "activity-search-keyboard"}
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "_login_required_after_short_wait", lambda driver: False)
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or True)
+
+    def fake_tap_tab(driver, accessibility_id, text, timeout=3):
+        events.append(("tap-tab", accessibility_id, text, state["page"]))
+        if accessibility_id == "bottom-nav-me" and state["page"] == "home":
+            state["page"] = "me"
+            return True
+        if accessibility_id == "bottom-nav-home" and state["page"] == "me":
+            state["page"] = "home"
+            return True
+        return False
+
+    def fake_android_adb_back(driver):
+        events.append(("android-adb-back", state["page"]))
+        return True
+
+    def fake_ensure_logged_in_on_home(driver, config):
+        events.append("recover-home")
+        state["page"] = "home"
+        return False
+
+    monkeypatch.setattr(session, "tap_accessibility_id_or_text_if_present", fake_tap_tab)
+    monkeypatch.setattr(session, "_android_adb_back", fake_android_adb_back)
+    def fake_tap_home_tab(driver, timeout=3):
+        events.append(("tap-home", state["page"]))
+        if state["page"] == "me":
+            state["page"] = "home"
+            return True
+        return False
+
+    monkeypatch.setattr(session, "_tap_home_tab", fake_tap_home_tab)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back") or False)
+    monkeypatch.setattr(session, "ensure_logged_in_on_home", fake_ensure_logged_in_on_home)
+
+    assert session.ensure_logged_in_from_me_then_home(FakeDriver(), object()) is True
+    assert "recover-home" in events
+    assert ("tap-tab", "bottom-nav-me", "我的", "home") in events
+    assert ("tap-home", "me") in events
+    assert state["page"] == "home"
+
+
+def test_ensure_logged_in_from_me_then_home_recovers_android_system_message_page(monkeypatch):
+    state = {"page": "系统消息 内容通知 内容审核已通过"}
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "ensure_logged_in_if_needed", lambda driver, config: False)
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or state["page"] == "home")
+
+    def fake_tap_tab(driver, accessibility_id, text, timeout=3):
+        events.append(("tap-tab", accessibility_id, text, state["page"]))
+        if accessibility_id == "bottom-nav-home" and "消息" in state["page"]:
+            state["page"] = "home"
+            return True
+        if accessibility_id == "bottom-nav-me" and state["page"] == "home":
+            state["page"] = "me"
+            return True
+        return False
+
+    def fake_android_adb_back(driver):
+        events.append("android-adb-back")
+        state["page"] = "消息 系统通知 系统消息 内容通知 笔记 活动 我的"
+        return True
+
+    monkeypatch.setattr(session, "tap_accessibility_id_or_text_if_present", fake_tap_tab)
+    monkeypatch.setattr(session, "_android_adb_back", fake_android_adb_back)
+    monkeypatch.setattr(session, "safe_back", lambda driver: events.append("safe-back") or False)
+
+    assert session.ensure_logged_in_from_me_then_home(FakeDriver(), object()) is True
+    assert ("tap-tab", "bottom-nav-home", "笔记", "消息 系统通知 系统消息 内容通知 笔记 活动 我的") in events
+    assert events[-1] == "wait-home"
+
+
+def test_ensure_logged_in_from_me_then_home_falls_back_when_final_home_wait_times_out(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: "消息 系统通知 系统消息 活动 消息 我的")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "_login_required_after_short_wait", lambda driver: False)
+    monkeypatch.setattr(session, "_tap_home_tab", lambda driver, timeout=8: events.append(("tap-home", timeout)) or True)
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or (_ for _ in ()).throw(AssertionError("still on messages")))
+    monkeypatch.setattr(session, "ensure_logged_in_on_home", lambda driver, config: events.append("fallback-home") or False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: events.append(("tap-tab", accessibility_id, text)) or accessibility_id == "bottom-nav-me",
+    )
+
+    assert session.ensure_logged_in_from_me_then_home(FakeDriver(), object()) is True
+    assert events[-2:] == ["wait-home", "fallback-home"]
 
 
 def test_ensure_logged_in_on_home_recovers_detail_page_before_waiting(monkeypatch):
@@ -816,6 +1126,144 @@ def test_ensure_logged_in_on_home_relaunches_android_app_from_launcher(monkeypat
     assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
     assert events[0] == ("tap", "寻风集", "寻风集")
     assert state["page"] == "home"
+
+
+def test_home_or_login_visible_allows_message_tab_with_system_message_text(monkeypatch):
+    page_source = "消息 系统通知 系统消息 笔记 活动 我的"
+
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: page_source)
+
+    assert session._home_or_login_visible(object()) is True
+
+
+def test_home_or_login_visible_rejects_system_message_detail_overlay(monkeypatch):
+    page_source = "全国 推荐 骑行 徒步 笔记 活动 消息 我的 系统消息 内容通知 内容审核已通过"
+
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: page_source)
+
+    assert session._home_or_login_visible(object()) is False
+
+
+def test_ensure_logged_in_on_home_uses_coordinate_home_tab_fallback(monkeypatch):
+    state = {"page": "消息 系统通知 系统消息 笔记 活动 我的"}
+    events = []
+
+    class FakeDriver:
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1280, "height": 2568}
+
+        @staticmethod
+        def execute_script(script, payload):
+            events.append((script, payload))
+            state["page"] = "home"
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False,
+    )
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: state["page"] == "home")
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert events == [("mobile: tap", {"x": 153, "y": 2311})]
+
+
+def test_ensure_logged_in_on_home_taps_android_home_text_when_generic_lookup_misses(monkeypatch):
+    state = {"page": "消息 系统通知 系统消息 笔记 活动 我的"}
+    events = []
+
+    class FakeElement:
+        @staticmethod
+        def get_attribute(name):
+            return "[79,2568][178,2640]" if name == "bounds" else ""
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+        @staticmethod
+        def find_element(by, xpath):
+            events.append(("find", by, xpath))
+            if '@text="笔记"' in xpath:
+                return FakeElement()
+            raise AssertionError(f"unexpected xpath: {xpath}")
+
+        @staticmethod
+        def execute_script(script, payload):
+            events.append((script, payload))
+            state["page"] = "home"
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False,
+    )
+    monkeypatch.setattr(session, "_tap_home_tab_by_coordinate", lambda driver: events.append("coordinate-home") or False)
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: state["page"] == "home")
+    monkeypatch.setattr(
+        session.subprocess,
+        "run",
+        lambda command, **kwargs: events.append(("adb", command)) or state.update(page="home"),
+    )
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert ("mobile: tap", {"x": 128, "y": 2604}) in events
+    assert ("adb", ["adb", "-s", "YHK7EERSGAPZX87X", "shell", "input", "tap", "128", "2604"]) in events
+    assert "coordinate-home" not in events
+
+
+def test_ensure_logged_in_on_home_uses_low_android_home_tab_coordinate_when_text_lookup_misses(monkeypatch):
+    state = {"page": "消息 系统通知 系统消息 笔记 活动 我的"}
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X"}
+
+        @staticmethod
+        def find_element(by, xpath):
+            raise session.NoSuchElementException()
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1280, "height": 2772}
+
+        @staticmethod
+        def execute_script(script, payload):
+            events.append((script, payload))
+            state["page"] = "home"
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(
+        session,
+        "tap_accessibility_id_or_text_if_present",
+        lambda driver, accessibility_id, text, timeout=3: False,
+    )
+    monkeypatch.setattr(session, "_tap_home_tab_by_coordinate", lambda driver: events.append("legacy-coordinate-home") or False)
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: state["page"] == "home")
+    monkeypatch.setattr(
+        session.subprocess,
+        "run",
+        lambda command, **kwargs: events.append(("adb", command)) or state.update(page="home"),
+    )
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert ("mobile: tap", {"x": 128, "y": 2605}) in events
+    assert ("adb", ["adb", "-s", "YHK7EERSGAPZX87X", "shell", "input", "tap", "128", "2605"]) in events
+    assert "legacy-coordinate-home" not in events
 
 
 def test_ensure_logged_in_for_publish_entry_returns_immediately_when_publish_entry_ready(monkeypatch):

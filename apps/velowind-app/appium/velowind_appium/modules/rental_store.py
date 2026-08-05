@@ -10,6 +10,7 @@ from velowind_appium.modules.rental_common import (
     tap_by_coordinate_ratios,
     tap_by_text_containing,
     tap_first_available,
+    tap_visible_text_hit_point,
     wait_for_rental_page,
 )
 from velowind_appium.modules.rental_vehicle_list import wait_for_rental_vehicle_list_page
@@ -39,10 +40,21 @@ def choose_first_store(driver: WebDriver, timeout: int = 15) -> None:
 
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        if "选择服务城市" in safe_page_source(driver):
+        source = safe_page_source(driver)
+        if "选择服务城市" in source:
             tap_by_coordinate_ratios(driver, [(0.88, 0.37), (0.90, 0.38)])
             time.sleep(0.3)
             continue
+        if "请选择服务门店" in source:
+            if tap_visible_text_hit_point(driver, ["请选择服务门店"], timeout=1) or tap_by_text_containing(
+                driver,
+                ["请选择服务门店"],
+                timeout=1,
+            ):
+                time.sleep(0.3)
+                if tap_first_available(driver, accessibility_ids=FIRST_STORE_IDS, texts=FIRST_STORE_TEXTS, timeout=2):
+                    if _wait_for_store_selected(driver):
+                        return
         if tap_first_available(driver, accessibility_ids=FIRST_STORE_IDS, texts=FIRST_STORE_TEXTS, timeout=1):
             if _wait_for_store_selected(driver):
                 return
@@ -55,6 +67,8 @@ def choose_first_store(driver: WebDriver, timeout: int = 15) -> None:
                 if _wait_for_store_selected(driver):
                     return
         time.sleep(0.3)
+    if _store_selected(driver):
+        return
     raise AssertionError("Unable to select the first rental service store")
 
 
@@ -87,4 +101,4 @@ def _wait_for_store_selected(driver: WebDriver, timeout: int = 5) -> bool:
         if _store_selected(driver):
             return True
         time.sleep(0.2)
-    return False
+    return _store_selected(driver)

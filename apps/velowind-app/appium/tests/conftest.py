@@ -7,11 +7,12 @@ from selenium.common.exceptions import InvalidSessionIdException, WebDriverExcep
 from velowind_appium.android_config import load_android_config
 from velowind_appium.android_driver import create_android_driver
 from velowind_appium.allure_artifacts import allure_artifacts
+from velowind_appium.allure_environment import build_allure_environment, write_allure_environment
 from velowind_appium.config import load_ios_config
 from velowind_appium.driver import create_ios_driver
 from velowind_appium.reporting import allure, generate_and_open_allure_report
 from velowind_appium.screenshots import capture_and_attach_debug_artifacts, capture_and_attach_page
-from velowind_appium.session import ensure_logged_in_on_home
+from velowind_appium.session import ensure_logged_in_from_me_then_home, ensure_logged_in_on_home
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -38,6 +39,9 @@ def _should_log_progress(nodeid: str) -> bool:
 def ios_config():
     config = load_test_config()
     config.artifact_dir.mkdir(parents=True, exist_ok=True)
+    platform = _test_platform()
+    artifacts = allure_artifacts(REPO_ROOT, platform)
+    write_allure_environment(artifacts.results, build_allure_environment(platform, config))
     return config
 
 
@@ -68,6 +72,8 @@ def driver(ios_config):
 
 
 def prepare_logged_in_session(driver, ios_config) -> bool:
+    if _test_platform() == "android":
+        return ensure_logged_in_from_me_then_home(driver, ios_config)
     return ensure_logged_in_on_home(driver, ios_config)
 
 

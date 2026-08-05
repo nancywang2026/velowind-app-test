@@ -31,7 +31,8 @@ def submit_rental_order(driver: WebDriver, timeout: int = 20) -> None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         if tap_first_available(driver, accessibility_ids=SUBMIT_ORDER_IDS, texts=SUBMIT_ORDER_TEXTS, timeout=2):
-            wait_for_rental_payment_center_page(driver, timeout=12)
+            remaining_timeout = max(12, int(end_at - time.monotonic()))
+            wait_for_rental_payment_center_page(driver, timeout=remaining_timeout)
             return
         time.sleep(0.3)
     raise AssertionError("Unable to submit rental order from confirmation page")

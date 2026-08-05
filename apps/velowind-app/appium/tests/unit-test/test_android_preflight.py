@@ -20,6 +20,7 @@ def _config(**overrides):
         "platform_version": None,
         "no_reset": True,
         "auto_grant_permissions": True,
+        "skip_device_initialization": False,
         "login_username": None,
         "login_password": None,
     }

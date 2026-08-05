@@ -14,24 +14,44 @@ from velowind_appium.modules import (
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 
 
+LOADING_DETAIL_TEXTS = ("正在加载", "正在加载真实详情内容")
+
+
 def _open_home_note(driver, ios_config, step, *, ordinal: int):
     dismiss_common_system_alerts(driver, step)
     step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
     step("browse-note-feed", lambda: browse_note_feed(driver, timeout=20))
 
-    def _open_selected_card():
-        opened = tap_note_card_at_ordinal(
-            driver,
-            ordinal=ordinal,
-            page_source=driver.page_source,
-            verify_open=lambda: message_detail_is_visible(driver),
-            timeout=3,
-        )
-        if not opened:
-            raise AssertionError(f"Unable to open home note card at ordinal {ordinal}")
+    def _return_to_feed_after_unready_detail():
+        driver.back()
+        browse_note_feed(driver, timeout=15)
 
-    step(f"open-home-note-{ordinal}", _open_selected_card)
-    return step("browse-note-detail", lambda: browse_note_detail(driver, timeout=20))
+    def _open_ready_card():
+        errors = []
+        for candidate_ordinal in range(ordinal, ordinal + 4):
+            opened = tap_note_card_at_ordinal(
+                driver,
+                ordinal=candidate_ordinal,
+                page_source=driver.page_source,
+                verify_open=lambda: message_detail_is_visible(driver),
+                timeout=3,
+            )
+            if not opened:
+                errors.append(f"ordinal {candidate_ordinal}: card did not open")
+                continue
+            try:
+                return browse_note_detail(driver, timeout=20)
+            except AssertionError as error:
+                page_source = driver.page_source
+                if not any(text in page_source for text in LOADING_DETAIL_TEXTS):
+                    raise
+                errors.append(f"ordinal {candidate_ordinal}: detail stayed on loading placeholder")
+                _return_to_feed_after_unready_detail()
+        raise AssertionError(
+            f"Unable to open a ready home note detail from ordinal {ordinal}; " + "; ".join(errors)
+        )
+
+    return step(f"open-ready-home-note-{ordinal}", _open_ready_card)
 
 
 @pytest.mark.full

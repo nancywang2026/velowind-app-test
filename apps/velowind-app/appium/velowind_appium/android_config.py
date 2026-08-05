@@ -28,6 +28,7 @@ class AndroidAppiumConfig:
     platform_version: Optional[str]
     no_reset: bool
     auto_grant_permissions: bool
+    skip_device_initialization: bool
     login_username: Optional[str]
     login_password: Optional[str]
 
@@ -76,6 +77,13 @@ def _yaml_bool(data: Dict[str, object], path: str, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _yaml_target_bool(data: Dict[str, object], target: str, path: str, default: bool) -> bool:
+    target_config = data.get(target)
+    if not isinstance(target_config, dict):
+        return default
+    return _yaml_bool(target_config, path, default)
 
 
 def _online_android_udids(adb_devices_output: str) -> list[str]:
@@ -148,6 +156,15 @@ def load_android_config() -> AndroidAppiumConfig:
             "VW_ANDROID_AUTO_GRANT_PERMISSIONS",
             _yaml_bool(yaml_config, "auto_grant_permissions", True),
         ),
+        skip_device_initialization=_env_bool(
+            "VW_ANDROID_SKIP_DEVICE_INITIALIZATION",
+            _yaml_target_bool(
+                yaml_config,
+                target,
+                "skip_device_initialization",
+                _yaml_bool(yaml_config, "skip_device_initialization", False),
+            ),
+        ),
         login_username=_env_text("VW_LOGIN_USERNAME") or _yaml_text(yaml_config, "login", "username"),
         login_password=_env_text("VW_LOGIN_PASSWORD") or _yaml_text(yaml_config, "login", "password"),
     )
@@ -170,6 +187,8 @@ def build_android_capabilities(config: AndroidAppiumConfig) -> Dict[str, object]
         "appium:autoGrantPermissions": config.auto_grant_permissions,
         "appium:newCommandTimeout": 180,
     }
+    if config.skip_device_initialization:
+        capabilities["appium:skipDeviceInitialization"] = True
 
     if config.platform_version:
         capabilities["appium:platformVersion"] = config.platform_version

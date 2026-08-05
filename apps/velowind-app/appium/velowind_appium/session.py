@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 
 from appium.webdriver.webdriver import WebDriver
+from appium.webdriver.common.appiumby import AppiumBy
+from selenium.common.exceptions import NoSuchElementException, WebDriverException
 
 from velowind_appium.actions import safe_back, tap_accessibility_id_or_text_if_present, tap_text_if_present
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
@@ -40,9 +43,12 @@ HOME_BLOCKING_TEXTS = [
     "朋友圈",
     "系统消息",
     "系统通知",
+    "内容通知",
+    "活动通知",
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]
+MESSAGE_TAB_BLOCKING_TEXTS = {"系统消息", "系统通知"}
 
 
 def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
@@ -63,17 +69,46 @@ def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumC
     tap_text_if_present(driver, "同意并继续", timeout=2)
     tap_text_if_present(driver, "同意", timeout=1)
 
-    if not tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=8):
-        if not login_required_from_page_source(_safe_page_source(driver)):
+    me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=8)
+    if not me_tab_opened:
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        is_android = str(capabilities.get("platformName", "")).lower() == "android"
+        if is_android:
+            for _ in range(3):
+                if not (_android_adb_back(driver) or safe_back(driver)):
+                    break
+                time.sleep(0.3)
+                if not _home_visible(driver):
+                    _tap_home_tab(driver, timeout=2)
+                    time.sleep(0.3)
+                if _home_visible(driver):
+                    me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=3)
+                    break
+            if not me_tab_opened and not login_required_from_page_source(_safe_page_source(driver)):
+                ensure_logged_in_on_home(driver, ios_config)
+                me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=5)
+        if not me_tab_opened and not login_required_from_page_source(_safe_page_source(driver)):
             raise AssertionError("Unable to open the Me tab before running regression cases")
-    if login_required_from_page_source(_safe_page_source(driver)):
+    if _login_required_after_short_wait(driver):
         if not ensure_logged_in_if_needed(driver, ios_config):
             raise AssertionError("Unable to log in from the Me tab before running regression cases")
 
     _tap_home_tab(driver, timeout=8)
     if not _home_visible(driver):
-        wait_for_home_feed(driver, timeout=20)
+        try:
+            wait_for_home_feed(driver, timeout=20)
+        except Exception:
+            ensure_logged_in_on_home(driver, ios_config)
     return True
+
+
+def _login_required_after_short_wait(driver: WebDriver, timeout: float = 3.0) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        if login_required_from_page_source(_safe_page_source(driver)):
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:
@@ -82,7 +117,7 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
     tap_text_if_present(driver, "同意", timeout=1)
 
     def _go_home():
-        return _tap_home_tab(driver, timeout=5)
+        return _tap_home_tab(driver, timeout=5) or _tap_home_tab_by_coordinate(driver)
 
     def _wait_home():
         if _home_visible(driver):
@@ -141,7 +176,7 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         if _relaunch_from_android_launcher():
             return False
 
-        if _go_home():
+        if _home_or_login_visible(driver) and _go_home():
             try:
                 _wait_home()
                 return False
@@ -240,8 +275,10 @@ def _home_or_login_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _me_content_page_visible(page_source):
         return False
-    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+    if _home_blocking_text_present(page_source, allow_message_tab=True):
         return False
+    if all(text in page_source for text in ["笔记", "活动", "消息", "我的"]):
+        return True
     return any(text in page_source for text in ["首页", "笔记", "全国", "推荐", "密码登录", "手机号登录", "请输入手机号"])
 
 
@@ -249,7 +286,7 @@ def _home_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _me_content_page_visible(page_source):
         return False
-    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+    if _home_blocking_text_present(page_source):
         return False
     return (
         all(text in page_source for text in ["活动", "消息", "我的"])
@@ -261,11 +298,18 @@ def _publish_entry_ready(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _me_content_page_visible(page_source):
         return False
-    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+    if _home_blocking_text_present(page_source):
         return False
     return all(text in page_source for text in ["活动", "消息", "我的"]) and any(
         text in page_source for text in ["首页", "笔记", "全国", "推荐"]
     )
+
+
+def _home_blocking_text_present(page_source: str, *, allow_message_tab: bool = False) -> bool:
+    blockers = HOME_BLOCKING_TEXTS
+    if allow_message_tab:
+        blockers = [text for text in HOME_BLOCKING_TEXTS if text not in MESSAGE_TAB_BLOCKING_TEXTS]
+    return any(text in page_source for text in blockers) or all(text in page_source for text in ["回复", "删除"])
 
 
 def _me_content_page_visible(page_source: str) -> bool:
@@ -285,10 +329,58 @@ def _me_content_page_visible(page_source: str) -> bool:
 
 
 def _tap_home_tab(driver: WebDriver, timeout: int = 3) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android" and (
+        _tap_android_home_tab_text(driver) or _tap_android_home_tab_by_coordinate(driver)
+    ):
+        return True
     return (
         tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=timeout)
         or tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1)
     )
+
+
+def _tap_android_home_tab_text(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    for text in ["笔记", "首页"]:
+        for xpath in [
+            f'//android.widget.TextView[@text="{text}"]',
+            f'//android.view.ViewGroup[.//android.widget.TextView[@text="{text}"]]',
+        ]:
+            try:
+                element = driver.find_element(AppiumBy.XPATH, xpath)
+                if _tap_android_element_center(driver, element):
+                    return True
+                element.click()
+                return True
+            except (AttributeError, NoSuchElementException, WebDriverException):
+                continue
+    return False
+
+
+def _tap_android_element_center(driver: WebDriver, element) -> bool:
+    bounds = ""
+    try:
+        bounds = element.get_attribute("bounds") or ""
+    except (AttributeError, WebDriverException):
+        bounds = ""
+    match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", bounds)
+    try:
+        if match:
+            left, top, right, bottom = (int(value) for value in match.groups())
+            x = (left + right) // 2
+            y = (top + bottom) // 2
+        else:
+            rect = element.rect
+            x = int(rect["x"] + rect["width"] / 2)
+            y = int(rect["y"] + rect["height"] / 2)
+        driver.execute_script("mobile: tap", {"x": x, "y": y})
+        _android_adb_tap(driver, x, y)
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
 
 
 def _android_launcher_visible(driver: WebDriver) -> bool:
@@ -299,6 +391,45 @@ def _android_launcher_visible(driver: WebDriver) -> bool:
     return "com.google.android.apps.nexuslauncher" in page_source
 
 
+def _tap_android_home_tab_by_coordinate(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    try:
+        rect = driver.get_window_rect()
+        x = int(rect["width"] * 0.10)
+        y = int(rect["height"] * 0.94)
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": x,
+                "y": y,
+            },
+        )
+        _android_adb_tap(driver, x, y)
+        return True
+    except Exception:
+        return False
+
+
+def _android_adb_tap(driver: WebDriver, x: int, y: int) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    udid = str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+    if not udid:
+        return False
+    try:
+        subprocess.run(
+            ["adb", "-s", udid, "shell", "input", "tap", str(x), str(y)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def _tap_home_tab_by_coordinate(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
@@ -306,7 +437,7 @@ def _tap_home_tab_by_coordinate(driver: WebDriver) -> bool:
             "mobile: tap",
             {
                 "x": int(rect["width"] * 0.12),
-                "y": int(rect["height"] * 0.93),
+                "y": int(rect["height"] * 0.90),
             },
         )
         return True

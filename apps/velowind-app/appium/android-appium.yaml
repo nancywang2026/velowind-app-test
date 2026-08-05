@@ -8,14 +8,15 @@ android_studio:
   udid:
   device_name: Android Emulator
   platform_version:
-  app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.1.apk
+  app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.4.apk
 
 physical:
   udid: YHK7EERSGAPZX87X
   device_name: 25060RK16C
   platform_version: "16"
-  app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.1.apk
+  app_path: /Users/test/Nancy/Testing/automation/android/寻风集_1.2.4.apk
+  skip_device_initialization: true
 
 login:
-  username:
-  password:
+  username: 13381509990
+  password: 12345678

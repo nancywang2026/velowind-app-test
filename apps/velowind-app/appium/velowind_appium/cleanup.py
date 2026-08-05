@@ -3,6 +3,7 @@ import html
 import re
 import time
 from typing import Optional
+import xml.etree.ElementTree as ET
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -129,7 +130,7 @@ def find_matching_visible_texts(
 ) -> list[str]:
     matched: list[str] = []
     seen: set[str] = set()
-    for value in re.findall(r'(?:text|name|label|value)="([^"]+)"', page_source):
+    for value in _visible_text_values(page_source):
         text = html.unescape(value).strip()
         if not text or text in seen:
             continue
@@ -143,11 +144,43 @@ def find_matching_visible_texts(
     return matched
 
 
+def _visible_text_values(page_source: str) -> list[str]:
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return re.findall(r'(?:text|name|label|value)="([^"]+)"', page_source)
+
+    values: list[str] = []
+    for element in root.iter():
+        if not _is_text_candidate_element(element):
+            continue
+        for attribute in ("text", "name", "label", "value"):
+            value = element.attrib.get(attribute)
+            if value:
+                values.append(value)
+                break
+    return values
+
+
+def _is_text_candidate_element(element: ET.Element) -> bool:
+    element_type = element.attrib.get("type", element.tag)
+    if element_type.startswith("XCUIElementType") and element.attrib.get("visible") == "false":
+        return False
+    if element_type in {"XCUIElementTypeStaticText", "XCUIElementTypeButton"}:
+        return True
+    if element_type.endswith("TextView") or element_type.endswith("Button"):
+        return True
+    if element_type.startswith("XCUIElementType"):
+        return False
+    return len(list(element)) == 0
+
+
 def _delete_candidate(driver: WebDriver, text: str, action_texts: list[str]) -> bool:
     if not tap_matching_item(driver, text):
         return False
     time.sleep(0.5)
-    tap_first_available_text(driver, ["更多", "...", "…"])
+    if not tap_first_available_text(driver, ["更多", "...", "…"]):
+        _tap_ios_top_right_more(driver)
     if not tap_first_available_text(driver, action_texts):
         return False
     return confirm_destructive_action(driver)
@@ -156,9 +189,11 @@ def _delete_candidate(driver: WebDriver, text: str, action_texts: list[str]) -> 
 def tap_matching_item(driver: WebDriver, text: str) -> bool:
     for xpath in _candidate_xpaths(text):
         try:
-            element = driver.find_element(AppiumBy.XPATH, xpath)
-            _tap_element_center(driver, element)
-            return True
+            for element in driver.find_elements(AppiumBy.XPATH, xpath):
+                if not _element_is_visible(element):
+                    continue
+                _tap_element_center(driver, element)
+                return True
         except (NoSuchElementException, WebDriverException, AttributeError):
             continue
     return tap_text_if_present(driver, text, timeout=1)
@@ -169,6 +204,25 @@ def tap_first_available_text(driver: WebDriver, texts: list[str]) -> bool:
         if tap_text_if_present(driver, text, timeout=1):
             return True
     return False
+
+
+def _element_is_visible(element) -> bool:
+    try:
+        return bool(element.is_displayed())
+    except (WebDriverException, AttributeError):
+        return True
+
+
+def _tap_ios_top_right_more(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+    try:
+        size = driver.get_window_size()
+        driver.execute_script("mobile: tap", {"x": size["width"] - 36, "y": 92})
+        return True
+    except (WebDriverException, KeyError, TypeError):
+        return False
 
 
 def confirm_destructive_action(driver: WebDriver) -> bool:
