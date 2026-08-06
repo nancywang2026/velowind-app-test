@@ -607,6 +607,55 @@ def test_select_activity_region_selects_province_then_city_in_region_drawer(monk
     ]
 
 
+def test_select_activity_region_uses_placeholder_when_form_field_tap_misses(monkeypatch):
+    events = []
+    state = {"page": "发布活动 所属省份 选择所属省份 城市名称 例如：杭州"}
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: False)
+
+    def fake_tap_placeholder(driver, placeholder):
+        events.append(("tap-placeholder", placeholder))
+        if placeholder == "选择所属省份":
+            state["page"] = "选择地区 搜索省份或城市 湖南 张家界 确认地区"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "_tap_placeholder", fake_tap_placeholder)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+
+    def fake_tap_region_option(driver, texts, timeout=2):
+        events.append(("tap-option", tuple(texts)))
+        return True
+
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap", text))
+        if text == "确认地区":
+            state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "_tap_region_option", fake_tap_region_option)
+    monkeypatch.setattr(activity, "tap_text_if_present", fake_tap_text)
+
+    activity._select_activity_region(object(), "湖南", "张家界市")
+
+    assert events == [
+        ("tap-placeholder", "选择所属省份"),
+        ("tap-option", ("湖南", "湖南市", "湖南省")),
+        ("tap-option", ("张家界市", "张家界")),
+        ("tap", "确认地区"),
+    ]
+
+
+def test_select_activity_region_fails_fast_when_region_drawer_cannot_open(monkeypatch):
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: False)
+    monkeypatch.setattr(activity, "_tap_placeholder", lambda driver, placeholder: False)
+
+    with pytest.raises(AssertionError, match="Unable to open the activity region drawer"):
+        activity._select_activity_region(object(), "湖南", "张家界市")
+
+
 def test_select_activity_region_waits_for_province_after_drawer_search(monkeypatch):
     events = []
     state = {"page": "选择地区 搜索省份或城市 确认地区", "pending_province": False}

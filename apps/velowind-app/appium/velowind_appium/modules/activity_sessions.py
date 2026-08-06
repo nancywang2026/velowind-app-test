@@ -2110,9 +2110,10 @@ def _approved_badge_center_ys(driver: WebDriver) -> list[int]:
             width = int(rect["width"])
             height = int(rect["height"])
             y = int(rect["y"])
-            if width > 120 or height > 80 or y < 0 or y > window_height:
+            center_y = int(y + height / 2)
+            if width > 120 or height > 80 or center_y < 0 or center_y >= window_height:
                 continue
-            badge_tops.append((y, int(y + height / 2)))
+            badge_tops.append((y, center_y))
         except (WebDriverException, KeyError, TypeError, AttributeError):
             continue
     if not badge_tops:

@@ -9,7 +9,7 @@ from velowind_appium.modules import (
     share_note_to_moments,
     submit_message_comment,
 )
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import dismiss_common_system_alerts, ensure_read_session_on_home
 
 
 TEST_COMMENT_TEXT = "不错"
@@ -19,7 +19,7 @@ TEST_COMMENT_TEXT = "不错"
 def test_logged_in_user_can_browse_comment_and_interact_with_note(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("open-first-note", lambda: open_first_home_message(driver))
     snapshot = step("browse-note-detail", lambda: browse_note_detail(driver, timeout=20))
 
@@ -43,7 +43,7 @@ def test_logged_in_user_can_browse_comment_and_interact_with_note(driver, ios_co
 def test_user_can_view_system_message_detail(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     snapshot = step("open-system-message-page", lambda: open_system_message_page(driver, timeout=20), capture=True)
 
     assert snapshot.is_basic_system_message_visible(), f"Expected system message detail fields to be visible, got: {snapshot}"

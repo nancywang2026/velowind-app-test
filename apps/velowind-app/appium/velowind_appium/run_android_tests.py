@@ -33,14 +33,14 @@ def allure_artifacts(run_id=None):
     return _resolve_allure_artifacts(REPO_ROOT, "android", run_id)
 
 
-def _allure_pytest_args() -> list[str]:
+def _allure_pytest_args(*, clean: bool = True) -> list[str]:
     if importlib.util.find_spec("allure_pytest") is None:
         return []
     artifacts = allure_artifacts()
-    return [
-        f"--alluredir={artifacts.results}",
-        "--clean-alluredir",
-    ]
+    args = [f"--alluredir={artifacts.results}"]
+    if clean:
+        args.append("--clean-alluredir")
+    return args
 
 
 def _generate_and_open_report() -> None:
@@ -129,10 +129,29 @@ def _suite_test_paths(tests: list[str]) -> list[str]:
     return [str(TEST_PATH / test_path) for test_path in tests]
 
 
-def build_pytest_command(cli_args: list[str]) -> list[str]:
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def retry_failed_enabled(cli_args: list[str]) -> bool:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--retry-failed", action="store_true")
+    args, _ = parser.parse_known_args(cli_args)
+    return args.retry_failed or _env_flag_enabled("VW_APPIUM_RETRY_FAILED")
+
+
+def build_pytest_command(
+    cli_args: list[str],
+    *,
+    clean_allure: bool = True,
+    last_failed: bool = False,
+    run_all_failures: bool = False,
+) -> list[str]:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--suite")
+    parser.add_argument("--retry-failed", action="store_true")
     args, remaining = parser.parse_known_args(cli_args)
 
     base_command = [
@@ -142,8 +161,12 @@ def build_pytest_command(cli_args: list[str]) -> list[str]:
         str(TEST_PATH),
         "-q",
         "-s",
-        *_allure_pytest_args(),
+        *_allure_pytest_args(clean=clean_allure),
     ]
+    if last_failed:
+        base_command.append("--lf")
+    if run_all_failures:
+        base_command.append("--maxfail=0")
 
     if args.all:
         os.environ["VW_ANDROID_RUN_FULL"] = "true"
@@ -171,7 +194,13 @@ def main() -> int:
     media_sync_exit_code = android_media_sync.main()
     if media_sync_exit_code != 0:
         return media_sync_exit_code
-    pytest_result = _run(build_pytest_command(cli_args))
+    retry_enabled = retry_failed_enabled(cli_args)
+    pytest_result = _run(build_pytest_command(cli_args, clean_allure=True, run_all_failures=retry_enabled))
+    if pytest_result.returncode == 1 and retry_enabled:
+        print("Retrying failed pytest cases with --lf before generating Allure report.")
+        pytest_result = _run(
+            build_pytest_command(cli_args, clean_allure=False, last_failed=True, run_all_failures=True)
+        )
     _generate_and_open_report()
     return pytest_result.returncode
 

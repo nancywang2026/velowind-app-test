@@ -9,7 +9,7 @@ from velowind_appium.modules import (
     search_notes,
     # submit_message_comment,
 )
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import dismiss_common_system_alerts, ensure_read_session_on_home
 
 
 # SEARCH_KEYWORD = "徒步"
@@ -21,7 +21,7 @@ SEARCH_KEYWORD = "骑行"
 def test_user_can_search_and_open_note(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("open-note-search", lambda: open_note_search(driver, timeout=12))
     step("search-notes", lambda: search_notes(driver, SEARCH_KEYWORD, timeout=12))
     step("open-first-search-result", lambda: open_first_note_search_result(driver, timeout=12))

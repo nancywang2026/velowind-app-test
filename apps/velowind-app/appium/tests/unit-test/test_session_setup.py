@@ -367,6 +367,23 @@ def test_home_visible_rejects_message_detail_overlay():
     assert session._home_visible(FakeDriver(page_source)) is False
 
 
+def test_home_visible_rejects_detail_load_failure_overlay_with_cached_home_texts():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="全国 推荐 骑行 徒步 笔记 活动 消息 我的" visible="false" />
+      <XCUIElementTypeOther name="加载失败 详情加载失败，请稍后再试。" visible="true" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    driver = FakeDriver(page_source)
+    assert session._home_visible(driver) is False
+    assert session._home_or_login_visible(driver) is False
+
+
 def test_home_visible_rejects_android_message_detail_comment_region_with_cached_home_texts():
     page_source = """
     <hierarchy>
@@ -966,6 +983,35 @@ def test_ensure_logged_in_on_home_recovers_detail_page_before_waiting(monkeypatc
 
     assert session.ensure_logged_in_on_home(object(), object()) is False
     assert events[0] == "back"
+
+
+def test_ensure_read_session_on_home_returns_immediately_when_home_is_visible(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(session, "_home_visible", lambda driver: True)
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: events.append("dismiss"))
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: events.append(("tap-text", text)) or False)
+    monkeypatch.setattr(session, "ensure_logged_in_on_home", lambda driver, config: events.append("full-prepare") or False)
+
+    assert session.ensure_read_session_on_home(object(), object()) is False
+    assert events == []
+
+
+def test_ensure_read_session_on_home_falls_back_to_full_prepare_when_home_is_not_visible(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(session, "_home_visible", lambda driver: False)
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: events.append("dismiss"))
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: events.append(("tap-text", text)) or False)
+    monkeypatch.setattr(session, "ensure_logged_in_on_home", lambda driver, config: events.append("full-prepare") or True)
+
+    assert session.ensure_read_session_on_home(object(), object()) is True
+    assert events == [
+        "dismiss",
+        ("tap-text", "同意并继续"),
+        ("tap-text", "同意"),
+        "full-prepare",
+    ]
 
 
 def test_ensure_logged_in_on_home_uses_android_adb_back_for_blocking_detail(monkeypatch):

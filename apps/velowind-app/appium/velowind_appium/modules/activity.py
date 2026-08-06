@@ -614,8 +614,8 @@ def _select_activity_type(driver: WebDriver, activity_type: str) -> None:
 
 
 def _select_activity_region(driver: WebDriver, province: str, city: str) -> None:
-    if not _tap_form_field(driver, "选择所属省份", fallback_point=(111, 499)):
-        return
+    if not _open_activity_region_drawer(driver):
+        raise AssertionError(f"Unable to open the activity region drawer: {province} {city}")
     if not _wait_until(lambda: _region_drawer_is_visible(driver), timeout=3):
         if _tap_android_field_container(driver, "选择所属省份") and _wait_until(
             lambda: _region_drawer_is_visible(driver),
@@ -650,6 +650,12 @@ def _select_activity_region(driver: WebDriver, province: str, city: str) -> None
         return
     if not _activity_region_selected(_safe_page_source(driver), province, city):
         raise AssertionError("Unable to confirm the activity region selection")
+
+
+def _open_activity_region_drawer(driver: WebDriver) -> bool:
+    if _tap_form_field(driver, "选择所属省份", fallback_point=(111, 499)):
+        return True
+    return _tap_placeholder(driver, "选择所属省份")
 
 
 def _select_province(driver: WebDriver, province: str) -> None:

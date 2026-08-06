@@ -586,7 +586,18 @@ def open_system_message_page(driver: WebDriver, timeout: int = 15) -> SystemMess
     if not _tap_messages_tab(driver):
         raise AssertionError("Unable to tap the Messages tab")
 
-    if not _wait_until(lambda: "系统消息" in _safe_page_source(driver), timeout=timeout):
+    reloaded_network_error = False
+
+    def _system_messages_entry_visible() -> bool:
+        nonlocal reloaded_network_error
+        page_source = _safe_page_source(driver)
+        if "系统消息" in page_source:
+            return True
+        if not reloaded_network_error and _messages_network_error_visible(page_source):
+            reloaded_network_error = tap_text_if_present(driver, "重新加载", timeout=1)
+        return False
+
+    if not _wait_until(_system_messages_entry_visible, timeout=timeout):
         raise AssertionError("Messages page did not expose the System Messages entry")
 
     if not tap_text_if_present(driver, "系统消息", timeout=2):
@@ -599,6 +610,14 @@ def open_system_message_page(driver: WebDriver, timeout: int = 15) -> SystemMess
             return snapshot
         time.sleep(0.3)
     raise AssertionError(f"System message page did not expose expected detail fields: {snapshot}")
+
+
+def _messages_network_error_visible(page_source: str) -> bool:
+    return "重新加载" in page_source and (
+        "Network Error" in page_source
+        or "通知加载失败" in page_source
+        or "加载失败" in page_source
+    )
 
 
 def parse_system_message_snapshot(page_source: str) -> SystemMessageSnapshot:
@@ -3437,15 +3456,33 @@ def _toggle_bottom_action_and_wait_for_change(
     if not _tap_bottom_action_at_index(driver, action_index):
         raise AssertionError(f"Unable to tap bottom action at index {action_index}")
 
+    after_counts = _wait_for_bottom_action_count_change(driver, action_index, before_counts, timeout)
+    if after_counts is not None:
+        return before_counts, after_counts
+
+    if _tap_bottom_action_element_center_at_index(driver, action_index):
+        after_counts = _wait_for_bottom_action_count_change(driver, action_index, before_counts, timeout)
+        if after_counts is not None:
+            return before_counts, after_counts
+
+    raise AssertionError(
+        f"Bottom action at index {action_index} did not change. before={before_counts}"
+    )
+
+
+def _wait_for_bottom_action_count_change(
+    driver: WebDriver,
+    action_index: int,
+    before_counts: list[str],
+    timeout: int,
+) -> list[str] | None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         after_counts = parse_detail_snapshot(_safe_page_source(driver)).bottom_action_counts
         if len(after_counts) > action_index and after_counts[action_index] != before_counts[action_index]:
-            return before_counts, after_counts
+            return after_counts
         time.sleep(0.2)
-    raise AssertionError(
-        f"Bottom action at index {action_index} did not change. before={before_counts}"
-    )
+    return None
 
 
 def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
@@ -3454,6 +3491,13 @@ def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
         return _tap_android_bottom_action_by_source(driver, action_index)
     if _tap_ios_bottom_action_by_source(driver, action_index):
         return True
+    candidates = _find_bottom_action_elements(driver)
+    if len(candidates) <= action_index:
+        return False
+    return _tap_element_center(driver, candidates[action_index])
+
+
+def _tap_bottom_action_element_center_at_index(driver: WebDriver, action_index: int) -> bool:
     candidates = _find_bottom_action_elements(driver)
     if len(candidates) <= action_index:
         return False
@@ -3679,7 +3723,7 @@ def _tap_detail_share_button(driver: WebDriver) -> bool:
         height = float(rect.get("height", 0) or 0)
         if not (35 <= width <= 50 and 35 <= height <= 50):
             continue
-        if y > 120:
+        if y > 260:
             continue
         if x > best_x:
             best_x = x

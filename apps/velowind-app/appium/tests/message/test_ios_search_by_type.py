@@ -7,7 +7,7 @@ from velowind_appium.modules import (
     switch_note_type_navigation,
     wait_for_note_type_results,
 )
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import dismiss_common_system_alerts, ensure_read_session_on_home
 
 
 # NOTE_TYPE = "徒步"
@@ -18,7 +18,7 @@ NOTE_TYPE = "骑行"
 def test_user_can_filter_notes_by_type(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("browse-note-feed", lambda: browse_note_feed(driver, timeout=20))
     step("switch-note-type-navigation", lambda: switch_note_type_navigation(driver, timeout=8))
     step("select-hiking-type", lambda: select_note_type(driver, NOTE_TYPE, timeout=10))

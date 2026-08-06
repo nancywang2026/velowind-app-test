@@ -45,6 +45,8 @@ HOME_BLOCKING_TEXTS = [
     "系统通知",
     "内容通知",
     "活动通知",
+    "加载失败",
+    "详情加载失败",
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]
@@ -205,6 +207,19 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         return bool(step("prepare-login-and-home", _prepare))
 
     return bool(_prepare())
+
+
+def ensure_read_session_on_home(driver: WebDriver, ios_config: IosAppiumConfig) -> bool:
+    if _home_visible(driver):
+        return False
+
+    dismiss_common_system_alerts(driver)
+    tap_text_if_present(driver, "同意并继续", timeout=2)
+    tap_text_if_present(driver, "同意", timeout=1)
+
+    if _home_visible(driver):
+        return False
+    return ensure_logged_in_on_home(driver, ios_config)
 
 
 def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:

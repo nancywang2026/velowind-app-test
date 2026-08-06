@@ -35,6 +35,7 @@ ACTIVITY_SIGNUP_READY_TEXTS = ["活动报名", "报名信息", "提交订单"]
 ACTIVITY_SIGNUP_ACTION_TEXTS = ["确认报名", "立即报名"]
 ACTIVITY_SIGNUP_UNAVAILABLE_TEXTS = ["报名结束", "名额已满", "已满员"]
 ACTIVITY_ORDER_PAYMENT_TEXTS = ["支付中心", "确认支付", "订单支付", "去支付", "立即支付", "待支付"]
+ACTIVITY_NETWORK_ERROR_TEXTS = ["加载失败", "网络连接异常", "Network Error"]
 VIRTUAL_SIGNUP_ID_CARD_NUMBER = "110000199001010013"
 
 
@@ -185,9 +186,14 @@ def open_activity_tab(driver: WebDriver, timeout: int = 20) -> None:
 
 
 def wait_for_activity_feed(driver: WebDriver, timeout: int = 20) -> str:
+    reloaded_network_error = False
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
+        if not reloaded_network_error and _activity_network_error_visible(page_source):
+            reloaded_network_error = tap_text_if_present(driver, "重新加载", timeout=1)
+            time.sleep(0.5)
+            continue
         if _activity_ready_id_present(driver):
             return "activity-feed-id"
         if page_source and _activity_ready_text_present(page_source):
@@ -214,10 +220,16 @@ def select_activity_category(driver: WebDriver, category_name: str, timeout: int
 
 
 def wait_for_activity_category_results(driver: WebDriver, category_name: str, timeout: int = 10) -> bool:
+    reloaded_network_error = False
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        if activity_feed_contains_category_results(_safe_page_source(driver), category_name):
+        page_source = _safe_page_source(driver)
+        if activity_feed_contains_category_results(page_source, category_name):
             return True
+        if not reloaded_network_error and _activity_network_error_visible(page_source):
+            reloaded_network_error = tap_text_if_present(driver, "重新加载", timeout=1)
+            time.sleep(0.5)
+            continue
         time.sleep(0.2)
     return False
 
@@ -237,6 +249,10 @@ def activity_feed_all_results_match_category(page_source: str, category_name: st
     source_texts = tag_texts or extract_visible_activity_card_texts(page_source)
     mismatched = [text for text in source_texts if not _activity_card_matches_category(text, category_name)]
     return bool(source_texts) and not mismatched, mismatched
+
+
+def _activity_network_error_visible(page_source: str) -> bool:
+    return "重新加载" in page_source and any(text in page_source for text in ACTIVITY_NETWORK_ERROR_TEXTS)
 
 
 def open_activity_search(driver: WebDriver, timeout: int = 10) -> None:
@@ -589,6 +605,8 @@ def _android_activity_detail_loading_shell_visible(page_source: str) -> bool:
 
 def _activity_detail_route_visible(joined_visible_text: str) -> bool:
     if all(text in joined_visible_text for text in ["路线说明", "活动概览"]):
+        return True
+    if all(text in joined_visible_text for text in ["ROUTE", "路线说明"]):
         return True
     return "路线说明" in joined_visible_text and bool(re.search(r"\bDay\d+\b", joined_visible_text))
 

@@ -344,6 +344,42 @@ def test_open_system_message_page_taps_messages_tab_and_system_entry(monkeypatch
     ]
 
 
+def test_open_system_message_page_reloads_message_network_error(monkeypatch):
+    calls = []
+    page = {"source": "首页 笔记 活动 消息 我的"}
+
+    class FakeDriver:
+        @property
+        def page_source(self):
+            return page["source"]
+
+    def fake_tap_tab(driver, accessibility_id, text, timeout=3):
+        calls.append(("tap-tab", accessibility_id, text))
+        page["source"] = "消息 通知加载失败 Network Error 重新加载 笔记 活动 消息 我的"
+        return True
+
+    def fake_tap_text(driver, text, timeout=1):
+        calls.append(("tap-text", text))
+        if text == "重新加载":
+            page["source"] = "消息 系统通知 系统消息"
+        elif text == "系统消息":
+            page["source"] = "系统消息 活动通知 07-31 17:45 有新的活动报名"
+        return True
+
+    monkeypatch.setattr(message_detail, "tap_accessibility_id_or_text_if_present", fake_tap_tab, raising=False)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", fake_tap_text)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    snapshot = message_detail.open_system_message_page(FakeDriver(), timeout=3)
+
+    assert snapshot.is_basic_system_message_visible()
+    assert calls == [
+        ("tap-tab", "bottom-nav-messages", "消息"),
+        ("tap-text", "重新加载"),
+        ("tap-text", "系统消息"),
+    ]
+
+
 def test_parse_detail_snapshot_extracts_title_counts_and_comments():
     page_source = """
     <AppiumAUT>
@@ -721,6 +757,47 @@ def test_like_note_toggles_first_bottom_action_and_waits_for_count_change(monkey
     assert events == [("tap-bottom-action", 0)]
 
 
+def test_like_note_uses_element_center_fallback_when_first_tap_does_not_change_count(monkeypatch):
+    events = []
+    wait_results = iter([None, ["2", "0", "3"]])
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(
+        message_detail,
+        "parse_detail_snapshot",
+        lambda source: message_detail.MessageDetailSnapshot(
+            "标题",
+            "正文",
+            "4",
+            "2",
+            [],
+            None,
+            ["1", "0", "3"],
+        ),
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_bottom_action_at_index",
+        lambda driver, action_index: events.append(("tap-bottom-action", action_index)) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_bottom_action_element_center_at_index",
+        lambda driver, action_index: events.append(("tap-bottom-action-center", action_index)) or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_wait_for_bottom_action_count_change",
+        lambda driver, action_index, before_counts, timeout: next(wait_results),
+    )
+
+    before, after = message_detail.like_note(driver=object(), timeout=3)
+
+    assert before == ["1", "0", "3"]
+    assert after == ["2", "0", "3"]
+    assert events == [("tap-bottom-action", 0), ("tap-bottom-action-center", 0)]
+
+
 def test_favorite_note_toggles_second_bottom_action_and_waits_for_count_change(monkeypatch):
     events = []
     signatures = iter([
@@ -1069,6 +1146,31 @@ def test_tap_detail_share_button_uses_android_sticky_header_icon_near_status_bar
 
     assert message_detail._tap_detail_share_button(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 989, "y": 148})]
+
+
+def test_tap_detail_share_button_accepts_ios_detail_header_icon_below_status_bar():
+    taps = []
+
+    class FakeElement:
+        def __init__(self, rect):
+            self.rect = rect
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def find_elements(by, value):
+            return [
+                FakeElement({"x": 39, "y": 182, "width": 42, "height": 42}),
+                FakeElement({"x": 360, "y": 182, "width": 42, "height": 42}),
+            ]
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_detail_share_button(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 381.0, "y": 203.0})]
 
 
 def test_confirm_share_after_target_uses_android_top_right_coordinate_when_wechat_xml_is_empty(monkeypatch):

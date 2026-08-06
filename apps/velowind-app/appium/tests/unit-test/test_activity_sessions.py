@@ -1704,6 +1704,19 @@ def test_tap_more_for_approved_activity_does_not_tap_default_when_ios_approved_b
     assert driver.scripts == []
 
 
+def test_tap_more_for_approved_activity_does_not_tap_bottom_offscreen_ios_badge(monkeypatch):
+    page_source = '<XCUIElementTypeOther name="黄山 通过 上架" x="58" y="872" width="34" height="19" />'
+    driver = FakeDriver(page_source, width=402, height=874)
+    offscreen_badge = FakeElement({"x": 58, "y": 872, "width": 34, "height": 19})
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: page_source)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [offscreen_badge], raising=False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is False
+    assert driver.scripts == []
+
+
 def test_scroll_my_activity_list_toward_approved_activity_goes_down_when_approved_badge_is_above(monkeypatch):
     driver = FakeDriver('<XCUIElementTypeOther name="上海出发到杭州 通过 上架" />', width=402, height=874)
     offscreen_badge = FakeElement({"x": 128, "y": -1696, "width": 34, "height": 19})

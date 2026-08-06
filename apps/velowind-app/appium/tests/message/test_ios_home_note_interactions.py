@@ -11,15 +11,15 @@ from velowind_appium.modules import (
     submit_message_comment,
     tap_note_card_at_ordinal,
 )
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import dismiss_common_system_alerts, ensure_read_session_on_home
 
 
-LOADING_DETAIL_TEXTS = ("正在加载", "正在加载真实详情内容")
+LOADING_DETAIL_TEXTS = ("正在加载", "正在加载真实详情内容", "加载失败", "详情加载失败")
 
 
 def _open_home_note(driver, ios_config, step, *, ordinal: int):
     dismiss_common_system_alerts(driver, step)
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("browse-note-feed", lambda: browse_note_feed(driver, timeout=20))
 
     def _return_to_feed_after_unready_detail():
@@ -37,6 +37,11 @@ def _open_home_note(driver, ios_config, step, *, ordinal: int):
                 timeout=3,
             )
             if not opened:
+                page_source = driver.page_source
+                if any(text in page_source for text in LOADING_DETAIL_TEXTS):
+                    errors.append(f"ordinal {candidate_ordinal}: detail did not become ready")
+                    _return_to_feed_after_unready_detail()
+                    continue
                 errors.append(f"ordinal {candidate_ordinal}: card did not open")
                 continue
             try:
@@ -59,7 +64,7 @@ def test_user_can_comment_on_first_home_note(driver, ios_config, step):
     snapshot = _open_home_note(driver, ios_config, step, ordinal=1)
     assert snapshot.title, "Expected the first home note detail to expose a title"
 
-    comment_text = f"测试 - 这条笔记不错！！ {datetime.now():%m%d%H%M%S}"
+    comment_text = f"ok {datetime.now():%H%M%S}"
     step("add-note-comment", lambda: submit_message_comment(driver, comment_text, timeout=20))
 
 
