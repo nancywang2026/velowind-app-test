@@ -653,28 +653,54 @@ def parse_system_message_snapshot(page_source: str) -> SystemMessageSnapshot:
 
 
 def submit_message_comment(driver: WebDriver, comment_text: str, timeout: int = 20) -> None:
-    before_snapshot = parse_detail_snapshot(_safe_page_source(driver))
-    _close_ios_image_preview_if_visible(driver)
+    with _note_profile("comment-read-before-snapshot"):
+        before_snapshot = parse_detail_snapshot(_safe_page_source(driver))
+    with _note_profile("comment-close-ios-preview"):
+        _close_ios_image_preview_if_visible(driver)
     input_box = None
-    opened_entry = _tap_candidate(driver, COMMENT_ENTRY_IDS, COMMENT_ENTRY_TEXTS)
-    if opened_entry:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+
+    opened_entry = False
+    if is_ios:
+        with _note_profile("comment-tap-ios-bottom-action"):
+            opened_entry = _tap_bottom_action_at_index(driver, 2)
+        if opened_entry:
+            try:
+                with _note_profile("comment-find-input-after-ios-bottom-action"):
+                    input_box = _find_comment_input(driver, timeout=min(timeout, 2))
+            except AssertionError:
+                input_box = None
+
+    if input_box is None:
+        with _note_profile("comment-tap-candidate-entry"):
+            opened_entry = _tap_candidate(driver, COMMENT_ENTRY_IDS, COMMENT_ENTRY_TEXTS)
+    if input_box is None and opened_entry:
         try:
-            input_box = _find_comment_input(driver, timeout=min(timeout, 2))
+            with _note_profile("comment-find-input-after-candidate"):
+                input_box = _find_comment_input(driver, timeout=min(timeout, 2))
         except AssertionError:
             input_box = None
 
     if input_box is None and _tap_bottom_action_at_index(driver, 2):
-        input_box = _find_comment_input(driver, timeout=timeout)
+        with _note_profile("comment-find-input-after-fallback-bottom-action"):
+            input_box = _find_comment_input(driver, timeout=timeout)
 
     if input_box is None:
         raise AssertionError("Unable to open the comment entry point from message detail")
 
-    _enter_comment_text(driver, input_box, comment_text)
+    with _note_profile("comment-enter-text"):
+        _enter_comment_text(driver, input_box, comment_text)
 
-    if not _tap_candidate(driver, COMMENT_SUBMIT_IDS, COMMENT_SUBMIT_TEXTS):
-        input_box.send_keys("\n")
+    with _note_profile("comment-submit"):
+        submitted = is_ios and _tap_ios_visible_text_from_source(driver, COMMENT_SUBMIT_TEXTS)
+        if not submitted:
+            submitted = _tap_candidate(driver, COMMENT_SUBMIT_IDS, COMMENT_SUBMIT_TEXTS)
+        if not submitted:
+            input_box.send_keys("\n")
 
-    _wait_for_comment_echo(driver, comment_text, before_snapshot.comment_count, timeout=timeout)
+    with _note_profile("comment-wait-echo"):
+        _wait_for_comment_echo(driver, comment_text, before_snapshot.comment_count, timeout=timeout)
 
 
 def toggle_ticket_text_and_assert_change(driver: WebDriver, timeout: int = 15) -> tuple[list[str], list[str]]:
@@ -724,26 +750,38 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
 
 
 def open_note_search(driver: WebDriver, timeout: int = 10) -> None:
-    if _note_search_visible(_safe_page_source(driver)):
+    with _note_profile("open-note-search-initial-source"):
+        page_source = _safe_page_source(driver)
+    if _note_search_visible(page_source):
         return
     _prepare_android_search_entry(driver)
-    if not _tap_note_search_entry(driver):
+    with _note_profile("open-note-search-tap-entry"):
+        tapped_entry = _tap_note_search_entry(driver)
+    if not tapped_entry:
         raise AssertionError("Unable to find the note search entry")
-    if not _wait_until(lambda: _note_search_visible(_safe_page_source(driver)), timeout=timeout):
+    with _note_profile("open-note-search-wait-visible"):
+        visible = _wait_until(lambda: _note_search_visible(_safe_page_source(driver)), timeout=timeout)
+    if not visible:
         raise AssertionError("Note search page did not appear after tapping the search entry")
 
 
 def search_notes(driver: WebDriver, keyword: str, timeout: int = 10) -> None:
-    search_input = _find_note_search_input(driver, timeout=timeout)
-    _replace_text(search_input, keyword)
-    if not (
-        _tap_android_search_submit(driver)
-        or _tap_note_search_submit_by_coordinate(driver)
-        or _tap_texts_now(driver, ["搜索", "Search"])
-        or _tap_keyboard_search(driver)
-    ):
+    with _note_profile("search-notes-find-input"):
+        search_input = _find_note_search_input(driver, timeout=timeout)
+    with _note_profile("search-notes-replace-text"):
+        _replace_text(search_input, keyword)
+    with _note_profile("search-notes-submit"):
+        submitted = (
+            _tap_android_search_submit(driver)
+            or _tap_note_search_submit_by_coordinate(driver)
+            or _tap_texts_now(driver, ["搜索", "Search"])
+            or _tap_keyboard_search(driver)
+        )
+    if not submitted:
         _hide_keyboard(driver)
-    if not _wait_until(lambda: _note_search_results_visible(_safe_page_source(driver), keyword), timeout=timeout):
+    with _note_profile("search-notes-wait-results"):
+        results_visible = _wait_until(lambda: _note_search_results_visible(_safe_page_source(driver), keyword), timeout=timeout)
+    if not results_visible:
         raise AssertionError(f"Note search results did not appear for keyword: {keyword}")
 
 
@@ -765,15 +803,24 @@ def favorite_note(driver: WebDriver, timeout: int = 15) -> tuple[list[str], list
 
 
 def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
-    if not _tap_detail_share_button(driver):
+    with _note_profile("share-tap-detail-button"):
+        tapped_share = _tap_detail_share_button(driver)
+    if not tapped_share:
         raise AssertionError("Unable to find the note share entry point")
-    if not _wait_until(lambda: _share_sheet_visible(_safe_page_source(driver)), timeout=timeout):
+    with _note_profile("share-wait-sheet"):
+        sheet_visible = _wait_until(lambda: _share_sheet_visible(_safe_page_source(driver)), timeout=timeout)
+    if not sheet_visible:
         raise AssertionError("Share sheet did not appear after tapping the share entry point")
-    if not _tap_share_target(driver, "朋友圈"):
+    with _note_profile("share-tap-target-moments"):
+        tapped_target = _tap_share_target(driver, "朋友圈")
+    if not tapped_target:
         raise AssertionError("Unable to find the Moments share target")
-    if not _confirm_share_after_target(driver, timeout=timeout):
+    with _note_profile("share-confirm-after-target"):
+        confirmed = _confirm_share_after_target(driver, timeout=timeout)
+    if not confirmed:
         raise AssertionError("Unable to confirm the Moments share")
-    _return_to_home_after_share(driver, timeout=timeout)
+    with _note_profile("share-return-home"):
+        _return_to_home_after_share(driver, timeout=timeout)
     return "朋友圈"
 
 
@@ -958,6 +1005,10 @@ def _publish_entry_opened(page_source: str) -> bool:
 
 
 def _tap_note_search_entry(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    if is_ios and _tap_note_search_entry_by_coordinate(driver):
+        return True
     if _tap_note_search_entry_by_coordinate(driver) and _wait_until(
         lambda: _note_search_visible(_safe_page_source(driver)),
         timeout=1,
@@ -1018,7 +1069,23 @@ def _note_search_visible(page_source: str) -> bool:
 
 def _find_note_search_input(driver: WebDriver, timeout: int = 10):
     end_at = time.monotonic() + timeout
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    ios_selectors = [
+        (AppiumBy.IOS_CLASS_CHAIN, "**/XCUIElementTypeSearchField"),
+        (AppiumBy.IOS_CLASS_CHAIN, "**/XCUIElementTypeTextField"),
+        (
+            AppiumBy.IOS_PREDICATE,
+            'type == "XCUIElementTypeSearchField" OR type == "XCUIElementTypeTextField"',
+        ),
+    ]
     while time.monotonic() < end_at:
+        if is_ios:
+            for by, value in ios_selectors:
+                try:
+                    return driver.find_element(by, value)
+                except (NoSuchElementException, WebDriverException):
+                    continue
         for xpath in NOTE_SEARCH_INPUT_XPATHS:
             try:
                 return driver.find_element(AppiumBy.XPATH, xpath)
@@ -1152,37 +1219,62 @@ def _android_bounds_to_rect(bounds: str) -> tuple[int, int, int, int] | None:
 def _tap_first_note_search_result(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "android":
-        if _tap_first_android_note_search_result(driver):
+        with _note_profile("search-result-android-fast-path"):
+            tapped_android = _tap_first_android_note_search_result(driver)
+        if tapped_android:
             return True
     verify_open = lambda: message_detail_is_visible(driver)
-    page_source = _safe_page_source(driver)
-    if tap_first_note_card(
-        driver,
-        page_source=page_source,
-        verify_open=verify_open,
-        timeout=0.7,
-    ):
+    with _note_profile("search-result-page-source"):
+        page_source = _safe_page_source(driver)
+    with _note_profile("search-result-visible-fast-path"):
+        tapped_visible = _tap_first_visible_note_search_result(driver, page_source=page_source)
+    if tapped_visible:
         return True
-    if _tap_first_note_search_result_by_coordinate(driver) and _wait_until(verify_open, timeout=0.8):
+    with _note_profile("search-result-generic-note-card"):
+        tapped_generic = tap_first_note_card(
+            driver,
+            page_source=page_source,
+            verify_open=verify_open,
+            timeout=0.7,
+        )
+    if tapped_generic:
         return True
-    swipe_vertical(driver, direction="up")
-    time.sleep(0.2)
-    page_source = _safe_page_source(driver)
-    if tap_first_note_card(
-        driver,
-        page_source=page_source,
-        verify_open=verify_open,
-        timeout=0.7,
-    ):
+    with _note_profile("search-result-coordinate-first"):
+        tapped_coordinate = _tap_first_note_search_result_by_coordinate(driver) and _wait_until(
+            verify_open,
+            timeout=0.8,
+        )
+    if tapped_coordinate:
         return True
-    if _tap_first_note_search_result_by_coordinate(driver) and _wait_until(verify_open, timeout=0.8):
+    with _note_profile("search-result-swipe-next-page"):
+        swipe_vertical(driver, direction="up")
+        time.sleep(0.2)
+    with _note_profile("search-result-page-source-after-swipe"):
+        page_source = _safe_page_source(driver)
+    with _note_profile("search-result-generic-note-card-after-swipe"):
+        tapped_after_swipe = tap_first_note_card(
+            driver,
+            page_source=page_source,
+            verify_open=verify_open,
+            timeout=0.7,
+        )
+    if tapped_after_swipe:
+        return True
+    with _note_profile("search-result-coordinate-after-swipe"):
+        tapped_coordinate_after_swipe = _tap_first_note_search_result_by_coordinate(driver) and _wait_until(
+            verify_open,
+            timeout=0.8,
+        )
+    if tapped_coordinate_after_swipe:
         return True
     for accessibility_id in NOTE_SEARCH_RESULT_IDS:
-        if _tap_accessibility_id_now(driver, accessibility_id):
+        with _note_profile(f"search-result-accessibility-{accessibility_id}"):
+            tapped_accessibility_id = _tap_accessibility_id_now(driver, accessibility_id)
+        if tapped_accessibility_id:
             return True
-    if _tap_first_visible_note_search_result(driver):
-        return True
-    if _tap_first_note_search_result_by_coordinate(driver):
+    with _note_profile("search-result-coordinate-final"):
+        tapped_coordinate_final = _tap_first_note_search_result_by_coordinate(driver)
+    if tapped_coordinate_final:
         return True
     for xpath in [
         "(//XCUIElementTypeCollectionView//XCUIElementTypeCell)[1]",
@@ -1191,7 +1283,8 @@ def _tap_first_note_search_result(driver: WebDriver) -> bool:
         "(//XCUIElementTypeTable//XCUIElementTypeButton)[1]",
     ]:
         try:
-            driver.find_element(AppiumBy.XPATH, xpath).click()
+            with _note_profile(f"search-result-xpath-{xpath}"):
+                driver.find_element(AppiumBy.XPATH, xpath).click()
             return True
         except (NoSuchElementException, WebDriverException):
             continue
@@ -1275,8 +1368,8 @@ def _tap_android_ratio_by_adb(driver: WebDriver, x_ratio: float, y_ratio: float)
         return False
 
 
-def _tap_first_visible_note_search_result(driver: WebDriver) -> bool:
-    page_source = _safe_page_source(driver)
+def _tap_first_visible_note_search_result(driver: WebDriver, *, page_source: str | None = None) -> bool:
+    page_source = page_source or _safe_page_source(driver)
     if not page_source:
         return False
     card_rect = _first_note_search_result_card_rect_from_source(page_source)
@@ -1340,6 +1433,14 @@ def _first_note_search_result_title_from_source(page_source: str) -> tuple[str, 
 
 def _click_note_search_result_title(driver: WebDriver, title: str) -> bool:
     escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    predicate = f'name == "{escaped_title}" OR label == "{escaped_title}" OR value == "{escaped_title}"'
+    try:
+        driver.find_element(AppiumBy.IOS_PREDICATE, predicate).click()
+    except (NoSuchElementException, WebDriverException):
+        pass
+    else:
+        if _wait_until(lambda: message_detail_is_visible(driver), timeout=1.5):
+            return True
     for xpath in [
         f'//XCUIElementTypeStaticText[@name="{escaped_title}" or @label="{escaped_title}" or @value="{escaped_title}"]',
         f'//*[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
@@ -3424,6 +3525,39 @@ def _tap_candidate(driver: WebDriver, accessibility_ids: list[str], texts: list[
     return False
 
 
+def _tap_ios_visible_text_from_source(driver: WebDriver, texts: list[str]) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    text_set = set(texts)
+    candidates: list[tuple[int, int, int]] = []
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        if _source_element_text(attrs) not in text_set:
+            continue
+        rect = _source_element_rect(attrs)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        candidates.append(((right - left) * (bottom - top), (left + right) // 2, (top + bottom) // 2))
+    if not candidates:
+        return False
+
+    _, x, y = min(candidates)
+    try:
+        driver.execute_script("mobile: tap", {"x": x, "y": y})
+        return True
+    except (AttributeError, WebDriverException):
+        return False
+
+
 def _tap_ticket_toggle(driver: WebDriver) -> bool:
     if _tap_candidate(driver, TICKET_TOGGLE_IDS, TICKET_TOGGLE_TEXTS):
         return True
@@ -3695,7 +3829,8 @@ def _find_bottom_action_elements(driver: WebDriver) -> list:
 
 def _tap_detail_share_button(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
-    if str(capabilities.get("platformName", "")).lower() == "android":
+    platform = str(capabilities.get("platformName", "")).lower()
+    if platform == "android":
         if _tap_android_detail_share_button_from_source(driver):
             return True
         try:
@@ -3707,7 +3842,8 @@ def _tap_detail_share_button(driver: WebDriver) -> bool:
             return True
         except (AttributeError, KeyError, TypeError, WebDriverException):
             return False
-
+    if platform == "ios" and _tap_ios_detail_share_button_from_source(driver):
+        return True
     try:
         candidates = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
     except (AttributeError, WebDriverException):
@@ -3731,6 +3867,47 @@ def _tap_detail_share_button(driver: WebDriver) -> bool:
     if share_candidate is not None and _tap_element_center(driver, share_candidate):
         return True
     return False
+
+
+def _tap_ios_detail_share_button_from_source(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        if element.tag != "XCUIElementTypeOther":
+            continue
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attrs)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        width = right - left
+        height = bottom - top
+        if not (35 <= width <= 50 and 35 <= height <= 50):
+            continue
+        if top > 260:
+            continue
+        candidates.append(rect)
+    if not candidates:
+        return False
+
+    left, top, right, bottom = max(candidates, key=lambda rect: rect[0])
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
 
 
 def _tap_android_detail_share_button_from_source(driver: WebDriver) -> bool:
@@ -3789,6 +3966,11 @@ def _tap_share_target(driver: WebDriver, target_text: str) -> bool:
 
 
 def _confirm_share_after_target(driver: WebDriver, timeout: int = 20) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        if _tap_share_confirm_by_coordinate(driver):
+            if _wait_until(lambda: _share_returned_to_detail(driver), timeout=timeout):
+                return True
     if _wait_until(lambda: _share_returned_to_detail(driver), timeout=3):
         return True
 
@@ -3832,12 +4014,56 @@ def _tap_android_share_confirm_by_coordinate(driver: WebDriver) -> bool:
 def _return_to_home_after_share(driver: WebDriver, timeout: int = 20) -> bool:
     if not message_detail_is_visible(driver):
         return True
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios" and _tap_ios_detail_back_button_from_source(driver):
+        return _wait_until(lambda: not message_detail_is_visible(driver), timeout=timeout)
     try:
         driver.back()
     except WebDriverException:
         if not _tap_android_top_back(driver):
             return False
     return _wait_until(lambda: not message_detail_is_visible(driver), timeout=timeout)
+
+
+def _tap_ios_detail_back_button_from_source(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        if element.tag != "XCUIElementTypeOther":
+            continue
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attrs)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        width = right - left
+        height = bottom - top
+        if not (35 <= width <= 50 and 35 <= height <= 50):
+            continue
+        if top > 260:
+            continue
+        candidates.append(rect)
+    if not candidates:
+        return False
+
+    left, top, right, bottom = min(candidates, key=lambda rect: rect[0])
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
 
 
 def _find_comment_input(driver: WebDriver, timeout: int):

@@ -372,6 +372,33 @@ def test_parse_activity_detail_snapshot_accepts_android_route_itinerary_without_
     assert snapshot.is_basic_detail_complete()
 
 
+def test_parse_activity_detail_snapshot_accepts_android_route_tab_and_empty_sessions():
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="activity-route-detail-v3-hero-carousel" displayed="true" />
+      <android.widget.ImageView resource-id="image" displayed="true" />
+      <android.widget.TextView text="荆门市区 + 漳河水库 2 天 1 晚骑行活动" displayed="true" bounds="[0,249][522,315]" />
+      <android.widget.TextView text="湖北省·荆门市" displayed="true" />
+      <android.widget.TextView text="瓜瓜" displayed="true" />
+      <android.widget.TextView text="路线主理人" displayed="true" />
+      <android.widget.TextView text="总里程" displayed="true" />
+      <android.widget.TextView text="参考时长" displayed="true" />
+      <android.widget.TextView text="风险等级" displayed="true" />
+      <android.widget.TextView text="风景标签" displayed="true" />
+      <android.widget.TextView text="沿途景点" displayed="true" />
+      <android.widget.TextView text="路线说明" displayed="true" />
+      <android.widget.TextView text="活动评论" displayed="true" />
+      <android.widget.TextView text="暂无场次" displayed="true" />
+    </hierarchy>
+    """
+
+    snapshot = activity_browse.parse_activity_detail_snapshot(page_source)
+
+    assert snapshot.route_visible is True
+    assert snapshot.sessions_visible is True
+    assert snapshot.is_basic_detail_complete()
+
+
 def test_activity_detail_visible_while_android_content_is_loading():
     page_source = """
     <hierarchy>

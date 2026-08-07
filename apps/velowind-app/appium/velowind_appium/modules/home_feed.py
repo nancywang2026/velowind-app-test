@@ -8,6 +8,7 @@ from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 
 from velowind_appium.actions import (
+    safe_back,
     swipe_vertical,
     tap_text_if_present,
 )
@@ -56,6 +57,9 @@ HOME_BLOCKING_TEXTS = [
     'placeholderValue="请输入内容"',
     'hint="请输入内容"',
 ]
+TRANSIENT_HOME_LOAD_FAILURE_TEXTS = {"加载失败", "详情加载失败", "Network Error", "重新加载"}
+
+
 def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
     last_page_source = ""
     end_at = time.monotonic() + timeout
@@ -66,6 +70,8 @@ def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
         if page_source and _me_content_page_visible(page_source):
             time.sleep(0.2)
             continue
+        if page_source and _home_ready_text_present(page_source, ignore_transient_load_failure=True):
+            return "home-feed-text"
         if page_source and any(text in page_source for text in HOME_BLOCKING_TEXTS):
             time.sleep(0.2)
             continue
@@ -89,6 +95,10 @@ def open_first_home_message(driver: WebDriver, max_swipes: int = 3) -> None:
             for _ in range(20):
                 if message_detail_is_visible(driver):
                     return
+                if _detail_load_failed(_safe_page_source(driver)):
+                    safe_back(driver)
+                    time.sleep(0.3)
+                    break
                 time.sleep(0.2)
         if message_detail_is_visible(driver):
             return
@@ -98,6 +108,10 @@ def open_first_home_message(driver: WebDriver, max_swipes: int = 3) -> None:
     if message_detail_is_visible(driver):
         return
     raise AssertionError("Unable to detect the first message detail after entering from the home feed")
+
+
+def _detail_load_failed(page_source: str) -> bool:
+    return any(text in page_source for text in ["加载失败", "详情加载失败", "Network Error", "重新加载"])
 
 
 def browse_note_feed(driver: WebDriver, timeout: int = 30) -> None:
@@ -302,10 +316,13 @@ def _home_ready_id_present(driver: WebDriver) -> bool:
     return False
 
 
-def _home_ready_text_present(page_source: str) -> bool:
+def _home_ready_text_present(page_source: str, *, ignore_transient_load_failure: bool = False) -> bool:
     if _me_content_page_visible(page_source):
         return False
-    if any(text in page_source for text in HOME_BLOCKING_TEXTS):
+    blockers = [text for text in HOME_BLOCKING_TEXTS if text in page_source]
+    if ignore_transient_load_failure:
+        blockers = [text for text in blockers if text not in TRANSIENT_HOME_LOAD_FAILURE_TEXTS]
+    if blockers:
         return False
     if "post-home-feed-category-pager" in page_source:
         return True
@@ -360,5 +377,5 @@ def _extract_visible_texts(page_source: str) -> list[str]:
 def _safe_page_source(driver: WebDriver) -> str:
     try:
         return driver.page_source
-    except WebDriverException:
+    except (AttributeError, WebDriverException):
         return ""

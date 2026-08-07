@@ -37,6 +37,23 @@ def test_android_note_search_coordinate_targets_visible_header_icon(monkeypatch)
     assert taps == [("mobile: tap", {"x": 1004, "y": 160})]
 
 
+def test_ios_note_search_entry_coordinate_defers_visibility_wait(monkeypatch):
+    calls = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_note_search_entry_by_coordinate",
+        lambda driver: calls.append("coordinate") or True,
+    )
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: calls.append("wait") or True)
+
+    assert message_detail._tap_note_search_entry(FakeDriver()) is True
+    assert calls == ["coordinate"]
+
+
 def test_android_note_search_submit_targets_visible_header_action(monkeypatch):
     taps = []
 
@@ -122,6 +139,8 @@ def test_find_note_search_input_supports_android_edit_text():
     expected = object()
 
     class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
         @staticmethod
         def find_element(by, value):
             if value == '//android.widget.EditText[contains(@hint, "请输入内容")]':
@@ -129,6 +148,26 @@ def test_find_note_search_input_supports_android_edit_text():
             raise NoSuchElementException("no match")
 
     assert message_detail._find_note_search_input(FakeDriver(), timeout=0.1) is expected
+
+
+def test_find_note_search_input_prefers_ios_class_chain():
+    expected = object()
+    calls = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def find_element(by, value):
+            calls.append((by, value))
+            if by == message_detail.AppiumBy.IOS_CLASS_CHAIN:
+                return expected
+            raise NoSuchElementException("no match")
+
+    assert message_detail._find_note_search_input(FakeDriver(), timeout=0.1) is expected
+    assert calls == [
+        (message_detail.AppiumBy.IOS_CLASS_CHAIN, "**/XCUIElementTypeSearchField"),
+    ]
 
 
 def test_android_note_search_results_accept_hidden_keyword_matches():
@@ -160,7 +199,7 @@ def test_tap_note_search_result_tries_next_card_when_first_does_not_open(monkeyp
         lambda driver, page_source, verify_open, timeout=1.2: events.append(page_source) or page_source == "page-2",
     )
     monkeypatch.setattr(message_detail, "_tap_accessibility_id_now", lambda driver, value: False)
-    monkeypatch.setattr(message_detail, "_tap_first_visible_note_search_result", lambda driver: False)
+    monkeypatch.setattr(message_detail, "_tap_first_visible_note_search_result", lambda driver, **kwargs: False)
     monkeypatch.setattr(message_detail, "_tap_first_note_search_result_by_coordinate", lambda driver: False)
     monkeypatch.setattr(
         message_detail,
@@ -171,6 +210,51 @@ def test_tap_note_search_result_tries_next_card_when_first_does_not_open(monkeyp
 
     assert message_detail._tap_first_note_search_result(FakeDriver()) is True
     assert events == ["search-results", ("swipe", "up"), "page-2"]
+
+
+def test_tap_note_search_result_prefers_visible_result_fast_path(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "search-results")
+    monkeypatch.setattr(
+        message_detail,
+        "_tap_first_visible_note_search_result",
+        lambda driver, **kwargs: events.append("visible-result") or True,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "tap_first_note_card",
+        lambda *args, **kwargs: events.append("generic-card") or True,
+    )
+
+    assert message_detail._tap_first_note_search_result(FakeDriver()) is True
+    assert events == ["visible-result"]
+
+
+def test_click_note_search_result_title_prefers_ios_predicate(monkeypatch):
+    calls = []
+
+    class FakeElement:
+        def click(self):
+            calls.append(("click",))
+
+    class FakeDriver:
+        def find_element(self, by, value):
+            calls.append((by, value))
+            return FakeElement()
+
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: True)
+
+    assert message_detail._click_note_search_result_title(FakeDriver(), '骑行 "测试"') is True
+    assert calls[0][0] == message_detail.AppiumBy.IOS_PREDICATE
+    assert '骑行 \\"测试\\"' in calls[0][1]
+    assert calls == [
+        (message_detail.AppiumBy.IOS_PREDICATE, calls[0][1]),
+        ("click",),
+    ]
 
 
 def test_tap_note_search_result_scrolls_to_next_result_page(monkeypatch):
@@ -994,7 +1078,50 @@ def test_submit_comment_falls_back_to_ios_bottom_action_when_text_entry_does_not
     message_detail.submit_message_comment(FakeDriver(), "自动化测试留言", timeout=3)
 
     assert events == [
+        ("tap-bottom-action", 2),
         ("tap-candidate", tuple(message_detail.COMMENT_ENTRY_TEXTS)),
+        "click-input",
+        "clear",
+        ("set-value", "自动化测试留言"),
+        ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)),
+        "wait-echo",
+    ]
+
+
+def test_submit_comment_prefers_ios_bottom_action_before_candidate_scan(monkeypatch):
+    events = []
+
+    class FakeInput:
+        @staticmethod
+        def click():
+            events.append("click-input")
+
+        @staticmethod
+        def clear():
+            events.append("clear")
+
+        @staticmethod
+        def set_value(value):
+            events.append(("set-value", value))
+
+        @staticmethod
+        def get_attribute(attribute):
+            return "自动化测试留言" if attribute == "value" else ""
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"]))
+    monkeypatch.setattr(message_detail, "_tap_bottom_action_at_index", lambda driver, index: events.append(("tap-bottom-action", index)) or True)
+    monkeypatch.setattr(message_detail, "_find_comment_input", lambda driver, timeout: FakeInput())
+    monkeypatch.setattr(message_detail, "_tap_candidate", lambda driver, ids, texts: events.append(("tap-candidate", tuple(texts))) or True)
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_for_comment_echo", lambda *args, **kwargs: events.append("wait-echo"))
+
+    message_detail.submit_message_comment(FakeDriver(), "自动化测试留言", timeout=3)
+
+    assert events == [
         ("tap-bottom-action", 2),
         "click-input",
         "clear",
@@ -1002,6 +1129,54 @@ def test_submit_comment_falls_back_to_ios_bottom_action_when_text_entry_does_not
         ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)),
         "wait-echo",
     ]
+
+
+def test_submit_comment_prefers_ios_visible_submit_text_from_source(monkeypatch):
+    events = []
+
+    class FakeInput:
+        @staticmethod
+        def click():
+            events.append("click-input")
+
+        @staticmethod
+        def clear():
+            events.append("clear")
+
+        @staticmethod
+        def set_value(value):
+            events.append(("set-value", value))
+
+        @staticmethod
+        def get_attribute(attribute):
+            return "自动化测试留言" if attribute == "value" else ""
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(
+        message_detail,
+        "_safe_page_source",
+        lambda driver: """
+        <AppiumAUT>
+          <XCUIElementTypeStaticText name="发送" label="发送" visible="true" x="342" y="697" width="45" height="34" />
+        </AppiumAUT>
+        """,
+    )
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"]))
+    monkeypatch.setattr(message_detail, "_tap_bottom_action_at_index", lambda driver, index: events.append(("tap-bottom-action", index)) or True)
+    monkeypatch.setattr(message_detail, "_find_comment_input", lambda driver, timeout: FakeInput())
+    monkeypatch.setattr(message_detail, "_tap_candidate", lambda driver, ids, texts: events.append(("tap-candidate", tuple(texts))) or True)
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_for_comment_echo", lambda *args, **kwargs: events.append("wait-echo"))
+
+    message_detail.submit_message_comment(FakeDriver(), "自动化测试留言", timeout=3)
+
+    assert ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)) not in events
+    assert ("mobile: tap", {"x": 364, "y": 714}) in events
 
 
 def test_find_comment_input_supports_android_edit_text():
@@ -1173,6 +1348,33 @@ def test_tap_detail_share_button_accepts_ios_detail_header_icon_below_status_bar
     assert taps == [("mobile: tap", {"x": 381.0, "y": 203.0})]
 
 
+def test_tap_detail_share_button_uses_ios_visible_header_icon_bounds_from_source(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_elements(self, by, value):
+            raise AssertionError("source fast path should run before element scan")
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(
+        message_detail,
+        "_safe_page_source",
+        lambda driver: """
+        <AppiumAUT>
+          <XCUIElementTypeOther visible="true" x="39" y="182" width="42" height="42" />
+          <XCUIElementTypeOther visible="true" x="360" y="182" width="42" height="42" />
+        </AppiumAUT>
+        """,
+    )
+
+    assert message_detail._tap_detail_share_button(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 381, "y": 203})]
+
+
 def test_confirm_share_after_target_uses_android_top_right_coordinate_when_wechat_xml_is_empty(monkeypatch):
     events = []
 
@@ -1230,6 +1432,60 @@ def test_confirm_share_after_target_uses_ios_top_right_coordinate_when_wechat_xm
 
     assert message_detail._confirm_share_after_target(FakeDriver(), timeout=2) is True
     assert events == [("mobile: tap", {"x": 1126, "y": 221})]
+
+
+def test_confirm_share_after_target_prefers_ios_top_right_coordinate_before_wait(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def get_window_rect(self):
+            return {"width": 1280, "height": 2772}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "")
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: False)
+    monkeypatch.setattr(message_detail, "_share_returned_to_detail", lambda driver: False)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: events.append(("wait", timeout)) or True)
+
+    assert message_detail._confirm_share_after_target(FakeDriver(), timeout=2) is True
+    assert events[0] == ("mobile: tap", {"x": 1126, "y": 221})
+
+
+def test_return_to_home_after_share_prefers_ios_header_back_from_source(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def back(self):
+            raise AssertionError("iOS source back fast path should run before driver.back")
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "message_detail_is_visible", lambda driver: True)
+    monkeypatch.setattr(
+        message_detail,
+        "_safe_page_source",
+        lambda driver: """
+        <AppiumAUT>
+          <XCUIElementTypeOther visible="true" x="39" y="182" width="42" height="42" />
+          <XCUIElementTypeOther visible="true" x="360" y="182" width="42" height="42" />
+        </AppiumAUT>
+        """,
+    )
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: events.append(("wait", timeout)) or True)
+
+    assert message_detail._return_to_home_after_share(FakeDriver(), timeout=6) is True
+    assert events == [
+        ("mobile: tap", {"x": 60, "y": 203}),
+        ("wait", 6),
+    ]
 
 
 def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeypatch):

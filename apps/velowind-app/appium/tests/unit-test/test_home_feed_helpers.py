@@ -85,6 +85,40 @@ def test_open_first_home_message_uses_card_tap_when_direct_target_missing(monkey
     assert "tap-card" in events
 
 
+def test_open_first_home_message_skips_failed_detail_and_tries_next_card(monkeypatch):
+    events = []
+    state = {"page": "home", "detail_visible": False}
+
+    monkeypatch.setattr(home_feed, "wait_for_home_feed", lambda driver, timeout=60: True)
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: state["page"])
+
+    def fake_tap_first_message(driver):
+        events.append("tap-first")
+        state["page"] = "加载失败 详情加载失败，请稍后再试。"
+        return True
+
+    def fake_safe_back(driver):
+        events.append("back")
+        state["page"] = "home"
+
+    def fake_tap_first_visible_card(driver):
+        events.append("tap-next")
+        state["detail_visible"] = True
+        state["page"] = "detail"
+        return True
+
+    monkeypatch.setattr(home_feed, "_tap_first_message", fake_tap_first_message)
+    monkeypatch.setattr(home_feed, "_tap_first_visible_card", fake_tap_first_visible_card)
+    monkeypatch.setattr(home_feed, "safe_back", fake_safe_back)
+    monkeypatch.setattr(home_feed, "swipe_vertical", lambda driver, direction="up": events.append("swipe"))
+    monkeypatch.setattr(home_feed.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(home_feed, "message_detail_is_visible", lambda driver: state["detail_visible"])
+
+    home_feed.open_first_home_message(object(), max_swipes=1)
+
+    assert events == ["tap-first", "back", "tap-next"]
+
+
 def test_wait_for_home_feed_ignores_message_detail_overlay(monkeypatch):
     page_states = iter(
         [
@@ -117,6 +151,20 @@ def test_wait_for_home_feed_ignores_activity_detail_overlay(monkeypatch):
     monkeypatch.setattr(home_feed.time, "sleep", lambda seconds: None)
 
     assert home_feed.wait_for_home_feed(object(), timeout=3) == "home-feed-text"
+
+
+def test_wait_for_home_feed_accepts_home_with_transient_detail_load_failure(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="寻风集 全国 推荐 骑行 徒步 笔记 活动 消息 我的" visible="true" />
+      <XCUIElementTypeOther name="加载失败 详情加载失败，请稍后再试。" visible="true" />
+    </AppiumAUT>
+    """
+
+    monkeypatch.setattr(home_feed, "_safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(home_feed, "_home_ready_id_present", lambda driver: False)
+
+    assert home_feed.wait_for_home_feed(object(), timeout=0.1) == "home-feed-text"
 
 
 def test_wait_for_home_feed_rejects_rental_date_picker_overlay(monkeypatch):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import os
 import time
 
 from appium.webdriver.webdriver import WebDriver
@@ -68,35 +70,78 @@ def tap_rental_payment_button(driver: WebDriver, timeout: int = 20) -> None:
 
 
 def confirm_payment_then_think_again(driver: WebDriver, timeout: int = 20) -> None:
-    wait_for_rental_payment_center_page(driver, timeout=timeout)
+    with _payment_profile("confirm-wait-payment-center"):
+        wait_for_rental_payment_center_page(driver, timeout=timeout)
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        if tap_first_available(driver, accessibility_ids=CONFIRM_PAYMENT_IDS, texts=CONFIRM_PAYMENT_TEXTS, timeout=2):
+        if is_ios:
+            with _payment_profile("confirm-tap-ios-coordinate"):
+                tapped_ios_coordinate = tap_by_coordinate_ratios(driver, [(0.50, 0.93), (0.50, 0.91)])
+            if tapped_ios_coordinate:
+                break
+        with _payment_profile("confirm-tap-first-available"):
+            tapped_confirm = tap_first_available(
+                driver,
+                accessibility_ids=CONFIRM_PAYMENT_IDS,
+                texts=CONFIRM_PAYMENT_TEXTS,
+                timeout=2,
+            )
+        if tapped_confirm:
             break
-        if tap_by_coordinate_ratios(driver, [(0.50, 0.93), (0.50, 0.91)]):
+        with _payment_profile("confirm-tap-coordinate"):
+            tapped_coordinate = tap_by_coordinate_ratios(driver, [(0.50, 0.93), (0.50, 0.91)])
+        if tapped_coordinate:
             break
         time.sleep(0.3)
     else:
         raise AssertionError("Unable to tap confirm payment in rental payment center")
 
-    if not wait_until_source_contains(driver, THINK_AGAIN_TEXTS + ["确认", "支付"], timeout=10):
+    with _payment_profile("confirm-wait-dialog"):
+        dialog_visible = wait_until_source_contains(driver, THINK_AGAIN_TEXTS + ["确认", "支付"], timeout=10)
+    if not dialog_visible:
         raise AssertionError("Payment confirmation dialog did not appear")
 
-    if not dismiss_pending_payment_dialog_if_present(driver, timeout=5):
+    with _payment_profile("confirm-dismiss-dialog"):
+        dismissed = dismiss_pending_payment_dialog_if_present(driver, timeout=5)
+    if not dismissed:
         raise AssertionError("Unable to dismiss payment dialog by tapping think-again")
 
-    wait_for_my_rental_page(driver, timeout=20)
+    with _payment_profile("confirm-wait-my-rental-page"):
+        wait_for_my_rental_page(driver, timeout=20)
 
 
 def dismiss_pending_payment_dialog_if_present(driver: WebDriver, timeout: int = 3) -> bool:
     end_at = time.monotonic() + timeout
     dismissed = False
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
     while time.monotonic() < end_at:
         source = safe_page_source(driver)
         if "确认发起支付" not in source and not any(text in source for text in THINK_AGAIN_TEXTS):
             return dismissed
-        tap_first_available(driver, accessibility_ids=THINK_AGAIN_IDS, texts=THINK_AGAIN_TEXTS, timeout=1)
-        tap_by_coordinate_ratios(driver, [(0.32, 0.56), (0.35, 0.58), (0.32, 0.62)])
+        if is_ios and tap_by_coordinate_ratios(driver, [(0.32, 0.56), (0.35, 0.58), (0.32, 0.62)]):
+            return True
+        if not tap_visible_text_hit_point(driver, THINK_AGAIN_TEXTS, timeout=0.6):
+            tap_first_available(driver, accessibility_ids=THINK_AGAIN_IDS, texts=THINK_AGAIN_TEXTS, timeout=1)
+            tap_by_coordinate_ratios(driver, [(0.32, 0.56), (0.35, 0.58), (0.32, 0.62)])
         dismissed = True
         time.sleep(0.5)
     return dismissed and "确认发起支付" not in safe_page_source(driver)
+
+
+def _payment_profile_enabled() -> bool:
+    return os.getenv("VW_ACTIVITY_PROFILE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@contextmanager
+def _payment_profile(label: str):
+    if not _payment_profile_enabled():
+        yield
+        return
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        print(f"[rental-payment-profile] {label}: {time.monotonic() - started:.2f}s")
