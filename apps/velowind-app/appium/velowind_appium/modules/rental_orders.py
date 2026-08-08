@@ -61,7 +61,11 @@ def read_latest_rental_order_summary(driver: WebDriver, timeout: int = 20) -> Re
     end_at = time.monotonic() + timeout
     last_summary = RentalOrderSummary(None, None, None, None, False, False, None)
     while time.monotonic() < end_at:
-        wait_for_my_rental_page(driver, timeout=timeout)
+        last_summary = extract_rental_order_summary(safe_page_source(driver))
+        if last_summary.is_complete():
+            return last_summary
+        remaining_timeout = max(0.5, end_at - time.monotonic())
+        wait_for_my_rental_page(driver, timeout=remaining_timeout)
         last_summary = extract_rental_order_summary(safe_page_source(driver))
         if last_summary.is_complete():
             return last_summary

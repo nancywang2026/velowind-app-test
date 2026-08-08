@@ -11,7 +11,7 @@ from velowind_appium.actions import (
     wait_for_any_accessibility_id,
     wait_for_any_accessibility_id_or_text,
 )
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import dismiss_common_system_alerts, ensure_read_session_on_home
 
 
 ROOT_TABS = [
@@ -27,7 +27,7 @@ OPTIONAL_ENTRY_IDS = [
 @pytest.mark.smoke
 def test_ios_feature_walkthrough(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
 
     for index, (tab_id, tab_text, expected_ids, expected_texts) in enumerate(ROOT_TABS, start=2):
         step(

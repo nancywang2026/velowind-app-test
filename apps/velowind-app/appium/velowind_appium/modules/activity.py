@@ -614,8 +614,8 @@ def _select_activity_type(driver: WebDriver, activity_type: str) -> None:
 
 
 def _select_activity_region(driver: WebDriver, province: str, city: str) -> None:
-    if not _tap_form_field(driver, "选择所属省份", fallback_point=(111, 499)):
-        return
+    if not _open_activity_region_drawer(driver):
+        raise AssertionError(f"Unable to open the activity region drawer: {province} {city}")
     if not _wait_until(lambda: _region_drawer_is_visible(driver), timeout=3):
         if _tap_android_field_container(driver, "选择所属省份") and _wait_until(
             lambda: _region_drawer_is_visible(driver),
@@ -628,6 +628,8 @@ def _select_activity_region(driver: WebDriver, province: str, city: str) -> None
             if _activity_region_selected(_safe_page_source(driver), province, city):
                 return
             raise AssertionError(f"Unable to select activity region: {province} {city}")
+    if _select_visible_city_from_open_region_drawer(driver, province, city):
+        return
     if _select_region_from_search_results(driver, province, city):
         return
     if _is_android(driver):
@@ -650,6 +652,12 @@ def _select_activity_region(driver: WebDriver, province: str, city: str) -> None
         return
     if not _activity_region_selected(_safe_page_source(driver), province, city):
         raise AssertionError("Unable to confirm the activity region selection")
+
+
+def _open_activity_region_drawer(driver: WebDriver) -> bool:
+    if _tap_form_field(driver, "选择所属省份", fallback_point=(111, 499)):
+        return True
+    return _tap_placeholder(driver, "选择所属省份")
 
 
 def _select_province(driver: WebDriver, province: str) -> None:
@@ -688,6 +696,15 @@ def _select_city_from_open_region_drawer(driver: WebDriver, city: str) -> bool:
         _search_region_drawer(driver, _normalize_region_query(city))
         _wait_until(lambda: any(text in _safe_page_source(driver) for text in option_texts), timeout=3)
     return _tap_region_option(driver, option_texts, timeout=2)
+
+
+def _select_visible_city_from_open_region_drawer(driver: WebDriver, province: str, city: str) -> bool:
+    page_source = _safe_page_source(driver)
+    if "搜索省份或城市" not in page_source or "最近选择" not in page_source:
+        return False
+    if not any(text in page_source for text in _city_option_texts(city)):
+        return False
+    return _select_city_from_open_region_drawer(driver, city) and _confirm_activity_region(driver, province, city)
 
 
 def _select_region_from_search_results(driver: WebDriver, province: str, city: str) -> bool:
@@ -1952,6 +1969,13 @@ def _tap_image_picker(driver: WebDriver) -> bool:
             return True
         except (NoSuchElementException, WebDriverException, AttributeError):
             pass
+    hit_point = _activity_image_picker_hit_point_from_source(_safe_page_source(driver))
+    if hit_point is not None:
+        try:
+            driver.execute_script("mobile: tap", {"x": hit_point[0], "y": hit_point[1]})
+            return True
+        except WebDriverException:
+            pass
     try:
         driver.execute_script("mobile: tap", {"x": 60, "y": 206})
         return True
@@ -1969,6 +1993,37 @@ def _tap_image_picker(driver: WebDriver) -> bool:
         except (NoSuchElementException, WebDriverException):
             continue
     return False
+
+
+def _activity_image_picker_hit_point_from_source(page_source: str) -> tuple[int, int] | None:
+    if not page_source or "活动图片" not in page_source:
+        return None
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return None
+
+    candidates: list[tuple[int, int, int]] = []
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false":
+            continue
+        try:
+            x = int(float(attrs.get("x", "")))
+            y = int(float(attrs.get("y", "")))
+            width = int(float(attrs.get("width", "")))
+            height = int(float(attrs.get("height", "")))
+        except ValueError:
+            continue
+        if width < 80 or width > 120 or height < 80 or height > 120:
+            continue
+        if x > 80 or y < 180:
+            continue
+        candidates.append((width * height, x + width // 2, y + height // 2))
+    if not candidates:
+        return None
+    _, x, y = min(candidates)
+    return x, y
 
 
 def _tap_form_field(driver: WebDriver, text: str, fallback_point: tuple[int, int] | None = None) -> bool:

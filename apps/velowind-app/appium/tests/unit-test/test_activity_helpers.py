@@ -607,6 +607,55 @@ def test_select_activity_region_selects_province_then_city_in_region_drawer(monk
     ]
 
 
+def test_select_activity_region_uses_placeholder_when_form_field_tap_misses(monkeypatch):
+    events = []
+    state = {"page": "发布活动 所属省份 选择所属省份 城市名称 例如：杭州"}
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: False)
+
+    def fake_tap_placeholder(driver, placeholder):
+        events.append(("tap-placeholder", placeholder))
+        if placeholder == "选择所属省份":
+            state["page"] = "选择地区 搜索省份或城市 湖南 张家界 确认地区"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "_tap_placeholder", fake_tap_placeholder)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+
+    def fake_tap_region_option(driver, texts, timeout=2):
+        events.append(("tap-option", tuple(texts)))
+        return True
+
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap", text))
+        if text == "确认地区":
+            state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "_tap_region_option", fake_tap_region_option)
+    monkeypatch.setattr(activity, "tap_text_if_present", fake_tap_text)
+
+    activity._select_activity_region(object(), "湖南", "张家界市")
+
+    assert events == [
+        ("tap-placeholder", "选择所属省份"),
+        ("tap-option", ("湖南", "湖南市", "湖南省")),
+        ("tap-option", ("张家界市", "张家界")),
+        ("tap", "确认地区"),
+    ]
+
+
+def test_select_activity_region_fails_fast_when_region_drawer_cannot_open(monkeypatch):
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: False)
+    monkeypatch.setattr(activity, "_tap_placeholder", lambda driver, placeholder: False)
+
+    with pytest.raises(AssertionError, match="Unable to open the activity region drawer"):
+        activity._select_activity_region(object(), "湖南", "张家界市")
+
+
 def test_select_activity_region_waits_for_province_after_drawer_search(monkeypatch):
     events = []
     state = {"page": "选择地区 搜索省份或城市 确认地区", "pending_province": False}
@@ -895,6 +944,38 @@ def test_select_activity_region_prefers_city_search_result(monkeypatch):
     assert ("search", "张家界") in events
     assert ("tap-search-result", "湖南", "张家界市") in events
     assert not any(event[0] == "province" for event in events)
+
+
+def test_select_activity_region_prefers_visible_recent_city_before_search(monkeypatch):
+    events = []
+    state = {"page": "选择地区 搜索省份或城市 最近选择 张家界 确认地区"}
+
+    monkeypatch.setattr(activity, "_tap_form_field", lambda driver, text, fallback_point=None: events.append(("open", text)) or True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(activity, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(activity, "_search_region_drawer", lambda driver, query: events.append(("search", query)) or True)
+
+    def fake_tap_region_option(driver, texts, timeout=2):
+        events.append(("tap-option", tuple(texts)))
+        return "张家界" in texts
+
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap", text))
+        if text == "确认地区":
+            state["page"] = "发布活动 所属省份 湖南 城市名称 张家界市"
+            return True
+        return False
+
+    monkeypatch.setattr(activity, "_tap_region_option", fake_tap_region_option)
+    monkeypatch.setattr(activity, "tap_text_if_present", fake_tap_text)
+
+    activity._select_activity_region(object(), "湖南", "张家界市")
+
+    assert events == [
+        ("open", "选择所属省份"),
+        ("tap-option", ("张家界市", "张家界")),
+        ("tap", "确认地区"),
+    ]
 
 
 def test_select_region_from_search_results_submits_android_keyboard_before_tapping(monkeypatch):
@@ -1835,6 +1916,32 @@ def test_tap_image_picker_uses_android_activity_image_container(monkeypatch):
     assert activity._tap_image_picker(FakeDriver()) is True
     assert center_taps == [picker]
     assert coordinate_taps == []
+
+
+def test_tap_image_picker_uses_visible_ios_card_center_when_shifted_by_error_banner(monkeypatch):
+    taps = []
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText value="Network Error" name="Network Error" visible="true" x="27" y="138" width="348" height="21" />
+      <XCUIElementTypeStaticText value="活动图片" name="活动图片" visible="true" x="13" y="181" width="61" height="21" />
+      <XCUIElementTypeOther enabled="true" visible="true" x="13" y="214" width="94" height="94">
+        <XCUIElementTypeOther enabled="true" visible="true" x="45" y="246" width="26" height="26" />
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def __init__(self):
+            self.page_source = page_source
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert activity._tap_image_picker(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 60, "y": 261})]
 
 
 def test_upload_activity_image_waits_for_photo_library_before_choosing_album(monkeypatch):

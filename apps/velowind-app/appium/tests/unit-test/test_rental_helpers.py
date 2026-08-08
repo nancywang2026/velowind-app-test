@@ -1,7 +1,10 @@
+import pytest
+
 from velowind_appium.modules import rental_orders
 from velowind_appium.modules import rental_home_entry
 from velowind_appium.modules import rental_order_confirm
 from velowind_appium.modules import rental_store
+from velowind_appium.modules import rental_payment_center
 from velowind_appium.modules import rental_vehicle_list
 from velowind_appium.modules.rental_common import visible_text_hit_points, visible_text_hit_points_containing
 
@@ -58,6 +61,29 @@ def test_extract_rental_order_summary_from_android_text_nodes():
     assert summary.remaining_payment_time == "09:31"
 
 
+def test_read_latest_rental_order_summary_uses_current_complete_source_before_wait(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="订单编号：RC202607190004" />
+      <XCUIElementTypeStaticText name="下单时间：2026-07-19 11:45" />
+      <XCUIElementTypeStaticText name="取车时间：2026-07-20 10:00" />
+      <XCUIElementTypeStaticText name="还车时间：2026-07-21 10:00" />
+      <XCUIElementTypeStaticText name="支付未完成" />
+      <XCUIElementTypeStaticText name="可重新发起支付" />
+      <XCUIElementTypeStaticText name="剩余支付时间 09:31" />
+    </AppiumAUT>
+    """
+    waits = []
+
+    monkeypatch.setattr(rental_orders, "safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(rental_orders, "wait_for_my_rental_page", lambda driver, timeout: waits.append(timeout))
+
+    summary = rental_orders.read_latest_rental_order_summary(object(), timeout=20)
+
+    assert summary.is_complete() is True
+    assert waits == []
+
+
 def test_submit_rental_order_uses_remaining_timeout_for_payment_wait(monkeypatch):
     waits = []
 
@@ -76,6 +102,89 @@ def test_submit_rental_order_uses_remaining_timeout_for_payment_wait(monkeypatch
     rental_order_confirm.submit_rental_order(object(), timeout=25)
 
     assert waits and waits[0] > 20
+
+
+def test_confirm_payment_prefers_ios_coordinate_before_locator_scan(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(rental_payment_center, "wait_for_rental_payment_center_page", lambda driver, timeout: None)
+    monkeypatch.setattr(
+        rental_payment_center,
+        "tap_by_coordinate_ratios",
+        lambda driver, ratios: events.append(("coordinate", tuple(ratios))) or True,
+    )
+    monkeypatch.setattr(
+        rental_payment_center,
+        "tap_first_available",
+        lambda *args, **kwargs: events.append(("locator",)) or True,
+    )
+    monkeypatch.setattr(rental_payment_center, "wait_until_source_contains", lambda driver, texts, timeout: True)
+    monkeypatch.setattr(rental_payment_center, "dismiss_pending_payment_dialog_if_present", lambda driver, timeout: True)
+    monkeypatch.setattr(rental_payment_center, "wait_for_my_rental_page", lambda driver, timeout: None)
+
+    rental_payment_center.confirm_payment_then_think_again(FakeDriver(), timeout=5)
+
+    assert events == [
+        ("coordinate", ((0.50, 0.93), (0.50, 0.91))),
+    ]
+
+
+def test_dismiss_payment_dialog_prefers_visible_think_again_hit_point(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        pass
+
+    sources = iter(["确认发起支付 再想想", "我的租车"])
+    monkeypatch.setattr(rental_payment_center, "safe_page_source", lambda driver: next(sources))
+    monkeypatch.setattr(
+        rental_payment_center,
+        "tap_visible_text_hit_point",
+        lambda driver, texts, timeout: events.append(("hit-point", tuple(texts))) or True,
+    )
+    monkeypatch.setattr(
+        rental_payment_center,
+        "tap_first_available",
+        lambda *args, **kwargs: events.append(("locator",)) or True,
+    )
+    monkeypatch.setattr(
+        rental_payment_center,
+        "tap_by_coordinate_ratios",
+        lambda *args, **kwargs: events.append(("coordinate",)) or True,
+    )
+    monkeypatch.setattr(rental_payment_center.time, "sleep", lambda seconds: None)
+
+    assert rental_payment_center.dismiss_pending_payment_dialog_if_present(FakeDriver(), timeout=2) is True
+    assert events == [
+        ("hit-point", tuple(rental_payment_center.THINK_AGAIN_TEXTS)),
+    ]
+
+
+def test_dismiss_payment_dialog_prefers_ios_dialog_coordinate(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(rental_payment_center, "safe_page_source", lambda driver: "确认发起支付 再想想")
+    monkeypatch.setattr(
+        rental_payment_center,
+        "tap_by_coordinate_ratios",
+        lambda driver, ratios: events.append(("coordinate", tuple(ratios))) or True,
+    )
+    monkeypatch.setattr(
+        rental_payment_center,
+        "tap_visible_text_hit_point",
+        lambda *args, **kwargs: events.append(("hit-point",)) or True,
+    )
+
+    assert rental_payment_center.dismiss_pending_payment_dialog_if_present(FakeDriver(), timeout=2) is True
+    assert events == [
+        ("coordinate", ((0.32, 0.56), (0.35, 0.58), (0.32, 0.62))),
+    ]
 
 
 def test_summary_is_complete_requires_all_order_fields():
@@ -248,3 +357,70 @@ def test_visible_vehicle_detail_bookable_ignores_hidden_unavailable_vehicle_list
     """
 
     assert rental_vehicle_list._visible_vehicle_detail_bookable(page_source) is True
+
+
+def test_bookable_vehicle_detail_hit_points_prefer_visible_bookable_row():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="选择车辆" label="选择车辆" visible="true" x="0" y="100" width="402" height="600">
+        <XCUIElementTypeOther name="文化生活服务车 不可预定 车辆详情" label="文化生活服务车 不可预定 车辆详情"
+          visible="true" x="0" y="140" width="402" height="160">
+          <XCUIElementTypeStaticText name="车辆详情" label="车辆详情" value="车辆详情"
+            visible="true" x="250" y="250" width="80" height="30" />
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther name="文化生活服务车 可预定 车辆详情" label="文化生活服务车 可预定 车辆详情"
+          visible="true" x="0" y="320" width="402" height="160">
+          <XCUIElementTypeStaticText name="车辆详情" label="车辆详情" value="车辆详情"
+            visible="true" x="250" y="430" width="80" height="30" />
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+
+    assert rental_vehicle_list._bookable_vehicle_detail_hit_points(page_source) == [(290, 445)]
+
+
+def test_bookable_vehicle_detail_hit_points_accepts_ios_immediate_booking_label():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="选择车辆" label="选择车辆" visible="true" x="0" y="100" width="402" height="600">
+        <XCUIElementTypeOther name="文化生活服务车 不可预定 车辆详情" label="文化生活服务车 不可预定 车辆详情"
+          visible="true" x="0" y="140" width="402" height="160">
+          <XCUIElementTypeStaticText name="车辆详情" label="车辆详情" value="车辆详情"
+            visible="true" x="250" y="250" width="80" height="30" />
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther name="文化生活服务车 立即预定 车辆详情" label="文化生活服务车 立即预定 车辆详情"
+          visible="true" x="0" y="320" width="402" height="160">
+          <XCUIElementTypeStaticText name="车辆详情" label="车辆详情" value="车辆详情"
+            visible="true" x="250" y="430" width="80" height="30" />
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+
+    assert rental_vehicle_list._bookable_vehicle_detail_hit_points(page_source) == [(290, 445)]
+
+
+def test_open_rental_from_home_tries_floating_truck_coordinate_fallback(monkeypatch):
+    driver = _FakeRentalDriver("首页 全国 推荐 活动 消息 我的")
+    events = []
+
+    monkeypatch.setattr(rental_home_entry, "_activate_configured_app_if_needed", lambda driver: None)
+    monkeypatch.setattr(rental_home_entry, "_recover_home_before_opening_rental", lambda driver: None)
+    monkeypatch.setattr(rental_home_entry, "_rental_store_visible", lambda driver: False)
+    monkeypatch.setattr(rental_home_entry, "tap_first_available", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rental_home_entry, "tap_by_text_containing", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rental_home_entry, "_wait_for_store_after_tap", lambda driver: False)
+    monkeypatch.setattr(
+        rental_home_entry,
+        "tap_by_coordinate_ratios",
+        lambda driver, ratios: events.append(tuple(ratios)) or True,
+    )
+    ticks = iter([0.0, 0.2, 0.4, 0.6, 0.8, 1.1, 1.4, 1.7, 2.0])
+    monkeypatch.setattr(rental_home_entry.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(rental_home_entry.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(AssertionError):
+        rental_home_entry.open_rental_from_home(driver, timeout=1)
+
+    assert events

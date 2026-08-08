@@ -4,7 +4,7 @@ import time
 from xml.etree import ElementTree
 
 from appium.webdriver.webdriver import WebDriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from velowind_appium.actions import safe_back
 from velowind_appium.modules.rental_common import (
@@ -24,6 +24,7 @@ VEHICLE_LIST_IDS = ["rental-vehicle-list-page", "rent-car-list-page", "select-ve
 VEHICLE_LIST_TEXTS = ["选择车辆", "选择车型", "车辆列表", "车辆详情"]
 VEHICLE_DETAIL_IDS = ["rental-vehicle-detail-button", "vehicle-detail-button", "car-detail-button"]
 VEHICLE_DETAIL_TEXTS = ["车辆详情", "查看详情", "详情"]
+BOOKABLE_VEHICLE_TEXTS = ["可预定", "立即预定", "立即预订", "马上预订", "预订", "预定"]
 
 
 def wait_for_rental_vehicle_list_page(driver: WebDriver, timeout: int = 20) -> str | None:
@@ -81,6 +82,8 @@ def open_selected_vehicle_detail(driver: WebDriver, timeout: int = 20) -> None:
 
 def open_available_vehicle_detail(driver: WebDriver, max_attempts: int = 4, timeout: int = 20) -> None:
     wait_for_rental_vehicle_list_page(driver, timeout=timeout)
+    if _tap_bookable_vehicle_detail_from_list(driver):
+        return
     directions = ["right", "left", "left", "right"]
     for attempt in range(max_attempts):
         open_selected_vehicle_detail(driver, timeout=timeout)
@@ -91,7 +94,90 @@ def open_available_vehicle_detail(driver: WebDriver, max_attempts: int = 4, time
         wait_for_rental_vehicle_list_page(driver, timeout=timeout)
         swipe_horizontal(driver, direction=directions[attempt % len(directions)])
         time.sleep(0.4)
+        if _tap_bookable_vehicle_detail_from_list(driver):
+            return
     raise AssertionError("Unable to find an available rental vehicle after swiping through vehicles")
+
+
+def _tap_bookable_vehicle_detail_from_list(driver: WebDriver) -> bool:
+    for x, y in _bookable_vehicle_detail_hit_points(safe_page_source(driver)):
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+            wait_for_vehicle_detail_page(driver, timeout=8)
+            return True
+        except (TimeoutException, WebDriverException):
+            continue
+    return False
+
+
+def _bookable_vehicle_detail_hit_points(page_source: str) -> list[tuple[int, int]]:
+    if not page_source or "车辆详情" not in page_source or not source_contains_any(page_source, BOOKABLE_VEHICLE_TEXTS):
+        return []
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    hit_points: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("displayed") == "false":
+            continue
+        row_text = " ".join(_visible_node_text(descendant) for descendant in element.iter())
+        if "车辆详情" not in row_text or "不可预定" in row_text:
+            continue
+        if not source_contains_any(row_text, BOOKABLE_VEHICLE_TEXTS):
+            continue
+        point = _detail_button_center(element)
+        if point is None or point in seen:
+            continue
+        hit_points.append(point)
+        seen.add(point)
+    return hit_points
+
+
+def _visible_node_text(element: ElementTree.Element) -> str:
+    if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+        return ""
+    return (
+        element.attrib.get("text", "")
+        or element.attrib.get("name", "")
+        or element.attrib.get("label", "")
+        or element.attrib.get("value", "")
+    ).strip()
+
+
+def _detail_button_center(element: ElementTree.Element) -> tuple[int, int] | None:
+    detail_candidates: list[tuple[int, int, int]] = []
+    row_fallback: tuple[int, int, int] | None = None
+    for descendant in element.iter():
+        hit_point = _element_hit_point(descendant.attrib)
+        if hit_point is None:
+            continue
+        text = _visible_node_text(descendant)
+        if text == "车辆详情":
+            detail_candidates.append(hit_point)
+        elif row_fallback is None and "车辆详情" in text:
+            row_fallback = hit_point
+    candidates = detail_candidates or ([row_fallback] if row_fallback else [])
+    if not candidates:
+        return None
+    _, x, y = min(candidates)
+    return x, y
+
+
+def _element_hit_point(attrs: dict[str, str]) -> tuple[int, int, int] | None:
+    try:
+        x = int(float(attrs.get("x", "")))
+        y = int(float(attrs.get("y", "")))
+        width = int(float(attrs.get("width", "")))
+        height = int(float(attrs.get("height", "")))
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width * height, x + width // 2, y + height // 2
 
 
 def _vehicle_detail_visible(driver: WebDriver) -> bool:

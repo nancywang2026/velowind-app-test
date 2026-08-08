@@ -17,6 +17,32 @@ def test_activity_feed_contains_category_results_requires_activity_card_content(
     ]
 
 
+def test_wait_for_activity_category_results_reloads_network_error(monkeypatch):
+    events = []
+    page = {"source": "全部活动 骑行 加载失败 网络连接异常 重新加载"}
+    clock = {"value": 0.0}
+
+    class FakeDriver:
+        pass
+
+    def fake_tap_text(driver, text, timeout=1):
+        events.append(("tap-text", text))
+        page["source"] = "骑行 总里程 -- 时长 约8.5小时 场次 1场 难度等级"
+        return True
+
+    def fake_monotonic():
+        clock["value"] += 0.1
+        return clock["value"]
+
+    monkeypatch.setattr(activity_browse, "_safe_page_source", lambda driver: page["source"])
+    monkeypatch.setattr(activity_browse, "tap_text_if_present", fake_tap_text)
+    monkeypatch.setattr(activity_browse.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(activity_browse.time, "sleep", lambda seconds: None)
+
+    assert activity_browse.wait_for_activity_category_results(FakeDriver(), "骑行", timeout=2)
+    assert events == [("tap-text", "重新加载")]
+
+
 def test_activity_feed_extracts_android_card_with_separate_text_nodes():
     page_source = """
     <hierarchy>
@@ -297,6 +323,28 @@ def test_parse_activity_detail_snapshot_extracts_visible_route_fields():
     assert snapshot.is_basic_detail_complete()
 
 
+def test_parse_activity_detail_snapshot_accepts_route_heading_without_overview():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="activity-route-detail-v3-hero-carousel" visible="true" />
+      <XCUIElementTypeImage visible="true" />
+      <XCUIElementTypeStaticText name="上海出发到杭州" visible="true" x="13" y="235" width="180" height="26" />
+      <XCUIElementTypeStaticText name="浙江省·杭州" visible="true" x="28" y="270" width="98" height="18" />
+      <XCUIElementTypeOther name="总里程 -- 参考时长 -- 风险等级" visible="true" />
+      <XCUIElementTypeOther name="风景标签 沿途景点" visible="true" />
+      <XCUIElementTypeOther name="Nancy 路线主理人" visible="true" />
+      <XCUIElementTypeOther name="ROUTE 路线说明 上海 浦东" visible="true" />
+      <XCUIElementTypeOther name="COMMENTS 活动评论 查看更多" visible="true" />
+      <XCUIElementTypeOther name="请选择场次 1/1 场次信息 集合地点 陆家嘴" visible="true" />
+    </AppiumAUT>
+    """
+
+    snapshot = activity_browse.parse_activity_detail_snapshot(page_source)
+
+    assert snapshot.route_visible
+    assert snapshot.is_basic_detail_complete()
+
+
 def test_parse_activity_detail_snapshot_accepts_android_route_itinerary_without_overview_heading():
     page_source = """
     <hierarchy>
@@ -321,6 +369,33 @@ def test_parse_activity_detail_snapshot_accepts_android_route_itinerary_without_
     snapshot = activity_browse.parse_activity_detail_snapshot(page_source)
 
     assert snapshot.route_visible is True
+    assert snapshot.is_basic_detail_complete()
+
+
+def test_parse_activity_detail_snapshot_accepts_android_route_tab_and_empty_sessions():
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="activity-route-detail-v3-hero-carousel" displayed="true" />
+      <android.widget.ImageView resource-id="image" displayed="true" />
+      <android.widget.TextView text="荆门市区 + 漳河水库 2 天 1 晚骑行活动" displayed="true" bounds="[0,249][522,315]" />
+      <android.widget.TextView text="湖北省·荆门市" displayed="true" />
+      <android.widget.TextView text="瓜瓜" displayed="true" />
+      <android.widget.TextView text="路线主理人" displayed="true" />
+      <android.widget.TextView text="总里程" displayed="true" />
+      <android.widget.TextView text="参考时长" displayed="true" />
+      <android.widget.TextView text="风险等级" displayed="true" />
+      <android.widget.TextView text="风景标签" displayed="true" />
+      <android.widget.TextView text="沿途景点" displayed="true" />
+      <android.widget.TextView text="路线说明" displayed="true" />
+      <android.widget.TextView text="活动评论" displayed="true" />
+      <android.widget.TextView text="暂无场次" displayed="true" />
+    </hierarchy>
+    """
+
+    snapshot = activity_browse.parse_activity_detail_snapshot(page_source)
+
+    assert snapshot.route_visible is True
+    assert snapshot.sessions_visible is True
     assert snapshot.is_basic_detail_complete()
 
 

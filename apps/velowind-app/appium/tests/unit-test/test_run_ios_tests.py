@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,6 +99,49 @@ def test_build_pytest_command_allows_allure_result_dir_override(monkeypatch, tmp
     command = run_ios_tests.build_pytest_command(["-m", "smoke"])
 
     assert f"--alluredir={results_dir}" in command
+
+
+def test_ios_runner_retries_failed_tests_before_generating_report(monkeypatch):
+    calls = []
+    artifacts = SimpleNamespace(results=Path("/tmp/allure-results"))
+
+    monkeypatch.setattr(run_ios_tests.sys, "argv", ["run_ios_tests", "--retry-failed", "-m", "smoke"])
+    monkeypatch.setattr(run_ios_tests, "allure_artifacts", lambda: artifacts)
+
+    def fake_run(command):
+        calls.append(("run", command))
+        return type("Result", (), {"returncode": 1 if len(calls) == 1 else 0})()
+
+    monkeypatch.setattr(run_ios_tests, "_run", fake_run)
+    monkeypatch.setattr(run_ios_tests, "_generate_and_open_report", lambda: calls.append(("report", None)))
+
+    assert run_ios_tests.main() == 0
+    assert calls[-1] == ("report", None)
+    assert len([call for call in calls if call[0] == "run"]) == 2
+    assert "--clean-alluredir" in calls[0][1]
+    assert "--lf" not in calls[0][1]
+    assert "--maxfail=0" in calls[0][1]
+    assert "--clean-alluredir" not in calls[1][1]
+    assert "--lf" in calls[1][1]
+    assert "--maxfail=0" in calls[1][1]
+
+
+def test_ios_runner_does_not_retry_when_switch_is_off(monkeypatch):
+    calls = []
+    artifacts = SimpleNamespace(results=Path("/tmp/allure-results"))
+
+    monkeypatch.delenv("VW_APPIUM_RETRY_FAILED", raising=False)
+    monkeypatch.setattr(run_ios_tests.sys, "argv", ["run_ios_tests", "-m", "smoke"])
+    monkeypatch.setattr(run_ios_tests, "allure_artifacts", lambda: artifacts)
+    monkeypatch.setattr(
+        run_ios_tests,
+        "_run",
+        lambda command: calls.append(command) or type("Result", (), {"returncode": 1})(),
+    )
+    monkeypatch.setattr(run_ios_tests, "_generate_and_open_report", lambda: None)
+
+    assert run_ios_tests.main() == 1
+    assert len(calls) == 1
 
 
 def test_build_pytest_command_rejects_empty_suite_file(tmp_path):

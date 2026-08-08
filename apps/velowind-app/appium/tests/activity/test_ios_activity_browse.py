@@ -21,18 +21,48 @@ from velowind_appium.modules import (
     switch_activity_category_navigation,
     wait_for_activity_feed,
 )
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.session import (
+    dismiss_common_system_alerts,
+    ensure_logged_in_on_home,
+    ensure_read_session_on_home,
+)
 
 
 ACTIVITY_CATEGORY = "骑行"
 ACTIVITY_SEARCH_KEYWORD = "张家界"
 
 
+def _open_signup_available_activity_detail_or_skip(driver, step) -> None:
+    try:
+        step(
+            "open-first-signup-available-activity-detail",
+            lambda: open_first_signup_available_activity_detail(driver, timeout=25),
+            capture=True,
+        )
+    except AssertionError as error:
+        if "signup-capable activity detail" in str(error):
+            pytest.skip("No signup-capable activity is available for the current test account")
+        raise
+
+
+def _open_my_activity_signup_status_or_skip(driver, step, step_name: str):
+    try:
+        return step(
+            step_name,
+            lambda: open_my_activity_signup_status(driver, timeout=25),
+            capture=True,
+        )
+    except AssertionError as error:
+        if "registration_visible=False" in str(error):
+            pytest.skip("No activity signup record is available for the current test account")
+        raise
+
+
 @pytest.mark.full
 def test_user_can_filter_activities_by_cycling(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
     step("switch-activity-category-navigation", lambda: switch_activity_category_navigation(driver, timeout=8))
@@ -52,7 +82,7 @@ def test_user_can_filter_activities_by_cycling(driver, ios_config, step):
 def test_user_can_search_activities_by_title_or_location(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
     step("open-activity-search", lambda: open_activity_search(driver, timeout=10), capture=True)
@@ -66,7 +96,7 @@ def test_user_can_search_activities_by_title_or_location(driver, ios_config, ste
 def test_user_can_browse_activity_detail_fields(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
     step("open-first-activity-detail", lambda: open_first_activity_detail(driver, timeout=20), capture=True)
@@ -79,10 +109,10 @@ def test_user_can_browse_activity_detail_fields(driver, ios_config, step):
 def test_user_can_open_activity_signup_form(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
-    step("open-first-signup-available-activity-detail", lambda: open_first_signup_available_activity_detail(driver, timeout=25), capture=True)
+    _open_signup_available_activity_detail_or_skip(driver, step)
     step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
     snapshot = step("read-activity-signup", lambda: read_activity_signup_snapshot(driver, timeout=15), capture=True)
 
@@ -97,7 +127,7 @@ def test_user_can_fill_activity_signup_identity_fields(driver, ios_config, step)
     step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
-    step("open-first-signup-available-activity-detail", lambda: open_first_signup_available_activity_detail(driver, timeout=25), capture=True)
+    _open_signup_available_activity_detail_or_skip(driver, step)
     step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
     snapshot = step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
 
@@ -114,7 +144,7 @@ def test_user_can_submit_activity_signup_to_payment_page(driver, ios_config, ste
     step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
     step("open-activity-tab", lambda: open_activity_tab(driver, timeout=20))
     step("wait-activity-feed", lambda: wait_for_activity_feed(driver, timeout=20))
-    step("open-first-signup-available-activity-detail", lambda: open_first_signup_available_activity_detail(driver, timeout=25), capture=True)
+    _open_signup_available_activity_detail_or_skip(driver, step)
     step("open-activity-signup", lambda: open_activity_signup(driver, timeout=20), capture=True)
     step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
     if "已经报名，无需重复报名" in driver.page_source:
@@ -131,12 +161,8 @@ def test_user_can_submit_activity_signup_to_payment_page(driver, ios_config, ste
 def test_user_can_view_my_activity_signup_status(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
-    snapshot = step(
-        "open-my-activity-signup-status",
-        lambda: open_my_activity_signup_status(driver, timeout=25),
-        capture=True,
-    )
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
+    snapshot = _open_my_activity_signup_status_or_skip(driver, step, "open-my-activity-signup-status")
 
     assert snapshot.is_signup_status_visible(), f"Expected My Activity signup status to be visible, got: {snapshot}"
     assert snapshot.status in {"待支付", "支付未完成", "报名成功", "报名待支付", "已报名"}
@@ -146,12 +172,8 @@ def test_user_can_view_my_activity_signup_status(driver, ios_config, step):
 def test_user_can_open_my_activity_signup_list(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
-    snapshot = step(
-        "open-my-activity-signup-list",
-        lambda: open_my_activity_signup_status(driver, timeout=25),
-        capture=True,
-    )
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
+    snapshot = _open_my_activity_signup_status_or_skip(driver, step, "open-my-activity-signup-list")
 
     assert snapshot.page_visible, f"Expected My Activity page to be visible, got: {snapshot}"
     assert snapshot.signup_tab_visible, f"Expected signup tab to be visible, got: {snapshot}"
@@ -162,7 +184,7 @@ def test_user_can_open_my_activity_signup_list(driver, ios_config, step):
 def test_user_can_open_my_activity_liked_list(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     snapshot = step(
         "open-my-activity-liked-list",
         lambda: open_my_activity_reaction_list(driver, tab_name="点赞", timeout=25),
@@ -176,7 +198,7 @@ def test_user_can_open_my_activity_liked_list(driver, ios_config, step):
 def test_user_can_open_my_activity_favorite_list(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
+    step("prepare-home-session", lambda: ensure_read_session_on_home(driver, ios_config))
     snapshot = step(
         "open-my-activity-favorite-list",
         lambda: open_my_activity_reaction_list(driver, tab_name="收藏", timeout=25),

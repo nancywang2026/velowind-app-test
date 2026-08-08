@@ -83,6 +83,9 @@ def open_rental_from_home(driver: WebDriver, timeout: int = 20) -> None:
         if tap_by_text_containing(driver, ["租车", "车辆租赁"], timeout=1):
             if _wait_for_store_after_tap(driver):
                 return
+        if tap_by_coordinate_ratios(driver, FLOATING_TRUCK_RATIOS):
+            if _wait_for_store_after_tap(driver):
+                return
         time.sleep(0.4)
     raise AssertionError("Unable to open the rental page from the home floating truck entry")
 
