@@ -6,6 +6,7 @@ import html
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 from xml.etree import ElementTree
@@ -13,6 +14,7 @@ from xml.etree import ElementTree
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
+from PIL import Image, ImageChops
 import yaml
 
 from velowind_appium.actions import (
@@ -24,6 +26,12 @@ from velowind_appium.actions import (
 )
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
+from velowind_appium.image_validation import (
+    compare_images_for_publish_note,
+    crop_image_from_screenshot,
+    find_largest_visible_image_bounds,
+    find_note_detail_image_bounds,
+)
 import velowind_appium.modules.photo_picker as photo_picker
 from velowind_appium.modules.note_card_picker import tap_first_note_card
 
@@ -164,6 +172,7 @@ SYSTEM_MESSAGE_SKIP_TEXTS = {
     "Vertical scroll bar, 1 page",
     "Horizontal scroll bar, 1 page",
 }
+SUPPORTED_SOURCE_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 CROPPER_VISIBLE_PATTERNS = [
     'name="publish-note-image-picker-cropper-viewport" enabled="true" visible="true"',
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -325,7 +334,10 @@ def publish_message_note(
     with _note_profile("fill-form"):
         fill_message_note_form(driver, draft, timeout=timeout)
     with _note_profile("submit-note"):
-        return submit_message_note(driver, timeout=timeout)
+        success_signal = submit_message_note(driver, timeout=timeout)
+    with _note_profile("validate-published-image"):
+        _validate_published_note_image_matches_uploaded_preview(driver, timeout=min(timeout, 20))
+    return success_signal
 
 
 def open_message_note_publisher(
@@ -449,6 +461,8 @@ def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: 
 
     with _note_profile("upload-image"):
         _upload_note_image(driver, draft)
+    with _note_profile("validate-uploaded-image"):
+        _ensure_note_source_image_recorded(driver)
     with _note_profile("stabilize-form-after-upload"):
         _stabilize_android_note_form_after_upload(driver, timeout=min(timeout, 15))
     with _note_profile("fill-title"):
@@ -1777,6 +1791,7 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
             "Photo library opened but no selectable photo was found. "
             "If this is a simulator, seed at least one image into Photos."
         )
+    _record_note_selected_album_image_source(driver, draft)
 
     if not picture_indexes:
         return
@@ -1803,6 +1818,106 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
     raise AssertionError(f"Expected {expected_count} note images after upload, got {_note_selected_image_count(driver)}")
 
 
+def _ensure_note_source_image_recorded(driver: WebDriver) -> None:
+    source_path = getattr(driver, "_publish_note_album_source_image_path", None)
+    if source_path is None:
+        raise AssertionError("Selected album image source was not recorded before publishing")
+    if not Path(source_path).exists():
+        raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
+
+
+def _validate_published_note_image_matches_uploaded_preview(driver: WebDriver, *, timeout: int = 20) -> None:
+    source_path = getattr(driver, "_publish_note_album_source_image_path", None)
+    if source_path is None:
+        raise AssertionError("Selected album image source was not recorded before publishing")
+    source_path = Path(source_path)
+    if not source_path.exists():
+        raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
+    if not _wait_until(lambda: find_note_detail_image_bounds(_safe_page_source(driver)) is not None, timeout=timeout):
+        raise AssertionError("Unable to locate the published note detail image for pixel validation")
+
+    bounds = find_note_detail_image_bounds(_safe_page_source(driver))
+    if bounds is None:
+        raise AssertionError("Unable to locate the published note detail image for pixel validation")
+    image_bounds = _open_published_note_image_viewer(driver, bounds, timeout=timeout)
+    detail_image = _capture_image_bounds(driver, image_bounds)
+    detail_path = _publish_note_validation_detail_path()
+    detail_path.parent.mkdir(parents=True, exist_ok=True)
+    detail_image.save(detail_path)
+    result = compare_images_for_publish_note(source_path, detail_path)
+    if not result.is_valid:
+        _save_publish_note_image_validation_artifacts(source_path, detail_path, result)
+        raise AssertionError(f"Published note image does not match the selected album image: {result}")
+
+
+def _open_published_note_image_viewer(driver: WebDriver, bounds, *, timeout: int):
+    if not _tap_image_bounds_center(driver, bounds):
+        return bounds
+    if not _wait_until(lambda: find_largest_visible_image_bounds(_safe_page_source(driver)) is not None, timeout=min(timeout, 5)):
+        return bounds
+    viewer_bounds = find_largest_visible_image_bounds(_safe_page_source(driver))
+    return viewer_bounds or bounds
+
+
+def _tap_image_bounds_center(driver: WebDriver, bounds) -> bool:
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(bounds.x + bounds.width / 2),
+                "y": int(bounds.y + bounds.height / 2),
+            },
+        )
+        return True
+    except (AttributeError, TypeError, WebDriverException):
+        return False
+
+
+def _capture_image_bounds(driver: WebDriver, bounds):
+    try:
+        screenshot_png = driver.get_screenshot_as_png()
+        window = driver.get_window_size()
+    except (AttributeError, KeyError, TypeError, WebDriverException) as error:
+        raise AssertionError("Unable to capture note image for pixel validation") from error
+
+    return crop_image_from_screenshot(
+        screenshot_png,
+        bounds,
+        window_size=(int(window["width"]), int(window["height"])),
+    )
+
+
+def _publish_note_artifact_dir() -> Path:
+    return Path(os.environ.get("VW_APPIUM_ARTIFACT_DIR", ".tmp/appium-ios-device")).expanduser()
+
+
+def _publish_note_validation_detail_path() -> Path:
+    artifact_dir = _publish_note_artifact_dir()
+    base_name = f"publish-note-image-validation-{int(time.time())}"
+    return artifact_dir / f"{base_name}-detail-image.png"
+
+
+def _save_publish_note_image_validation_artifacts(source_path: Path, detail_path: Path, result) -> None:
+    artifact_dir = _publish_note_artifact_dir()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"publish-note-image-validation-{int(time.time())}"
+    with Image.open(source_path) as source_image, Image.open(detail_path) as detail_image:
+        source = source_image.convert("RGB")
+        detail = detail_image.convert("RGB")
+        diff_source = source.resize(detail.size)
+        ImageChops.difference(diff_source, detail).save(artifact_dir / f"{base_name}-diff.png")
+    (artifact_dir / f"{base_name}.txt").write_text(
+        "\n".join(
+            [
+                f"source_path={source_path}",
+                f"detail_path={detail_path}",
+                f"comparison={result}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _choose_note_image_from_library(
     driver: WebDriver,
     *,
@@ -1826,6 +1941,67 @@ def _choose_note_image_from_library(
         kwargs["picture_indexes"] = picture_indexes
     with _note_profile("upload-choose-photo-library"):
         return photo_picker.choose_photo_from_library(driver, **kwargs)
+
+
+def _record_note_cropper_image(driver: WebDriver) -> None:
+    bounds = find_largest_visible_image_bounds(_safe_page_source(driver))
+    if bounds is None:
+        return
+    setattr(driver, "_publish_note_uploaded_preview_image", _capture_image_bounds(driver, bounds))
+
+
+def _record_note_selected_album_image_source(driver: WebDriver, draft: MessageNoteDraft) -> None:
+    source_path = _resolve_note_selected_album_image_source(draft)
+    selected_index = _selected_note_picture_index(draft)
+    if source_path is None:
+        album = draft.album or "<default>"
+        raise AssertionError(f"Unable to resolve selected album image source: album={album} index={selected_index}")
+
+    artifact_dir = _publish_note_artifact_dir()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    album_label = _safe_artifact_name(draft.album or "default-album")
+    copied_path = artifact_dir / f"publish-note-album-source-{album_label}-index-{selected_index}-{source_path.name}"
+    shutil.copy2(source_path, copied_path)
+    setattr(driver, "_publish_note_album_source_image_path", copied_path)
+    setattr(
+        driver,
+        "_publish_note_album_source_position",
+        f"album={draft.album or '<default>'} index={selected_index} source={source_path.name}",
+    )
+
+
+def _resolve_note_selected_album_image_source(draft: MessageNoteDraft) -> Path | None:
+    media_dir = _note_source_media_dir()
+    selected_index = _selected_note_picture_index(draft)
+    source_dir = media_dir / draft.album if draft.album else media_dir
+    if not source_dir.exists() or not source_dir.is_dir():
+        return None
+    source_files = sorted(
+        path
+        for path in source_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SOURCE_IMAGE_SUFFIXES
+    )
+    if selected_index < 1 or selected_index > len(source_files):
+        return None
+    return source_files[selected_index - 1]
+
+
+def _selected_note_picture_index(draft: MessageNoteDraft) -> int:
+    picture_indexes = _normalize_picture_indexes(draft.picture_indexes)
+    if picture_indexes:
+        return picture_indexes[0]
+    return max(1, int(draft.picture_index or 1))
+
+
+def _note_source_media_dir() -> Path:
+    raw_value = os.environ.get("VW_ANDROID_MEDIA_DIR", "").strip()
+    if raw_value:
+        return Path(raw_value).expanduser()
+    return photo_picker.DEFAULT_ANDROID_MEDIA_DIR
+
+
+def _safe_artifact_name(value: str) -> str:
+    return re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("_") or "image"
 
 
 def _tap_note_photo_library_sheet_option(driver: WebDriver) -> bool:

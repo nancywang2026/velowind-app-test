@@ -15,6 +15,7 @@ from velowind_appium.actions import swipe_vertical, tap_text_if_present
 
 
 RetrySheetOption = Callable[[WebDriver], bool]
+CropperImageObserver = Callable[[WebDriver], None]
 DEFAULT_ANDROID_MEDIA_DIR = Path(__file__).resolve().parents[2] / "test-media" / "android"
 IOS_CROPPER_VISIBLE_PATTERNS = [
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -37,6 +38,7 @@ def choose_photo_from_library(
     select_all_from_album: bool = True,
     prefer_retry_sheet_option_first: bool = False,
     retry_sheet_option: RetrySheetOption | None = None,
+    before_confirm_cropper: CropperImageObserver | None = None,
 ) -> bool:
     visible = False
     if prefer_retry_sheet_option_first and retry_sheet_option is not None:
@@ -74,6 +76,8 @@ def choose_photo_from_library(
         "picture_index": picture_index,
         "select_all_from_album": select_all_from_album,
     }
+    if before_confirm_cropper is not None:
+        choose_kwargs["before_confirm_cropper"] = before_confirm_cropper
     if picture_indexes:
         choose_kwargs["picture_indexes"] = picture_indexes
     with _photo_picker_profile("choose-local-photo-primary"):
@@ -148,23 +152,28 @@ def choose_local_photo(
     picture_indexes: tuple[int, ...] = (),
     album_name: str | None = None,
     select_all_from_album: bool = True,
+    before_confirm_cropper: CropperImageObserver | None = None,
 ) -> bool:
     normalized_index = max(1, picture_index)
     normalized_indexes = _normalize_picture_indexes(picture_indexes)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
     if _is_android_gallery3d_picker(driver):
+        gallery_kwargs = {
+            "preferred_album_name": album_name,
+            "picture_index": normalized_index,
+        }
+        if before_confirm_cropper is not None:
+            gallery_kwargs["before_confirm_cropper"] = before_confirm_cropper
         if normalized_indexes:
+            gallery_kwargs["picture_indexes"] = normalized_indexes
             return _choose_local_photo_from_android_gallery3d(
                 driver,
-                preferred_album_name=album_name,
-                picture_index=normalized_index,
-                picture_indexes=normalized_indexes,
+                **gallery_kwargs,
             )
         return _choose_local_photo_from_android_gallery3d(
             driver,
-            preferred_album_name=album_name,
-            picture_index=normalized_index,
+            **gallery_kwargs,
         )
     if album_name:
         with _photo_picker_profile("open-photo-album"):
@@ -190,22 +199,31 @@ def choose_local_photo(
             if not candidate_tapped:
                 return False
         with _photo_picker_profile("confirm-system-selection"):
-            return confirm_system_photo_picker_selection(driver)
+            return _confirm_system_photo_picker_selection_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            )
     if normalized_indexes:
         with _photo_picker_profile("tap-photo-grid-candidates"):
             candidates_tapped = tap_photo_grid_candidates(driver, normalized_indexes)
         if candidates_tapped:
             with _photo_picker_profile("confirm-system-selection"):
-                return confirm_system_photo_picker_selection(driver)
+                return _confirm_system_photo_picker_selection_with_optional_observer(
+                    driver,
+                    before_confirm_cropper=before_confirm_cropper,
+                )
         return False
     with _photo_picker_profile("tap-photo-grid-candidate"):
         candidate_tapped = tap_photo_grid_candidate(driver, normalized_index)
     if candidate_tapped:
         with _photo_picker_profile("confirm-note-cropper"):
-            if confirm_note_image_cropper(driver):
+            if confirm_note_image_cropper(driver, before_confirm_cropper=before_confirm_cropper):
                 return True
         with _photo_picker_profile("confirm-system-selection"):
-            return confirm_system_photo_picker_selection(driver)
+            return _confirm_system_photo_picker_selection_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            )
     return False
 
 
@@ -216,6 +234,37 @@ def tap_photo_grid_candidates(driver: WebDriver, picture_indexes: tuple[int, ...
             tapped_any = True
             time.sleep(0.2)
     return tapped_any
+
+
+def _confirm_system_photo_picker_selection_with_optional_observer(
+    driver: WebDriver,
+    *,
+    before_confirm_cropper: CropperImageObserver | None,
+) -> bool:
+    if before_confirm_cropper is None:
+        return confirm_system_photo_picker_selection(driver)
+    return confirm_system_photo_picker_selection(driver, before_confirm_cropper=before_confirm_cropper)
+
+
+def _confirm_note_image_cropper_with_optional_observer(
+    driver: WebDriver,
+    *,
+    timeout: int,
+    before_confirm_cropper: CropperImageObserver | None,
+) -> bool:
+    if before_confirm_cropper is None:
+        return confirm_note_image_cropper(driver, timeout=timeout)
+    return confirm_note_image_cropper(driver, timeout=timeout, before_confirm_cropper=before_confirm_cropper)
+
+
+def _photo_picker_transition_completed_with_optional_observer(
+    driver: WebDriver,
+    *,
+    before_confirm_cropper: CropperImageObserver | None,
+) -> bool:
+    if before_confirm_cropper is None:
+        return _photo_picker_transition_completed(driver)
+    return _photo_picker_transition_completed(driver, before_confirm_cropper=before_confirm_cropper)
 
 
 def _normalize_picture_indexes(picture_indexes: tuple[int, ...]) -> tuple[int, ...]:
@@ -288,7 +337,10 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
     return False
 
 
-def tap_photo_grid_candidate(driver: WebDriver, picture_index: int) -> bool:
+def tap_photo_grid_candidate(
+    driver: WebDriver,
+    picture_index: int,
+) -> bool:
     candidates = find_photo_grid_candidates(driver)
     if not candidates:
         return False
@@ -526,7 +578,12 @@ def _photo_picker_collections_visible(driver: WebDriver) -> bool:
     return any(text in page_source for text in ["精选集", "最近项目", "照片图库", "所有照片", "选择项目"])
 
 
-def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
+def confirm_note_image_cropper(
+    driver: WebDriver,
+    timeout: int = 10,
+    *,
+    before_confirm_cropper: CropperImageObserver | None = None,
+) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
     end_at = time.monotonic() + timeout
@@ -534,6 +591,8 @@ def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
         page_source = _safe_page_source(driver)
         if _cropper_visible(page_source, driver=driver):
             _photo_picker_debug(f"cropper visible; android={is_android}")
+            if before_confirm_cropper is not None:
+                before_confirm_cropper(driver)
             if _tap_cropper_confirm_button(driver) and _wait_until(
                 lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver)
                 if is_android
@@ -551,11 +610,19 @@ def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
     return False
 
 
-def confirm_system_photo_picker_selection(driver: WebDriver, timeout: int = 10) -> bool:
+def confirm_system_photo_picker_selection(
+    driver: WebDriver,
+    timeout: int = 10,
+    *,
+    before_confirm_cropper: CropperImageObserver | None = None,
+) -> bool:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         if _tap_photo_picker_done_button(driver) and _wait_until(
-            lambda: _photo_picker_transition_completed(driver),
+            lambda: _photo_picker_transition_completed_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            ),
             timeout=2,
         ):
             return True
@@ -563,7 +630,11 @@ def confirm_system_photo_picker_selection(driver: WebDriver, timeout: int = 10) 
     return False
 
 
-def _photo_picker_transition_completed(driver: WebDriver) -> bool:
+def _photo_picker_transition_completed(
+    driver: WebDriver,
+    *,
+    before_confirm_cropper: CropperImageObserver | None = None,
+) -> bool:
     page_source = _safe_page_source(driver)
     if not page_source:
         return False
@@ -572,7 +643,11 @@ def _photo_picker_transition_completed(driver: WebDriver) -> bool:
     if _cropper_visible(page_source, driver=driver):
         if is_android and getattr(driver, "_cropper_confirmed_once", False) and not _android_cropper_visible(page_source):
             return True
-        return confirm_note_image_cropper(driver, timeout=5)
+        return _confirm_note_image_cropper_with_optional_observer(
+            driver,
+            timeout=5,
+            before_confirm_cropper=before_confirm_cropper,
+        )
     if is_android and _android_publish_selection_completed(page_source):
         return True
     return not any(
@@ -981,6 +1056,7 @@ def _choose_local_photo_from_android_gallery3d(
     preferred_album_name: str | None = None,
     picture_index: int = 1,
     picture_indexes: tuple[int, ...] = (),
+    before_confirm_cropper: CropperImageObserver | None = None,
 ) -> bool:
     size = _safe_window_size(driver)
     if size is None:
@@ -992,7 +1068,10 @@ def _choose_local_photo_from_android_gallery3d(
         normalized_indexes = _normalize_picture_indexes(picture_indexes)
         target_indexes = normalized_indexes or (max(1, picture_index),)
         if _tap_android_photo_selection_badges(driver, target_indexes):
-            return confirm_system_photo_picker_selection(driver)
+            return _confirm_system_photo_picker_selection_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            )
         return False
 
     album_name = preferred_album_name or _preferred_android_gallery3d_album_name()
@@ -1017,18 +1096,31 @@ def _choose_local_photo_from_android_gallery3d(
         current_page = _safe_page_source(driver)
         if _android_publish_selection_completed(current_page):
             return True
+        if _cropper_visible(current_page, driver=driver):
+            return confirm_note_image_cropper(driver, timeout=8, before_confirm_cropper=before_confirm_cropper)
         if not _tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size):
             continue
-        if _wait_until(lambda: _photo_picker_transition_completed(driver) or _cropper_visible(_safe_page_source(driver), driver=driver), timeout=2):
-            if _cropper_visible(_safe_page_source(driver), driver=driver):
-                return confirm_note_image_cropper(driver, timeout=5)
-            return True
-        if _adb_tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size) and _wait_until(
-            lambda: _photo_picker_transition_completed(driver) or _cropper_visible(_safe_page_source(driver), driver=driver),
+        if _wait_until(
+            lambda: _cropper_visible(_safe_page_source(driver), driver=driver)
+            or _photo_picker_transition_completed_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            ),
             timeout=2,
         ):
             if _cropper_visible(_safe_page_source(driver), driver=driver):
-                return confirm_note_image_cropper(driver, timeout=5)
+                return confirm_note_image_cropper(driver, timeout=5, before_confirm_cropper=before_confirm_cropper)
+            return True
+        if _adb_tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size) and _wait_until(
+            lambda: _cropper_visible(_safe_page_source(driver), driver=driver)
+            or _photo_picker_transition_completed_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            ),
+            timeout=2,
+        ):
+            if _cropper_visible(_safe_page_source(driver), driver=driver):
+                return confirm_note_image_cropper(driver, timeout=5, before_confirm_cropper=before_confirm_cropper)
             return True
         time.sleep(0.4)
         if _android_publish_selection_completed(_safe_page_source(driver)):

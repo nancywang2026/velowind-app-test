@@ -29,12 +29,108 @@ def test_android_note_search_coordinate_targets_visible_header_icon(monkeypatch)
         def execute_script(script, payload):
             taps.append((script, payload))
 
-    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
     monkeypatch.setattr(message_detail, "_note_search_visible", lambda page_source: page_source == "search-visible")
     monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "search-visible")
 
     assert message_detail._tap_note_search_entry_by_coordinate(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 1004, "y": 160})]
+
+
+def test_publish_note_image_validation_records_selected_album_source(monkeypatch, tmp_path):
+    media_dir = tmp_path / "media"
+    album_dir = media_dir / "图片"
+    album_dir.mkdir(parents=True)
+    source_path = album_dir / "1.jpg"
+    source_path.write_bytes(b"original-photo")
+    artifact_dir = tmp_path / "artifacts"
+    draft = MessageNoteDraft(title="标题", body="正文", topics=[], location="", album="图片", picture_index=1)
+
+    class FakeDriver:
+        pass
+
+    monkeypatch.setenv("VW_ANDROID_MEDIA_DIR", str(media_dir))
+    monkeypatch.setenv("VW_APPIUM_ARTIFACT_DIR", str(artifact_dir))
+    driver = FakeDriver()
+
+    message_detail._record_note_selected_album_image_source(driver, draft)
+
+    copied_path = getattr(driver, "_publish_note_album_source_image_path")
+    assert copied_path.read_bytes() == b"original-photo"
+    assert copied_path.parent == artifact_dir
+    assert "图片-index-1" in copied_path.name
+    assert getattr(driver, "_publish_note_album_source_position") == "album=图片 index=1 source=1.jpg"
+
+
+def test_publish_note_image_validation_uses_album_source_path(monkeypatch, tmp_path):
+    source_path = tmp_path / "album-source.jpg"
+    source_path.write_bytes(b"source")
+    actual_path = tmp_path / "detail.png"
+    compared_paths = []
+
+    class FakeResult:
+        is_valid = True
+
+    class FakeImage:
+        size = (320, 240)
+
+        def save(self, path):
+            actual_path.write_bytes(b"actual")
+
+    class FakeDriver:
+        _publish_note_album_source_image_path = source_path
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "<hierarchy />")
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(message_detail, "find_note_detail_image_bounds", lambda page_source: object())
+    monkeypatch.setattr(message_detail, "_capture_image_bounds", lambda driver, bounds: FakeImage())
+    monkeypatch.setattr(message_detail, "_publish_note_validation_detail_path", lambda: actual_path)
+    monkeypatch.setattr(
+        message_detail,
+        "compare_images_for_publish_note",
+        lambda source, actual: compared_paths.append((source, actual)) or FakeResult(),
+    )
+
+    message_detail._validate_published_note_image_matches_uploaded_preview(FakeDriver())
+
+    assert compared_paths == [(source_path, actual_path)]
+
+
+def test_publish_note_image_validation_opens_detail_image_before_capture(monkeypatch, tmp_path):
+    source_path = tmp_path / "album-source.jpg"
+    source_path.write_bytes(b"source")
+    actual_path = tmp_path / "detail.png"
+    events = []
+
+    class FakeResult:
+        is_valid = True
+
+    class FakeImage:
+        def save(self, path):
+            actual_path.write_bytes(b"actual")
+
+    class FakeDriver:
+        _publish_note_album_source_image_path = source_path
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "<hierarchy />")
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(message_detail, "find_note_detail_image_bounds", lambda page_source: "detail-bounds")
+    monkeypatch.setattr(
+        message_detail,
+        "_open_published_note_image_viewer",
+        lambda driver, bounds, timeout: events.append(("open-viewer", bounds, timeout)) or "viewer-bounds",
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_capture_image_bounds",
+        lambda driver, bounds: events.append(("capture", bounds)) or FakeImage(),
+    )
+    monkeypatch.setattr(message_detail, "_publish_note_validation_detail_path", lambda: actual_path)
+    monkeypatch.setattr(message_detail, "compare_images_for_publish_note", lambda source, actual: FakeResult())
+
+    message_detail._validate_published_note_image_matches_uploaded_preview(FakeDriver(), timeout=12)
+
+    assert events == [("open-viewer", "detail-bounds", 12), ("capture", "viewer-bounds")]
 
 
 def test_ios_note_search_entry_coordinate_defers_visibility_wait(monkeypatch):
@@ -575,7 +671,7 @@ def test_build_changbaishan_note_draft_uses_requested_content():
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
     assert draft.location == "长白山"
-    assert draft.album == "长白山"
+    assert draft.album == "图片"
     assert draft.allow_comments is True
 
 
@@ -587,7 +683,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
     draft = load_message_note_draft("publish-note-changbaishan", testdata_path=testdata_path)
 
     assert draft.title == "测试 - 长白山真的有种让人瞬间安静下来的魔力"
-    assert draft.album == "长白山"
+    assert draft.album == "图片"
     assert draft.picture_index == 1
     assert draft.location == "长白山"
 
@@ -694,8 +790,9 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
     monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.album)))
-    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)))
-    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)))
+    monkeypatch.setattr(message_detail, "_ensure_note_source_image_recorded", lambda driver: events.append("record-image"))
+    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)) or True)
+    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)) or True)
     monkeypatch.setattr(
         message_detail,
         "_append_note_topics_to_body",
@@ -717,6 +814,7 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
     assert events == [
         "wait-form",
         ("upload-image", draft.album),
+        "record-image",
         "wait-form",
         ("title", draft.title),
         ("body", draft.body),
@@ -738,8 +836,9 @@ def test_fill_message_note_form_skips_location_when_select_location_is_false(mon
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
     monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.album)))
-    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)))
-    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)))
+    monkeypatch.setattr(message_detail, "_ensure_note_source_image_recorded", lambda driver: events.append("record-image"))
+    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)) or True)
+    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)) or True)
     monkeypatch.setattr(
         message_detail,
         "_append_note_topics_to_body",
@@ -761,6 +860,7 @@ def test_fill_message_note_form_skips_location_when_select_location_is_false(mon
     assert events == [
         "wait-form",
         ("upload-image", draft.album),
+        "record-image",
         "wait-form",
         ("title", draft.title),
         ("body", draft.body),
@@ -1553,7 +1653,7 @@ def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch)
     monkeypatch.setattr(
         message_detail.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None: False,
+        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None, before_confirm_cropper=None: False,
     )
 
     try:
@@ -1571,15 +1671,21 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
     monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
     monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: calls.append("tap-plus") or True)
     monkeypatch.setattr(
+        message_detail,
+        "_record_note_selected_album_image_source",
+        lambda driver, draft: calls.append(("record-source", draft.album, draft.picture_index)),
+    )
+    monkeypatch.setattr(
         message_detail.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None: calls.append(
+        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None, before_confirm_cropper=None: calls.append(
             (
                 "choose-photo",
                 album_name,
                 picture_index,
                 select_all_from_album,
                 retry_sheet_option is message_detail._tap_note_photo_library_sheet_option,
+                before_confirm_cropper is None,
             )
         )
         or True,
@@ -1587,7 +1693,12 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
 
     message_detail._upload_note_image(object(), draft)
 
-    assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", 1, False, True)]
+    assert calls == [
+        "clear",
+        "tap-plus",
+        ("choose-photo", draft.album, draft.picture_index, False, True, True),
+        ("record-source", draft.album, draft.picture_index),
+    ]
 
 
 def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypatch):
@@ -1613,6 +1724,7 @@ def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypa
         picture_indexes=(),
         select_all_from_album=True,
         retry_sheet_option=None,
+        before_confirm_cropper=None,
     ):
         calls.append(("choose-photo", album_name, picture_index, picture_indexes, select_all_from_album))
         if picture_indexes:
