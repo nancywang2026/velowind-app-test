@@ -16,6 +16,11 @@ from .allure_artifacts import allure_artifacts as _resolve_allure_artifacts
 REPO_ROOT = Path(__file__).resolve().parents[4]
 TEST_PATH = REPO_ROOT / "apps" / "velowind-app" / "appium" / "tests"
 DEFAULT_SUITE_FILE = REPO_ROOT / "apps" / "velowind-app" / "appium" / "test-suites" / "android-smoke.yaml"
+SUITE_PROFILE_FILES = {
+    "smoke": DEFAULT_SUITE_FILE,
+    "publish": REPO_ROOT / "apps" / "velowind-app" / "appium" / "test-suites" / "android-message-publish.yaml",
+    "full": REPO_ROOT / "apps" / "velowind-app" / "appium" / "test-suites" / "android-full.yaml",
+}
 
 
 @dataclass(frozen=True)
@@ -151,6 +156,7 @@ def build_pytest_command(
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--suite")
+    parser.add_argument("--suite-profile", choices=sorted(SUITE_PROFILE_FILES))
     parser.add_argument("--retry-failed", action="store_true")
     args, remaining = parser.parse_known_args(cli_args)
 
@@ -172,8 +178,12 @@ def build_pytest_command(
         os.environ["VW_ANDROID_RUN_FULL"] = "true"
         return [*base_command, *remaining]
 
-    if args.suite:
-        suite = load_test_suite(Path(args.suite))
+    if args.suite and args.suite_profile:
+        raise ValueError("Use either --suite or --suite-profile, not both.")
+
+    suite_file = Path(args.suite) if args.suite else SUITE_PROFILE_FILES.get(args.suite_profile)
+    if suite_file:
+        suite = load_test_suite(suite_file)
         suite_command = [*base_command]
         if suite.markers:
             suite_command.extend(["-m", " or ".join(suite.markers)])

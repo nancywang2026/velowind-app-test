@@ -595,7 +595,7 @@ def parse_activity_detail_snapshot(page_source: str) -> ActivityDetailSnapshot:
         tags_visible=all(text in joined_visible_text for text in ["风景标签", "沿途景点"]),
         route_visible=_activity_detail_route_visible(joined_visible_text),
         comments_visible="活动评论" in joined_visible_text or "前往评论页查看真实活动评论" in joined_visible_text,
-        sessions_visible=any(text in joined_visible_text for text in ["请选择场次", "场次信息", "集合地点", "暂无场次"]),
+        sessions_visible=_activity_detail_sessions_visible(joined_visible_text),
     )
 
 
@@ -611,6 +611,12 @@ def _activity_detail_route_visible(joined_visible_text: str) -> bool:
     if all(text in joined_visible_text for text in ["路线说明", "活动评论"]):
         return True
     return "路线说明" in joined_visible_text and bool(re.search(r"\bDay\d+\b", joined_visible_text))
+
+
+def _activity_detail_sessions_visible(joined_visible_text: str) -> bool:
+    if any(text in joined_visible_text for text in ["请选择场次", "场次信息", "集合地点", "暂无场次"]):
+        return True
+    return bool(re.search(r"场次\s*\d+", joined_visible_text))
 
 
 def parse_activity_order_snapshot(page_source: str) -> ActivityOrderSnapshot:

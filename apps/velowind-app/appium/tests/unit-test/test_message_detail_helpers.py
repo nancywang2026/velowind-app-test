@@ -455,6 +455,34 @@ def test_android_detail_visible_while_real_content_is_loading():
     assert message_detail.message_detail_is_visible(FakeDriver()) is True
 
 
+def test_read_android_detail_accepts_image_note_without_body_when_shell_and_actions_are_visible(monkeypatch):
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="post-detail-banner-pager" />
+      <android.widget.TextView text="耐热训练&#128545;" />
+      <android.widget.TextView text="#骑行" />
+      <android.widget.TextView text="1 天前" />
+      <android.widget.TextView text="共 5 条评论" />
+      <android.widget.TextView text="5" bounds="[751,2585][835,2657]" />
+      <android.widget.TextView text="3" bounds="[953,2585][1037,2657]" />
+      <android.widget.TextView text="5" bounds="[1154,2585][1238,2657]" />
+    </hierarchy>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    snapshot = message_detail.read_message_detail_snapshot(FakeDriver(page_source), timeout=1)
+
+    assert snapshot.title == "耐热训练😡"
+    assert snapshot.body is None
+    assert snapshot.comment_count == "5"
+    assert snapshot.bottom_action_counts == ["5", "3", "5"]
+
+
 def test_parse_android_detail_snapshot_reads_count_before_label():
     page_source = """
     <hierarchy>
@@ -474,9 +502,25 @@ def test_parse_android_detail_snapshot_reads_count_before_label():
     assert snapshot.comments == ["自动化评论0715234936"]
 
 
-def test_browse_android_detail_scrolls_to_load_view_and_comment_metadata(monkeypatch):
+def test_browse_android_detail_does_not_scroll_when_bottom_action_metadata_is_visible(monkeypatch):
     partial = message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"])
-    complete = message_detail.MessageDetailSnapshot("标题", "正文", "61", "0", [], "还没有评论", ["0", "0", "0"])
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(message_detail, "read_message_detail_snapshot", lambda driver, timeout: partial)
+    monkeypatch.setattr(message_detail, "swipe_vertical", lambda driver, direction: events.append(direction))
+
+    snapshot = message_detail.browse_note_detail(FakeDriver(), timeout=3)
+
+    assert snapshot is partial
+    assert events == []
+
+
+def test_browse_android_detail_scrolls_when_interaction_metadata_is_missing(monkeypatch):
+    partial = message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, [])
+    complete = message_detail.MessageDetailSnapshot("标题", "正文", None, "0", [], "还没有评论", ["0", "0", "0"])
     events = []
 
     class FakeDriver:
@@ -489,7 +533,6 @@ def test_browse_android_detail_scrolls_to_load_view_and_comment_metadata(monkeyp
 
     snapshot = message_detail.browse_note_detail(FakeDriver(), timeout=3)
 
-    assert snapshot.view_count == "61"
     assert snapshot.comment_count == "0"
     assert events == ["up"]
 

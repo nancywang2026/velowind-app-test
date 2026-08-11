@@ -170,7 +170,7 @@ def test_logged_in_session_can_skip_home_preparation_with_marker(monkeypatch):
     assert calls == []
 
 
-def test_logged_in_session_prepares_before_and_after_every_driver_case(monkeypatch):
+def test_logged_in_session_prepares_before_driver_case_by_default(monkeypatch):
     driver = object()
     ios_config = object()
     calls = []
@@ -194,7 +194,66 @@ def test_logged_in_session_prepares_before_and_after_every_driver_case(monkeypat
         with pytest.raises(StopIteration):
             next(fixture)
 
-    assert calls == [(driver, ios_config)] * 4
+    assert calls == [(driver, ios_config)] * 2
+
+
+def test_logged_in_session_can_restore_home_after_case_with_env(monkeypatch):
+    driver = object()
+    ios_config = object()
+    calls = []
+
+    class DummyRequest:
+        fixturenames = ["driver"]
+
+        def getfixturevalue(self, name):
+            assert name == "driver"
+            return driver
+
+    monkeypatch.setenv("VW_APPIUM_RESTORE_HOME_AFTER_CASE", "true")
+    monkeypatch.setattr(
+        conftest,
+        "prepare_logged_in_session",
+        lambda received_driver, received_config: calls.append((received_driver, received_config)),
+    )
+
+    fixture = conftest.logged_in_session.__wrapped__(DummyRequest(), ios_config)
+    next(fixture)
+    with pytest.raises(StopIteration):
+        next(fixture)
+
+    assert calls == [(driver, ios_config)] * 2
+
+
+def test_logged_in_session_can_restore_home_after_case_with_marker(monkeypatch):
+    driver = object()
+    ios_config = object()
+    calls = []
+
+    class DummyNode:
+        @staticmethod
+        def get_closest_marker(name):
+            return object() if name == "restore_home_after" else None
+
+    class DummyRequest:
+        fixturenames = ["driver"]
+        node = DummyNode()
+
+        def getfixturevalue(self, name):
+            assert name == "driver"
+            return driver
+
+    monkeypatch.setattr(
+        conftest,
+        "prepare_logged_in_session",
+        lambda received_driver, received_config: calls.append((received_driver, received_config)),
+    )
+
+    fixture = conftest.logged_in_session.__wrapped__(DummyRequest(), ios_config)
+    next(fixture)
+    with pytest.raises(StopIteration):
+        next(fixture)
+
+    assert calls == [(driver, ios_config)] * 2
 
 
 def test_capture_each_step_is_disabled_by_default(monkeypatch):
@@ -289,7 +348,7 @@ def test_ensure_logged_in_on_home_closes_android_cancel_signup_dialog(monkeypatc
     assert "safe-back" not in events
 
 
-def test_pytest_runtest_makereport_captures_final_page_for_passed_test(monkeypatch):
+def test_pytest_runtest_makereport_skips_final_page_for_passed_test_by_default(monkeypatch):
     captured = []
 
     class DummyOutcome:
@@ -315,6 +374,48 @@ def test_pytest_runtest_makereport_captures_final_page_for_passed_test(monkeypat
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    monkeypatch.setattr(conftest.allure, "step", lambda title: captured.append(("step", title)) or StepContext())
+    monkeypatch.setattr(
+        conftest,
+        "capture_and_attach_page",
+        lambda driver, artifact_dir, label: captured.append(("capture", label, artifact_dir)),
+    )
+
+    hook = conftest.pytest_runtest_makereport(DummyItem(), None)
+    next(hook)
+    with pytest.raises(StopIteration):
+        hook.send(DummyOutcome())
+
+    assert captured == []
+
+
+def test_pytest_runtest_makereport_can_capture_final_page_for_passed_test(monkeypatch):
+    captured = []
+
+    class DummyOutcome:
+        @staticmethod
+        def get_result():
+            class Report:
+                when = "call"
+                passed = True
+
+            return Report()
+
+    class DummyItem:
+        funcargs = {
+            "driver": object(),
+            "ios_config": type("Config", (), {"artifact_dir": Path(".tmp/appium-ios")})(),
+        }
+        name = "test_demo"
+
+    class StepContext:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setenv("VW_APPIUM_CAPTURE_FINAL_PAGE_ON_PASS", "true")
     monkeypatch.setattr(conftest.allure, "step", lambda title: captured.append(("step", title)) or StepContext())
     monkeypatch.setattr(
         conftest,

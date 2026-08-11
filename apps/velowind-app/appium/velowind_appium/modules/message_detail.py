@@ -587,7 +587,7 @@ def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> Messag
 
         snapshot = parse_detail_snapshot(page_source)
         last_snapshot = snapshot
-        if _snapshot_is_detail_ready(snapshot):
+        if _snapshot_is_detail_ready(snapshot) or _android_image_note_detail_ready(page_source, snapshot):
             return snapshot
         time.sleep(0.2)
 
@@ -752,13 +752,13 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
     snapshot = read_message_detail_snapshot(driver, timeout=timeout)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
-    if is_android and (snapshot.view_count is None or snapshot.comment_count is None):
+    if is_android and not _android_detail_interaction_metadata_visible(snapshot):
         swipe_vertical(driver, direction="up")
         end_at = time.monotonic() + timeout
         latest = snapshot
         while time.monotonic() < end_at:
             latest = parse_detail_snapshot(_safe_page_source(driver))
-            if latest.view_count is not None and latest.comment_count is not None:
+            if _android_detail_interaction_metadata_visible(latest):
                 return latest
             time.sleep(0.2)
         return latest
@@ -3657,10 +3657,21 @@ def _android_bottom_action_entries(page_source: str) -> list[tuple[str, int, int
 def _snapshot_is_detail_ready(snapshot: MessageDetailSnapshot) -> bool:
     if not snapshot.title or not snapshot.body:
         return False
+    return _android_detail_interaction_metadata_visible(snapshot) or bool(snapshot.view_count and snapshot.comment_count)
+
+
+def _android_image_note_detail_ready(page_source: str, snapshot: MessageDetailSnapshot) -> bool:
     return bool(
-        (snapshot.view_count and snapshot.comment_count)
-        or len(snapshot.bottom_action_counts) >= 3
+        "<android." in page_source
+        and _detail_shell_is_visible(page_source)
+        and snapshot.title
+        and not snapshot.body
+        and _android_detail_interaction_metadata_visible(snapshot)
     )
+
+
+def _android_detail_interaction_metadata_visible(snapshot: MessageDetailSnapshot) -> bool:
+    return bool(snapshot.comment_count or len(snapshot.bottom_action_counts) >= 3)
 
 
 def _detail_shell_is_visible(page_source: str) -> bool:

@@ -1,0 +1,4 @@
+tests:
+  - rental/test_rental_order.py
+pytest_args:
+  - --maxfail=1

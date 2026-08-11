@@ -78,6 +78,13 @@ pytest_args:
     assert command[marker_index + 1] == "smoke"
 
 
+def test_build_android_pytest_command_uses_named_publish_suite_profile():
+    command = run_android_tests.build_pytest_command(["--suite-profile", "publish"])
+
+    assert str(run_android_tests.TEST_PATH / "message" / "test_ios_publish_note.py") in command
+    assert "--maxfail=1" in command
+
+
 def test_build_android_pytest_command_uses_isolated_allure_run_dir(monkeypatch):
     monkeypatch.setenv("VW_APPIUM_RUN_ID", "android-run-1")
 

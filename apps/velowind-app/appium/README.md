@@ -107,6 +107,14 @@ VW_ANDROID_TARGET=physical pnpm appium:android:test:local
 pnpm appium:android:test:suite apps/velowind-app/appium/test-suites/android-smoke.yaml
 ```
 
+也可以按固定运行层级执行，避免记忆 suite 文件路径：
+
+```bash
+pnpm appium:android:test:profile smoke
+pnpm appium:android:test:profile publish
+pnpm appium:android:test:profile full
+```
+
 Android 失败调试产物会写入：
 
 ```text
@@ -194,6 +202,14 @@ pnpm appium:ios:test:full
 
 ```bash
 pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/message-publish.yaml
+```
+
+也可以按固定运行层级执行：
+
+```bash
+pnpm appium:ios:test:profile smoke
+pnpm appium:ios:test:profile publish
+pnpm appium:ios:test:profile full
 ```
 
 也可以直接调用运行器：
@@ -305,6 +321,24 @@ allure open .tmp/appium-ios/runs/<run-id-b>/allure-report -p 5052
 
 失败用例会把截图和页面 XML 作为附件写入报告。
 功能遍历用例会在首页、底部 Tab、返回首页和已进入的功能入口处主动截图；截图会同时保存到 `.tmp/appium-ios/` 并附加到 Allure 报告。
+
+默认只在失败时保存最终调试截图和页面 XML。若本次调试需要每个通过用例也保存 final page，可开启：
+
+```bash
+export VW_APPIUM_CAPTURE_FINAL_PAGE_ON_PASS=true
+```
+
+若需要定位真机耗时热点，可开启 profile 输出：
+
+```bash
+export VW_APPIUM_PROFILE=true
+```
+
+默认用例结束后不再额外执行一次首页恢复，以减少每条 case 的固定耗时；下条用例开始前仍会准备登录和首页状态。若某条用例会污染后续状态，可给它加 `@pytest.mark.restore_home_after`，也可整轮开启：
+
+```bash
+export VW_APPIUM_RESTORE_HOME_AFTER_CASE=true
+```
 
 ## 用例分包
 
