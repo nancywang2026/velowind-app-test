@@ -32,6 +32,7 @@ from velowind_appium.image_validation import (
     find_largest_visible_image_bounds,
     find_note_detail_image_bounds,
 )
+from velowind_appium.reporting import allure, attach_file_if_present
 import velowind_appium.modules.photo_picker as photo_picker
 from velowind_appium.modules.note_card_picker import tap_first_note_card
 
@@ -173,6 +174,7 @@ SYSTEM_MESSAGE_SKIP_TEXTS = {
     "Horizontal scroll bar, 1 page",
 }
 SUPPORTED_SOURCE_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+_LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS = ()
 CROPPER_VISIBLE_PATTERNS = [
     'name="publish-note-image-picker-cropper-viewport" enabled="true" visible="true"',
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -1846,7 +1848,8 @@ def _validate_published_note_image_matches_uploaded_preview(driver: WebDriver, *
     detail_image.save(detail_path)
     result = compare_images_for_publish_note(source_path, detail_path)
     if not result.is_valid:
-        _save_publish_note_image_validation_artifacts(source_path, detail_path, result)
+        attachments = _save_publish_note_image_validation_artifacts(source_path, detail_path, result)
+        setattr(driver, "_publish_note_image_validation_artifacts", attachments)
         raise AssertionError(f"Published note image does not match the selected album image: {result}")
 
 
@@ -1897,16 +1900,19 @@ def _publish_note_validation_detail_path() -> Path:
     return artifact_dir / f"{base_name}-detail-image.png"
 
 
-def _save_publish_note_image_validation_artifacts(source_path: Path, detail_path: Path, result) -> None:
+def _save_publish_note_image_validation_artifacts(source_path: Path, detail_path: Path, result):
+    global _LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS
     artifact_dir = _publish_note_artifact_dir()
     artifact_dir.mkdir(parents=True, exist_ok=True)
     base_name = f"publish-note-image-validation-{int(time.time())}"
+    diff_path = artifact_dir / f"{base_name}-diff.png"
+    summary_path = artifact_dir / f"{base_name}.txt"
     with Image.open(source_path) as source_image, Image.open(detail_path) as detail_image:
         source = source_image.convert("RGB")
         detail = detail_image.convert("RGB")
         diff_source = source.resize(detail.size)
-        ImageChops.difference(diff_source, detail).save(artifact_dir / f"{base_name}-diff.png")
-    (artifact_dir / f"{base_name}.txt").write_text(
+        ImageChops.difference(diff_source, detail).save(diff_path)
+    summary_path.write_text(
         "\n".join(
             [
                 f"source_path={source_path}",
@@ -1916,6 +1922,25 @@ def _save_publish_note_image_validation_artifacts(source_path: Path, detail_path
         ),
         encoding="utf-8",
     )
+    attachments = (
+        (source_path, "publish-note-image-validation-source.png", allure.attachment_type.PNG),
+        (detail_path, "publish-note-image-validation-detail.png", allure.attachment_type.PNG),
+        (diff_path, "publish-note-image-validation-diff.png", allure.attachment_type.PNG),
+        (summary_path, "publish-note-image-validation.txt", allure.attachment_type.TEXT),
+    )
+    _LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS = attachments
+    _attach_publish_note_image_validation_artifacts(attachments)
+    return attachments
+
+
+def attach_recorded_publish_note_image_validation_artifacts(driver: WebDriver) -> None:
+    attachments = getattr(driver, "_publish_note_image_validation_artifacts", ()) or _LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS
+    _attach_publish_note_image_validation_artifacts(attachments)
+
+
+def _attach_publish_note_image_validation_artifacts(attachments) -> None:
+    for path, name, attachment_type in attachments:
+        attach_file_if_present(path, name=name, attachment_type=attachment_type)
 
 
 def _choose_note_image_from_library(

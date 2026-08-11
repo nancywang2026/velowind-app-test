@@ -166,6 +166,12 @@ def pytest_runtest_makereport(item, call):
         return
 
     if not report.passed:
+        try:
+            from velowind_appium.modules.message_detail import attach_recorded_publish_note_image_validation_artifacts
+
+            attach_recorded_publish_note_image_validation_artifacts(app_driver)
+        except Exception:
+            pass
         capture_and_attach_debug_artifacts(app_driver, ios_config.artifact_dir, label=item.name)
 
 

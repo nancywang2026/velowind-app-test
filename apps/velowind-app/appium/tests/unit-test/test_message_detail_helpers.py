@@ -1,4 +1,5 @@
 from velowind_appium.modules import message_detail
+from velowind_appium import reporting
 from pathlib import Path
 import pytest
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
@@ -94,6 +95,47 @@ def test_publish_note_image_validation_uses_album_source_path(monkeypatch, tmp_p
     message_detail._validate_published_note_image_matches_uploaded_preview(FakeDriver())
 
     assert compared_paths == [(source_path, actual_path)]
+
+
+def test_publish_note_image_validation_artifacts_are_attached_to_allure(monkeypatch, tmp_path):
+    from PIL import Image
+
+    source_path = tmp_path / "source.png"
+    detail_path = tmp_path / "detail.png"
+    artifact_dir = tmp_path / "artifacts"
+    Image.new("RGB", (10, 10), "red").save(source_path)
+    Image.new("RGB", (10, 10), "blue").save(detail_path)
+    attached = []
+
+    class FakeResult:
+        is_valid = False
+        source_size = (10, 10)
+        actual_size = (10, 10)
+        aspect_ratio_delta = 0
+        mean_pixel_delta = 255
+        reason = "pixel-delta-too-high"
+
+        def __str__(self):
+            return "fake comparison"
+
+    monkeypatch.setattr(message_detail, "_publish_note_artifact_dir", lambda: artifact_dir)
+    monkeypatch.setattr(
+        message_detail,
+        "attach_file_if_present",
+        lambda path, *, name=None, attachment_type=None: attached.append((Path(path).name, name, attachment_type)),
+        raising=False,
+    )
+    monkeypatch.setattr(message_detail.time, "time", lambda: 123)
+    attachment_type = reporting.allure.attachment_type
+
+    message_detail._save_publish_note_image_validation_artifacts(source_path, detail_path, FakeResult())
+
+    assert attached == [
+        ("source.png", "publish-note-image-validation-source.png", attachment_type.PNG),
+        ("detail.png", "publish-note-image-validation-detail.png", attachment_type.PNG),
+        ("publish-note-image-validation-123-diff.png", "publish-note-image-validation-diff.png", attachment_type.PNG),
+        ("publish-note-image-validation-123.txt", "publish-note-image-validation.txt", attachment_type.TEXT),
+    ]
 
 
 def test_publish_note_image_validation_opens_detail_image_before_capture(monkeypatch, tmp_path):

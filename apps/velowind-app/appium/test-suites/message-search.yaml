@@ -1,6 +1,0 @@
-tests:
-  - message/test_ios_search_by_type.py
-  - message/test_ios_search_note.py
-  - message/test_ios_message_browse.py
-pytest_args:
-  - --maxfail=1

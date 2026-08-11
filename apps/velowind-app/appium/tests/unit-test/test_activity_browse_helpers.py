@@ -153,6 +153,19 @@ def test_activity_card_tap_points_include_android_metric_container_when_title_is
     assert activity_browse._activity_card_tap_points(page_source) == [(540, 950), (540, 1043)]
 
 
+def test_ios_activity_card_tap_points_prefer_text_area_below_cover_image():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="张家界大环线2天1晚 浙江省·张家界市 Nancy 骑行 总里程 128 时长 2天1晚 场次 2场 难度等级" visible="true" x="13" y="119" width="376" height="283" />
+    </AppiumAUT>
+    """
+
+    points = activity_browse._activity_card_tap_points(page_source)
+
+    assert points[0] == (201, 322)
+    assert points[1] == (201, 368)
+
+
 def test_activity_feed_uses_category_tag_row_to_match_results():
     page_source = """
     <AppiumAUT>
