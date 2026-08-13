@@ -1,6 +1,0 @@
-tests:
-  - rental/test_rental_order.py
-markers:
-  - rental
-pytest_args:
-  - --maxfail=1

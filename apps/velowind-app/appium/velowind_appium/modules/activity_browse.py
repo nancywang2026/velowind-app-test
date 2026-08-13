@@ -595,7 +595,7 @@ def parse_activity_detail_snapshot(page_source: str) -> ActivityDetailSnapshot:
         tags_visible=all(text in joined_visible_text for text in ["风景标签", "沿途景点"]),
         route_visible=_activity_detail_route_visible(joined_visible_text),
         comments_visible="活动评论" in joined_visible_text or "前往评论页查看真实活动评论" in joined_visible_text,
-        sessions_visible=any(text in joined_visible_text for text in ["请选择场次", "场次信息", "集合地点", "暂无场次"]),
+        sessions_visible=_activity_detail_sessions_visible(joined_visible_text),
     )
 
 
@@ -611,6 +611,12 @@ def _activity_detail_route_visible(joined_visible_text: str) -> bool:
     if all(text in joined_visible_text for text in ["路线说明", "活动评论"]):
         return True
     return "路线说明" in joined_visible_text and bool(re.search(r"\bDay\d+\b", joined_visible_text))
+
+
+def _activity_detail_sessions_visible(joined_visible_text: str) -> bool:
+    if any(text in joined_visible_text for text in ["请选择场次", "场次信息", "集合地点", "暂无场次"]):
+        return True
+    return bool(re.search(r"场次\s*\d+", joined_visible_text))
 
 
 def parse_activity_order_snapshot(page_source: str) -> ActivityOrderSnapshot:
@@ -1033,7 +1039,12 @@ def _tap_first_activity_card(driver: WebDriver, page_source: str, verify_open=No
     for tap_points in _activity_card_tap_point_groups(page_source):
         if _tap_activity_card_points(driver, tap_points, verify_open=verify_open, timeout=timeout):
             return True
-    for ratio in [(0.50, 0.28), (0.50, 0.34), (0.50, 0.22)]:
+    fallback_ratios = (
+        [(0.50, 0.58), (0.50, 0.68), (0.50, 0.48)]
+        if _is_ios_driver(driver)
+        else [(0.50, 0.28), (0.50, 0.34), (0.50, 0.22)]
+    )
+    for ratio in fallback_ratios:
         if not tap_by_coordinate_ratios(driver, [ratio]):
             continue
         if verify_open is None or _wait_until(verify_open, timeout=timeout):
@@ -1096,12 +1107,19 @@ def _activity_card_tap_point_groups(page_source: str) -> list[list[tuple[int, in
 
     groups: list[list[tuple[int, int]]] = []
     seen: set[tuple[int, int]] = set()
+    prefer_card_text_area = any(element.tag.startswith("XCUIElementType") for element in root.iter())
     for x, y, width, height in sorted(set(rects), key=lambda item: (item[1], item[0])):
         x_point = x + max(1, width // 2)
-        y_candidates = [
-            y + min(max(48, height // 3), height - 20),
-            y + min(max(72, height // 2), height - 20),
-        ]
+        if prefer_card_text_area:
+            y_candidates = [
+                y + min(max(160, int(height * 0.72)), height - 20),
+                y + min(max(200, int(height * 0.88)), height - 20),
+            ]
+        else:
+            y_candidates = [
+                y + min(max(48, height // 3), height - 20),
+                y + min(max(72, height // 2), height - 20),
+            ]
         group: list[tuple[int, int]] = []
         for y_point in y_candidates:
             point = (x_point, y_point)

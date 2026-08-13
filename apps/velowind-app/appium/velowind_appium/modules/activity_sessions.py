@@ -16,6 +16,7 @@ from velowind_appium.actions import swipe_vertical, tap_text_if_present
 from velowind_appium.config import IosAppiumConfig
 import velowind_appium.modules.activity as activity
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
+from velowind_appium.timing import profile_section
 
 
 @dataclass(frozen=True)
@@ -36,8 +37,8 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     base_date = today or date.today()
     return ActivitySessionDraft(
         title=f"测试 - 场次 {base_date:%m%d}",
-        signup_deadline=_format_datetime(base_date + timedelta(days=5), datetime_time(18, 0)),
-        start_time=_format_datetime(base_date + timedelta(days=6), datetime_time(9, 0)),
+        signup_deadline=_format_datetime(base_date, datetime_time(18, 0)),
+        start_time=_format_datetime(base_date + timedelta(days=1), datetime_time(9, 0)),
         end_time=_format_datetime(base_date + timedelta(days=6), datetime_time(18, 0)),
         meeting_point="张家界景区",
         max_participants="20",
@@ -53,24 +54,40 @@ def _format_datetime(day: date, clock: datetime_time) -> str:
 
 
 def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
-    dismiss_common_system_alerts(driver)
-    _leave_stale_session_form(driver)
+    with profile_section("activity-session.dismiss-alerts"):
+        dismiss_common_system_alerts(driver)
+    with profile_section("activity-session.leave-stale-form"):
+        _leave_stale_session_form(driver)
+    home_prepared = False
     try:
-        open_my_activity_publish_list(driver, timeout=min(timeout, 20))
-    except AssertionError:
-        try:
+        with profile_section("activity-session.prepare-home"):
             ensure_logged_in_on_home(driver, config)
-        except Exception:
+        home_prepared = True
+    except Exception:
+        pass
+    try:
+        with profile_section("activity-session.open-my-activity"):
             open_my_activity_publish_list(driver, timeout=timeout)
+    except AssertionError:
+        if not home_prepared:
+            with profile_section("activity-session.open-my-activity-after-home-failure"):
+                open_my_activity_publish_list(driver, timeout=timeout)
         else:
-            open_my_activity_publish_list(driver, timeout=timeout)
-    open_manage_sessions_for_approved_activity(driver, timeout=timeout)
-    open_create_session_form(driver, timeout=timeout)
-    fill_session_form(driver, draft, timeout=timeout)
-    success_signal = submit_session_form(driver, expected_title=draft.title, timeout=timeout)
-    publish_visible_activity_session_if_needed(driver, expected_title=draft.title, timeout=min(timeout, 20))
+            with profile_section("activity-session.prepare-home-after-open-failure"):
+                ensure_logged_in_on_home(driver, config)
+            with profile_section("activity-session.open-my-activity-after-home-recovery"):
+                open_my_activity_publish_list(driver, timeout=timeout)
+    with profile_section("activity-session.open-manage-sessions"):
+        open_manage_sessions_for_approved_activity(driver, timeout=timeout)
+    with profile_section("activity-session.open-create-session-form"):
+        open_create_session_form(driver, timeout=timeout)
+    with profile_section("activity-session.fill-session-form"):
+        fill_session_form(driver, draft, timeout=timeout)
+    with profile_section("activity-session.submit-session-form"):
+        success_signal = submit_session_form(driver, expected_title=draft.title, timeout=timeout)
+    with profile_section("activity-session.publish-visible-session"):
+        publish_visible_activity_session_if_needed(driver, expected_title=draft.title, timeout=min(timeout, 20))
     return success_signal
-
 
 def open_my_activity_publish_list(driver: WebDriver, timeout: int = 30) -> None:
     end_at = time.monotonic() + timeout
@@ -105,17 +122,27 @@ def open_my_activity_publish_list(driver: WebDriver, timeout: int = 30) -> None:
 def open_manage_sessions_for_approved_activity(driver: WebDriver, timeout: int = 30) -> None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        page_source = _safe_page_source(driver)
+        with profile_section("activity-session.manage.read-page-source"):
+            page_source = _safe_page_source(driver)
         if _session_form_visible(page_source):
             return
         if "管理场次" in page_source:
-            if tap_text_if_present(driver, "管理场次", timeout=1):
+            with profile_section("activity-session.manage.tap-visible-manage"):
+                tapped_manage = tap_text_if_present(driver, "管理场次", timeout=1)
+            if tapped_manage:
                 return
-        if _tap_more_for_approved_activity(driver):
-            if _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=5):
-                if tap_text_if_present(driver, "管理场次", timeout=1):
+        with profile_section("activity-session.manage.tap-more-approved"):
+            tapped_more = _tap_more_for_approved_activity(driver)
+        if tapped_more:
+            with profile_section("activity-session.manage.wait-menu"):
+                menu_visible = _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=5)
+            if menu_visible:
+                with profile_section("activity-session.manage.tap-menu-manage"):
+                    tapped_manage = tap_text_if_present(driver, "管理场次", timeout=1)
+                if tapped_manage:
                     return
-        _scroll_my_activity_list_toward_approved_activity(driver)
+        with profile_section("activity-session.manage.scroll-list"):
+            _scroll_my_activity_list_toward_approved_activity(driver)
         time.sleep(0.5)
     raise AssertionError("Unable to open Manage Sessions for an approved activity")
 
@@ -152,13 +179,14 @@ def fill_session_form(driver: WebDriver, draft: ActivitySessionDraft, timeout: i
     for keywords, value in fields:
         is_datetime = keywords[0] in {"报名截止时间", "开始时间", "结束时间"}
         is_location = keywords[0] in {"集合地点", "集合地址", "地点"}
-        filled = (
-            _fill_session_datetime_field(driver, keywords, value)
-            if is_datetime
-            else _fill_session_location_field(driver, keywords, value)
-            if is_location
-            else _fill_session_field(driver, keywords, value)
-        )
+        with profile_section(f"activity-session.fill-field.{keywords[0]}"):
+            filled = (
+                _fill_session_datetime_field(driver, keywords, value)
+                if is_datetime
+                else _fill_session_location_field(driver, keywords, value)
+                if is_location
+                else _fill_session_field(driver, keywords, value)
+            )
         if not filled:
             if is_datetime and _is_android_driver(driver):
                 _dismiss_session_datetime_picker(driver)
@@ -237,10 +265,15 @@ def _activity_session_publish_result_visible(page_source: str) -> bool:
 
 def _fill_session_field(driver: WebDriver, keywords: list[str], value: str) -> bool:
     for _ in range(5):
+        with profile_section(f"activity-session.fill-field-source.{keywords[0]}"):
+            page_source = _safe_page_source(driver)
         for keyword in keywords:
-            if activity._fill_input_near_label(driver, keyword, value):
+            with profile_section(f"activity-session.fill-field-keyword.{keyword}"):
+                filled = activity._fill_input_near_label(driver, keyword, value, page_source=page_source)
+            if filled:
                 return True
-        swipe_vertical(driver, direction="up")
+        with profile_section(f"activity-session.fill-field-scroll.{keywords[0]}"):
+            swipe_vertical(driver, direction="up")
         time.sleep(0.2)
     return False
 
@@ -252,24 +285,37 @@ def _fill_session_location_field(driver: WebDriver, keywords: list[str], value: 
     except (WebDriverException, AttributeError):
         pass
 
-    if _session_location_modal_visible(_safe_page_source(driver)):
-        return _choose_session_location(driver, value)
+    with profile_section("activity-session.location.initial-source"):
+        page_source = _safe_page_source(driver)
+    if _session_location_modal_visible(page_source):
+        with profile_section("activity-session.location.choose-existing-modal"):
+            return _choose_session_location(driver, value)
 
     for _ in range(3):
-        if _tap_session_location_field(driver, keywords, placeholders):
+        with profile_section("activity-session.location.tap-field"):
+            tapped = _tap_session_location_field(driver, keywords, placeholders)
+        if tapped:
             time.sleep(0.5)
-            return _choose_session_location(driver, value)
-        swipe_vertical(driver, direction="up")
+            with profile_section("activity-session.location.choose-after-open"):
+                return _choose_session_location(driver, value)
+        with profile_section("activity-session.location.scroll-to-field"):
+            swipe_vertical(driver, direction="up")
         time.sleep(0.2)
     return False
 
 
 def _fill_session_datetime_field(driver: WebDriver, keywords: list[str], value: str) -> bool:
     for keyword in keywords:
-        activity._hide_keyboard(driver)
-        if _tap_session_datetime_field(driver, keyword):
-            if _write_session_datetime_value(driver, keyword, value):
-                _confirm_session_picker(driver)
+        with profile_section(f"activity-session.datetime.hide-keyboard.{keyword}"):
+            activity._hide_keyboard(driver)
+        with profile_section(f"activity-session.datetime.tap-field.{keyword}"):
+            tapped = _tap_session_datetime_field(driver, keyword)
+        if tapped:
+            with profile_section(f"activity-session.datetime.write-value.{keyword}"):
+                written = _write_session_datetime_value(driver, keyword, value)
+            if written:
+                with profile_section(f"activity-session.datetime.confirm-picker.{keyword}"):
+                    _confirm_session_picker(driver)
                 return True
     return False
 
@@ -406,21 +452,31 @@ def _tap_session_location_container(driver: WebDriver, keyword: str) -> bool:
 
 
 def _choose_session_location(driver: WebDriver, value: str) -> bool:
-    if _search_session_location(driver, value):
-        if not _wait_until(lambda: _session_location_results_visible(_safe_page_source(driver)), timeout=5):
+    with profile_section("activity-session.location.search"):
+        searched = _search_session_location(driver, value)
+    if searched:
+        with profile_section("activity-session.location.wait-results"):
+            results_visible = _wait_until(lambda: _session_location_results_visible(_safe_page_source(driver)), timeout=5)
+        if not results_visible:
             return False
-        if _tap_session_location_result(driver, value):
+        with profile_section("activity-session.location.tap-result"):
+            tapped_result = _tap_session_location_result(driver, value)
+        if tapped_result:
             selected_timeout = 2 if _is_ios_driver(driver) else 6
-            if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=selected_timeout):
+            with profile_section("activity-session.location.wait-selected"):
+                selected = _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=selected_timeout)
+            if selected:
                 return True
             if not _is_ios_driver(driver) and _tap_session_location_result(driver, value):
                 if _wait_until(lambda: _session_location_selected(_safe_page_source(driver)), timeout=4):
                     return True
-            _dismiss_session_location_modal(driver)
-            return _wait_until(
-                lambda: _session_location_selected(_safe_page_source(driver)),
-                timeout=5 if _is_ios_driver(driver) else 8,
-            )
+            with profile_section("activity-session.location.dismiss-modal"):
+                _dismiss_session_location_modal(driver)
+            with profile_section("activity-session.location.wait-selected-after-dismiss"):
+                return _wait_until(
+                    lambda: _session_location_selected(_safe_page_source(driver)),
+                    timeout=5 if _is_ios_driver(driver) else 8,
+                )
 
     return False
 
@@ -703,6 +759,8 @@ def _android_session_location_result_text(element) -> str:
 
 def _tap_ios_session_location_result(driver: WebDriver, value: str) -> bool:
     search_terms = _session_location_search_terms(value)
+    if _tap_ios_session_location_result_from_source(driver, search_terms):
+        return True
     xpaths = []
     for term in search_terms:
         term = term.strip()
@@ -760,6 +818,62 @@ def _tap_ios_session_location_result(driver: WebDriver, value: str) -> bool:
         except (WebDriverException, AttributeError):
             continue
     return False
+
+
+def _tap_ios_session_location_result_from_source(driver: WebDriver, search_terms: list[str]) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+    candidates = []
+    for element in root.iter():
+        attributes = element.attrib
+        if attributes.get("visible") == "false":
+            continue
+        tag_name = element.tag.rsplit("}", 1)[-1]
+        if tag_name not in {"XCUIElementTypeStaticText", "XCUIElementTypeOther"}:
+            continue
+        text = " ".join(str(attributes.get(attr, "")) for attr in ["name", "label", "value"])
+        if not any(term and term in text for term in search_terms):
+            continue
+        try:
+            x = int(float(attributes.get("x", "")))
+            y = int(float(attributes.get("y", "")))
+            width = int(float(attributes.get("width", "")))
+            height = int(float(attributes.get("height", "")))
+        except (TypeError, ValueError):
+            continue
+        if width < 250 or height < 48 or height > 130 or y < 150:
+            continue
+        score = _ios_session_location_source_result_score(text, search_terms)
+        candidates.append((score, y, height, x + int(width / 2), y + int(height / 2)))
+    for _score, _y, _height, x, y in sorted(candidates):
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+        except (WebDriverException, AttributeError):
+            continue
+        if _wait_until(lambda: not _session_location_modal_visible(_safe_page_source(driver)), timeout=1):
+            return True
+    return False
+
+
+def _ios_session_location_source_result_score(text: str, search_terms: list[str]) -> int:
+    title = text.split(" ")[0].strip()
+    if title.startswith("湖南省"):
+        title = ""
+    for term in search_terms:
+        if term and term in title:
+            return 0
+    for term in search_terms:
+        if term and text.startswith(term):
+            return 1
+    for term in search_terms:
+        if term and term in text:
+            return 2
+    return 3
 
 
 def _session_location_search_terms(value: str) -> list[str]:
@@ -1342,7 +1456,11 @@ def _write_ios_datetime_picker_value(driver: WebDriver, keyword: str, value: str
         return False
     if not _wait_until(lambda: _ios_datetime_picker_visible(_safe_page_source(driver)), timeout=3):
         return False
-    return _fill_ios_datetime_picker_fields(driver, ["month", "day", "hour"], parts)
+    return _fill_ios_datetime_picker_fields(driver, _ios_datetime_picker_field_order(keyword), parts)
+
+
+def _ios_datetime_picker_field_order(keyword: str) -> list[str]:
+    return ["month", "day"]
 
 
 def _fill_ios_datetime_picker_fields(driver: WebDriver, field_order: list[str], parts: dict[str, str]) -> bool:
@@ -1353,6 +1471,12 @@ def _fill_ios_datetime_picker_fields(driver: WebDriver, field_order: list[str], 
             return False
         if current.get(field) == target:
             continue
+        if _set_ios_datetime_picker_wheel_value(driver, field, target):
+            if _wait_until(
+                lambda: ((_ios_datetime_picker_current_parts(driver) or {}).get(field) == target),
+                timeout=1,
+            ):
+                continue
         if _tap_ios_datetime_picker_value(driver, field, target):
             if _wait_until(
                 lambda: ((_ios_datetime_picker_current_parts(driver) or {}).get(field) == target),
@@ -1363,6 +1487,17 @@ def _fill_ios_datetime_picker_fields(driver: WebDriver, field_order: list[str], 
             return False
     current = _ios_datetime_picker_current_parts(driver)
     return bool(current and all(current.get(field) == parts[field] for field in field_order))
+
+
+def _set_ios_datetime_picker_wheel_value(driver: WebDriver, field: str, value: str) -> bool:
+    wheel = _ios_datetime_picker_wheel_element(driver, field)
+    if wheel is None:
+        return False
+    try:
+        wheel.send_keys(value)
+        return True
+    except (WebDriverException, AttributeError):
+        return False
 
 
 def _ios_datetime_picker_current_parts(driver: WebDriver) -> dict[str, str] | None:
@@ -1458,6 +1593,23 @@ def _ios_datetime_picker_wheel_center(driver: WebDriver, rect: dict, field: str)
 
 
 def _ios_datetime_picker_wheel_element_center(driver: WebDriver, field: str) -> tuple[int, int] | None:
+    wheel = _ios_datetime_picker_wheel_element(driver, field)
+    if wheel is None:
+        return None
+    try:
+        element_rect = wheel.rect
+        x = int(element_rect["x"])
+        y = int(element_rect["y"])
+        width = int(element_rect["width"])
+        height = int(element_rect["height"])
+    except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return x + int(width / 2), y + int(height / 2)
+
+
+def _ios_datetime_picker_wheel_element(driver: WebDriver, field: str):
     escaped = field.replace('"', '\\"')
     try:
         elements = driver.find_elements(
@@ -1480,11 +1632,37 @@ def _ios_datetime_picker_wheel_element_center(driver: WebDriver, field: str) -> 
             continue
         if width <= 0 or height <= 0:
             continue
-        candidates.append((y, height, x + int(width / 2), y + int(height / 2)))
-    if not candidates:
+        candidates.append((y, x, height, element))
+    if candidates:
+        _y, _x, _height, element = sorted(candidates)[0]
+        return element
+
+    try:
+        picker_wheels = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypePickerWheel")
+    except (WebDriverException, AttributeError):
         return None
-    _y, _height, center_x, center_y = sorted(candidates)[0]
-    return center_x, center_y
+    positioned = []
+    for element in picker_wheels:
+        try:
+            if not element.is_displayed():
+                continue
+            element_rect = element.rect
+            x = int(element_rect["x"])
+            y = int(element_rect["y"])
+            width = int(element_rect["width"])
+            height = int(element_rect["height"])
+        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        positioned.append((x + int(width / 2), y, element))
+    field_index = {"month": 0, "day": 1, "hour": 2}.get(field)
+    if field_index is None:
+        return None
+    sorted_wheels = [element for _x, _y, element in sorted(positioned)]
+    if field_index >= len(sorted_wheels):
+        return None
+    return sorted_wheels[field_index]
 
 
 
@@ -2044,7 +2222,11 @@ def _tap_more_for_approved_activity(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if "通过" in page_source:
         tapped_any_approved_card = False
-        center_ys = _approved_badge_center_ys(driver)
+        center_ys = _ios_approved_badge_center_ys_from_source(driver, page_source) if _is_ios_driver(driver) else []
+        if _is_ios_driver(driver) and "<XCUIElementType" in page_source and not center_ys:
+            return False
+        if not center_ys:
+            center_ys = _approved_badge_center_ys(driver)
         for y in center_ys:
             if _tap_right_side_of_approved_card_at_y(driver, y):
                 tapped_any_approved_card = True
@@ -2096,6 +2278,39 @@ def _tap_right_side_of_approved_card_at_y(driver: WebDriver, y: int | None) -> b
 def _top_approved_badge_center_y(driver: WebDriver) -> int | None:
     center_ys = _approved_badge_center_ys(driver)
     return center_ys[0] if center_ys else None
+
+
+def _ios_approved_badge_center_ys_from_source(driver: WebDriver, page_source: str) -> list[int]:
+    if "<XCUIElementType" not in page_source:
+        return []
+    try:
+        window_height = int(driver.get_window_rect()["height"])
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        window_height = 3000
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    center_ys = []
+    for element in root.iter():
+        attributes = element.attrib
+        if attributes.get("visible") == "false":
+            continue
+        text = " ".join(str(attributes.get(attr, "")) for attr in ["name", "label", "value"])
+        if "通过" not in text:
+            continue
+        try:
+            y = int(float(attributes.get("y", "")))
+            height = int(float(attributes.get("height", "")))
+            width = int(float(attributes.get("width", "")))
+        except (TypeError, ValueError):
+            continue
+        center_y = y + int(height / 2)
+        if width > 120 or height > 80 or center_y < 0 or center_y >= window_height:
+            continue
+        center_ys.append(center_y)
+    return sorted(set(center_ys))
 
 
 def _approved_badge_center_ys(driver: WebDriver) -> list[int]:

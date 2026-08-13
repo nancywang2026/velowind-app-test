@@ -19,7 +19,7 @@ device:
   xcode_signing_id: "Apple Development"
   updated_wda_bundle_id: "com.velowind.rider.WebDriverAgentRunner"
   wda_local_port: 8110
-  use_new_wda: true
+  use_new_wda: false
   should_use_singleton_test_manager: false
   allow_provisioning_device_registration: true
   show_xcode_log: true

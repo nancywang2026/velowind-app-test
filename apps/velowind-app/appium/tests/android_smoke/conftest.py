@@ -9,6 +9,7 @@ from velowind_appium.android_driver import create_android_driver
 from velowind_appium.reporting import allure
 from velowind_appium.screenshots import capture_and_attach_debug_artifacts, capture_and_attach_page
 from velowind_appium.session import ensure_logged_in_from_me_then_home
+from velowind_appium.timing import env_flag_enabled, profile_section
 
 
 def prepare_logged_in_session(android_driver, android_config) -> bool:
@@ -17,6 +18,23 @@ def prepare_logged_in_session(android_driver, android_config) -> bool:
 
 def should_capture_each_step() -> bool:
     return os.environ.get("VW_APPIUM_CAPTURE_EACH_STEP", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def should_capture_final_page_on_pass() -> bool:
+    return env_flag_enabled("VW_APPIUM_CAPTURE_FINAL_PAGE_ON_PASS")
+
+
+def should_restore_home_after_case(request) -> bool:
+    request_node = getattr(request, "node", None)
+    marker_enabled = (
+        request_node is not None and request_node.get_closest_marker("restore_home_after") is not None
+    )
+    return marker_enabled or env_flag_enabled("VW_APPIUM_RESTORE_HOME_AFTER_CASE")
+
+
+def _request_node_name(request) -> str:
+    request_node = getattr(request, "node", None)
+    return getattr(request_node, "name", "<unknown-case>")
 
 
 def _progress(message: str) -> None:
@@ -32,18 +50,27 @@ def android_config():
 
 @pytest.fixture(scope="session")
 def android_driver(android_config):
-    app_driver = create_android_driver(android_config)
+    with profile_section("android_driver.create", emit=_progress):
+        app_driver = create_android_driver(android_config)
     yield app_driver
     try:
-        app_driver.quit()
+        with profile_section("android_driver.quit", emit=_progress):
+            app_driver.quit()
     except (InvalidSessionIdException, WebDriverException):
         pass
 
 
 @pytest.fixture(autouse=True)
-def logged_in_session(android_driver, android_config, step):
-    prepare_logged_in_session(android_driver, android_config)
-    yield
+def logged_in_session(android_driver, android_config, step, request):
+    node_name = _request_node_name(request)
+    with profile_section(f"{node_name}.session.prepare.before", emit=_progress):
+        prepare_logged_in_session(android_driver, android_config)
+    try:
+        yield
+    finally:
+        if should_restore_home_after_case(request):
+            with profile_section(f"{node_name}.session.prepare.after", emit=_progress):
+                prepare_logged_in_session(android_driver, android_config)
 
 
 @pytest.fixture
@@ -103,9 +130,10 @@ def pytest_runtest_makereport(item, call):
     if app_driver is None or android_config is None:
         return
 
-    if report.passed:
+    if report.passed and should_capture_final_page_on_pass():
         with allure.step("final-page"):
             capture_and_attach_page(app_driver, android_config.artifact_dir, label=f"{item.name}-final-page")
         return
 
-    capture_and_attach_debug_artifacts(app_driver, android_config.artifact_dir, label=item.name)
+    if not report.passed:
+        capture_and_attach_debug_artifacts(app_driver, android_config.artifact_dir, label=item.name)

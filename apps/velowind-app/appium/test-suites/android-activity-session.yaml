@@ -1,4 +1,0 @@
-tests:
-  - activity/test_manage_activity_session.py
-pytest_args:
-  - --maxfail=1

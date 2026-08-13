@@ -87,13 +87,18 @@ class FakeTextField:
 
 
 class FakeWheel:
-    def __init__(self, *, on_send_keys=None):
+    def __init__(self, *, rect=None, displayed=True, on_send_keys=None):
+        self.rect = rect or {"x": 0, "y": 0, "width": 40, "height": 200}
+        self.displayed = displayed
         self.clicked = False
         self.sent_keys = []
         self.on_send_keys = on_send_keys
 
     def click(self):
         self.clicked = True
+
+    def is_displayed(self):
+        return self.displayed
 
     def send_keys(self, value):
         self.sent_keys.append(value)
@@ -599,6 +604,80 @@ def test_write_session_datetime_value_routes_ios_picker_to_ios_writer(monkeypatc
     assert calls == [("报名截止时间", "2026-07-23 18:00")]
 
 
+def test_write_ios_start_and_end_time_only_adjusts_date(monkeypatch):
+    driver = FakeDriver("开始时间 已选择时间 7月18日 22点 取消 确认 月 日 时")
+    driver.capabilities = {"platformName": "iOS"}
+    captured = []
+
+    monkeypatch.setattr(activity_sessions, "_wait_until", lambda predicate, timeout=3: True)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_fill_ios_datetime_picker_fields",
+        lambda received, field_order, parts: captured.append((field_order, parts)) or True,
+    )
+
+    assert activity_sessions._write_ios_datetime_picker_value(driver, "开始时间", "2026-07-23 09:00") is True
+    assert activity_sessions._write_ios_datetime_picker_value(driver, "结束时间", "2026-07-28 18:00") is True
+
+    assert captured == [
+        (["month", "day"], {"month": "07", "day": "23", "hour": "09", "minute": "00"}),
+        (["month", "day"], {"month": "07", "day": "28", "hour": "18", "minute": "00"}),
+    ]
+
+
+def test_write_ios_deadline_only_adjusts_date(monkeypatch):
+    driver = FakeDriver("报名截止时间 已选择时间 7月18日 22点 取消 确认 月 日 时")
+    driver.capabilities = {"platformName": "iOS"}
+    captured = []
+
+    monkeypatch.setattr(activity_sessions, "_wait_until", lambda predicate, timeout=3: True)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_fill_ios_datetime_picker_fields",
+        lambda received, field_order, parts: captured.append((field_order, parts)) or True,
+    )
+
+    assert activity_sessions._write_ios_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is True
+
+    assert captured == [
+        (["month", "day"], {"month": "07", "day": "23", "hour": "18", "minute": "00"}),
+    ]
+
+
+def test_fill_ios_datetime_picker_fields_sets_picker_wheels_directly(monkeypatch):
+    current = {"month": "07", "day": "18", "hour": "22", "minute": "00"}
+    wheels = {
+        "month": FakeWheel(rect={"x": 70, "y": 520, "width": 32, "height": 260}, on_send_keys=lambda value: current.__setitem__("month", value)),
+        "day": FakeWheel(rect={"x": 185, "y": 520, "width": 32, "height": 260}, on_send_keys=lambda value: current.__setitem__("day", value)),
+        "hour": FakeWheel(rect={"x": 300, "y": 520, "width": 32, "height": 260}, on_send_keys=lambda value: current.__setitem__("hour", value)),
+    }
+    driver = FakeDriver(width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    def fake_find_elements(by, xpath):
+        if "XCUIElementTypePickerWheel" in xpath:
+            return list(wheels.values())
+        return []
+
+    monkeypatch.setattr(driver, "find_elements", fake_find_elements, raising=False)
+    monkeypatch.setattr(activity_sessions, "_ios_datetime_picker_current_parts", lambda received: dict(current))
+    monkeypatch.setattr(
+        activity_sessions,
+        "_tap_ios_datetime_picker_wheel_to_target",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("slow picker swipe should not run")),
+    )
+
+    assert activity_sessions._fill_ios_datetime_picker_fields(
+        driver,
+        ["month", "day", "hour"],
+        {"month": "07", "day": "23", "hour": "18", "minute": "00"},
+    ) is True
+
+    assert wheels["month"].sent_keys == []
+    assert wheels["day"].sent_keys == ["23"]
+    assert wheels["hour"].sent_keys == ["18"]
+
+
 def test_write_session_datetime_value_does_not_route_android_to_ios_writer(monkeypatch):
     driver = FakeDriver("报名截止时间 已选择时间 07.18 10:17 取消 确认 月 日 时 分", width=1280, height=2856)
     calls = []
@@ -704,14 +783,39 @@ def test_tap_ios_session_location_result_prefers_title_match_over_address_match(
     assert title_match.clicked is True
 
 
+def test_tap_ios_session_location_result_uses_page_source_coordinate_fast_path(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeScrollView visible="true" name="结果">
+        <XCUIElementTypeStaticText visible="true" name="张家界国家森林公园" x="52" y="246" width="350" height="71" />
+      </XCUIElementTypeScrollView>
+    </AppiumAUT>
+    """
+    driver = FakeDriver(page_source, width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(driver, "find_elements", lambda *args: (_ for _ in ()).throw(AssertionError("slow iOS result scan should not run")), raising=False)
+
+    def fake_wait(predicate, timeout):
+        driver.page_source = "新增场次 集合地点 张家界国家森林公园"
+        return predicate()
+
+    monkeypatch.setattr(activity_sessions, "_wait_until", fake_wait)
+
+    assert activity_sessions._tap_ios_session_location_result(driver, "张家界景区") is True
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 227, "y": 281}),
+    ]
+
+
 def test_write_ios_datetime_picker_value_taps_target_values_by_column():
     driver = FakeIosPickerDriver({"month": "07", "day": "18", "hour": "22"})
 
     assert activity_sessions._write_ios_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is True
 
-    assert driver.current == {"month": "07", "day": "23", "hour": "18"}
+    assert driver.current == {"month": "07", "day": "23", "hour": "22"}
     assert ("mobile: tap", {"x": 201.0, "y": 707.0}) in driver.scripts
-    assert ("mobile: tap", {"x": 316.0, "y": 647.0}) in driver.scripts
+    assert ("mobile: tap", {"x": 316.0, "y": 647.0}) not in driver.scripts
 
 
 def test_tap_ios_datetime_picker_wheel_step_swipes_between_visible_rows():
@@ -1104,8 +1208,8 @@ def test_drag_android_datetime_picker_wheel_to_target_does_not_use_generic_drag_
 def test_build_activity_session_draft_uses_required_relative_dates():
     draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 17))
 
-    assert draft.signup_deadline == "2026-07-22 18:00"
-    assert draft.start_time == "2026-07-23 09:00"
+    assert draft.signup_deadline == "2026-07-17 18:00"
+    assert draft.start_time == "2026-07-18 09:00"
     assert draft.end_time == "2026-07-23 18:00"
     assert draft.meeting_point == "张家界景区"
     assert draft.max_participants == "20"
@@ -1119,6 +1223,36 @@ def test_session_flow_does_not_force_home_when_already_on_my_page():
     assert activity_sessions._session_flow_is_already_open("我的笔记 我的活动 我的租车 我的卡券")
     assert activity_sessions._session_flow_is_already_open("我的活动 发布 显示下架活动")
     assert not activity_sessions._session_flow_is_already_open("首页 活动 消息 我的")
+
+
+def test_add_activity_session_prepares_home_before_opening_my_activity(monkeypatch):
+    driver = object()
+    draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 18))
+    config = object()
+    events = []
+
+    monkeypatch.setattr(activity_sessions, "dismiss_common_system_alerts", lambda received: events.append("dismiss"))
+    monkeypatch.setattr(activity_sessions, "_leave_stale_session_form", lambda received: events.append("leave-stale-form"))
+    monkeypatch.setattr(activity_sessions, "ensure_logged_in_on_home", lambda *args, **kwargs: events.append("ensure-home") or True)
+    monkeypatch.setattr(activity_sessions, "open_my_activity_publish_list", lambda *args, **kwargs: events.append("open"))
+    monkeypatch.setattr(activity_sessions, "open_manage_sessions_for_approved_activity", lambda *args, **kwargs: events.append("manage"))
+    monkeypatch.setattr(activity_sessions, "open_create_session_form", lambda *args, **kwargs: events.append("create"))
+    monkeypatch.setattr(activity_sessions, "fill_session_form", lambda *args, **kwargs: events.append("fill"))
+    monkeypatch.setattr(activity_sessions, "submit_session_form", lambda *args, **kwargs: "创建成功")
+    monkeypatch.setattr(activity_sessions, "publish_visible_activity_session_if_needed", lambda *args, **kwargs: events.append("publish") or True)
+
+    assert activity_sessions.add_activity_session(driver, draft, config) == "创建成功"
+
+    assert events == [
+        "dismiss",
+        "leave-stale-form",
+        "ensure-home",
+        "open",
+        "manage",
+        "create",
+        "fill",
+        "publish",
+    ]
 
 
 def test_add_activity_session_retries_current_page_when_home_recovery_fails(monkeypatch):
@@ -1145,7 +1279,7 @@ def test_add_activity_session_retries_current_page_when_home_recovery_fails(monk
 
     assert activity_sessions.add_activity_session(driver, draft, config) == "创建成功"
 
-    assert events == ["dismiss", ("open", 1), "ensure-home", ("open", 2), "manage", "create", "fill", "publish"]
+    assert events == ["dismiss", "ensure-home", ("open", 1), ("open", 2), "manage", "create", "fill", "publish"]
 
 
 def test_publish_visible_activity_session_taps_shelf_and_confirms(monkeypatch):
@@ -1666,6 +1800,26 @@ def test_tap_more_for_approved_activity_uses_right_side_of_top_approved_card(mon
     ]
 
 
+def test_tap_more_for_approved_activity_uses_ios_page_source_badge_y_without_element_scan(monkeypatch):
+    page_source = '<XCUIElementTypeOther visible="true" name="张家界大环线 通过" x="128" y="310" width="34" height="20" />'
+    driver = FakeDriver(page_source, width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: driver.page_source)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_approved_badge_center_ys",
+        lambda received: (_ for _ in ()).throw(AssertionError("slow badge element scan should not run")),
+    )
+    monkeypatch.setattr(activity_sessions, "_wait_until", lambda predicate, timeout: False)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is True
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 366, "y": 320}),
+    ]
+
+
 def test_tap_more_for_approved_activity_tries_next_approved_card_when_first_has_no_manage_menu(monkeypatch):
     driver = FakeDriver("我的活动 发布 显示下架活动 第一条 通过 第二条 通过", width=402, height=874)
     badge_elements = [
@@ -1699,6 +1853,23 @@ def test_tap_more_for_approved_activity_does_not_tap_default_when_ios_approved_b
     monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: page_source)
     monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
     monkeypatch.setattr(driver, "find_elements", lambda *args: [offscreen_badge], raising=False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is False
+    assert driver.scripts == []
+
+
+def test_tap_more_for_approved_activity_skips_slow_ios_scan_when_no_visible_badge(monkeypatch):
+    page_source = '<XCUIElementTypeOther visible="true" name="上海出发到杭州 通过 上架" x="128" y="-1696" width="34" height="19" />'
+    driver = FakeDriver(page_source, width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: page_source)
+    monkeypatch.setattr(
+        activity_sessions,
+        "_approved_badge_center_ys",
+        lambda received: (_ for _ in ()).throw(AssertionError("slow iOS badge scan should not run")),
+    )
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
 
     assert activity_sessions._tap_more_for_approved_activity(driver) is False
     assert driver.scripts == []

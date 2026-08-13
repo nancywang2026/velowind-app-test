@@ -1,4 +1,5 @@
 from velowind_appium.modules import message_detail
+from velowind_appium import reporting
 from pathlib import Path
 import pytest
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
@@ -29,12 +30,149 @@ def test_android_note_search_coordinate_targets_visible_header_icon(monkeypatch)
         def execute_script(script, payload):
             taps.append((script, payload))
 
-    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
     monkeypatch.setattr(message_detail, "_note_search_visible", lambda page_source: page_source == "search-visible")
     monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "search-visible")
 
     assert message_detail._tap_note_search_entry_by_coordinate(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 1004, "y": 160})]
+
+
+def test_publish_note_image_validation_records_selected_album_source(monkeypatch, tmp_path):
+    media_dir = tmp_path / "media"
+    album_dir = media_dir / "图片"
+    album_dir.mkdir(parents=True)
+    source_path = album_dir / "1.jpg"
+    source_path.write_bytes(b"original-photo")
+    artifact_dir = tmp_path / "artifacts"
+    draft = MessageNoteDraft(title="标题", body="正文", topics=[], location="", album="图片", picture_index=1)
+
+    class FakeDriver:
+        pass
+
+    monkeypatch.setenv("VW_ANDROID_MEDIA_DIR", str(media_dir))
+    monkeypatch.setenv("VW_APPIUM_ARTIFACT_DIR", str(artifact_dir))
+    driver = FakeDriver()
+
+    message_detail._record_note_selected_album_image_source(driver, draft)
+
+    copied_path = getattr(driver, "_publish_note_album_source_image_path")
+    assert copied_path.read_bytes() == b"original-photo"
+    assert copied_path.parent == artifact_dir
+    assert "图片-index-1" in copied_path.name
+    assert getattr(driver, "_publish_note_album_source_position") == "album=图片 index=1 source=1.jpg"
+
+
+def test_publish_note_image_validation_uses_album_source_path(monkeypatch, tmp_path):
+    source_path = tmp_path / "album-source.jpg"
+    source_path.write_bytes(b"source")
+    actual_path = tmp_path / "detail.png"
+    compared_paths = []
+
+    class FakeResult:
+        is_valid = True
+
+    class FakeImage:
+        size = (320, 240)
+
+        def save(self, path):
+            actual_path.write_bytes(b"actual")
+
+    class FakeDriver:
+        _publish_note_album_source_image_path = source_path
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "<hierarchy />")
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(message_detail, "find_note_detail_image_bounds", lambda page_source: object())
+    monkeypatch.setattr(message_detail, "_capture_image_bounds", lambda driver, bounds: FakeImage())
+    monkeypatch.setattr(message_detail, "_publish_note_validation_detail_path", lambda: actual_path)
+    monkeypatch.setattr(
+        message_detail,
+        "compare_images_for_publish_note",
+        lambda source, actual: compared_paths.append((source, actual)) or FakeResult(),
+    )
+
+    message_detail._validate_published_note_image_matches_uploaded_preview(FakeDriver())
+
+    assert compared_paths == [(source_path, actual_path)]
+
+
+def test_publish_note_image_validation_artifacts_are_attached_to_allure(monkeypatch, tmp_path):
+    from PIL import Image
+
+    source_path = tmp_path / "source.png"
+    detail_path = tmp_path / "detail.png"
+    artifact_dir = tmp_path / "artifacts"
+    Image.new("RGB", (10, 10), "red").save(source_path)
+    Image.new("RGB", (10, 10), "blue").save(detail_path)
+    attached = []
+
+    class FakeResult:
+        is_valid = False
+        source_size = (10, 10)
+        actual_size = (10, 10)
+        aspect_ratio_delta = 0
+        mean_pixel_delta = 255
+        reason = "pixel-delta-too-high"
+
+        def __str__(self):
+            return "fake comparison"
+
+    monkeypatch.setattr(message_detail, "_publish_note_artifact_dir", lambda: artifact_dir)
+    monkeypatch.setattr(
+        message_detail,
+        "attach_file_if_present",
+        lambda path, *, name=None, attachment_type=None: attached.append((Path(path).name, name, attachment_type)),
+        raising=False,
+    )
+    monkeypatch.setattr(message_detail.time, "time", lambda: 123)
+    attachment_type = reporting.allure.attachment_type
+
+    message_detail._save_publish_note_image_validation_artifacts(source_path, detail_path, FakeResult())
+
+    assert attached == [
+        ("source.png", "publish-note-image-validation-source.png", attachment_type.PNG),
+        ("detail.png", "publish-note-image-validation-detail.png", attachment_type.PNG),
+        ("publish-note-image-validation-123-diff.png", "publish-note-image-validation-diff.png", attachment_type.PNG),
+        ("publish-note-image-validation-123.txt", "publish-note-image-validation.txt", attachment_type.TEXT),
+    ]
+
+
+def test_publish_note_image_validation_opens_detail_image_before_capture(monkeypatch, tmp_path):
+    source_path = tmp_path / "album-source.jpg"
+    source_path.write_bytes(b"source")
+    actual_path = tmp_path / "detail.png"
+    events = []
+
+    class FakeResult:
+        is_valid = True
+
+    class FakeImage:
+        def save(self, path):
+            actual_path.write_bytes(b"actual")
+
+    class FakeDriver:
+        _publish_note_album_source_image_path = source_path
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "<hierarchy />")
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(message_detail, "find_note_detail_image_bounds", lambda page_source: "detail-bounds")
+    monkeypatch.setattr(
+        message_detail,
+        "_open_published_note_image_viewer",
+        lambda driver, bounds, timeout: events.append(("open-viewer", bounds, timeout)) or "viewer-bounds",
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_capture_image_bounds",
+        lambda driver, bounds: events.append(("capture", bounds)) or FakeImage(),
+    )
+    monkeypatch.setattr(message_detail, "_publish_note_validation_detail_path", lambda: actual_path)
+    monkeypatch.setattr(message_detail, "compare_images_for_publish_note", lambda source, actual: FakeResult())
+
+    message_detail._validate_published_note_image_matches_uploaded_preview(FakeDriver(), timeout=12)
+
+    assert events == [("open-viewer", "detail-bounds", 12), ("capture", "viewer-bounds")]
 
 
 def test_ios_note_search_entry_coordinate_defers_visibility_wait(monkeypatch):
@@ -317,6 +455,34 @@ def test_android_detail_visible_while_real_content_is_loading():
     assert message_detail.message_detail_is_visible(FakeDriver()) is True
 
 
+def test_read_android_detail_accepts_image_note_without_body_when_shell_and_actions_are_visible(monkeypatch):
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="post-detail-banner-pager" />
+      <android.widget.TextView text="耐热训练&#128545;" />
+      <android.widget.TextView text="#骑行" />
+      <android.widget.TextView text="1 天前" />
+      <android.widget.TextView text="共 5 条评论" />
+      <android.widget.TextView text="5" bounds="[751,2585][835,2657]" />
+      <android.widget.TextView text="3" bounds="[953,2585][1037,2657]" />
+      <android.widget.TextView text="5" bounds="[1154,2585][1238,2657]" />
+    </hierarchy>
+    """
+
+    class FakeDriver:
+        def __init__(self, source):
+            self.page_source = source
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    snapshot = message_detail.read_message_detail_snapshot(FakeDriver(page_source), timeout=1)
+
+    assert snapshot.title == "耐热训练😡"
+    assert snapshot.body is None
+    assert snapshot.comment_count == "5"
+    assert snapshot.bottom_action_counts == ["5", "3", "5"]
+
+
 def test_parse_android_detail_snapshot_reads_count_before_label():
     page_source = """
     <hierarchy>
@@ -336,9 +502,25 @@ def test_parse_android_detail_snapshot_reads_count_before_label():
     assert snapshot.comments == ["自动化评论0715234936"]
 
 
-def test_browse_android_detail_scrolls_to_load_view_and_comment_metadata(monkeypatch):
+def test_browse_android_detail_does_not_scroll_when_bottom_action_metadata_is_visible(monkeypatch):
     partial = message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"])
-    complete = message_detail.MessageDetailSnapshot("标题", "正文", "61", "0", [], "还没有评论", ["0", "0", "0"])
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(message_detail, "read_message_detail_snapshot", lambda driver, timeout: partial)
+    monkeypatch.setattr(message_detail, "swipe_vertical", lambda driver, direction: events.append(direction))
+
+    snapshot = message_detail.browse_note_detail(FakeDriver(), timeout=3)
+
+    assert snapshot is partial
+    assert events == []
+
+
+def test_browse_android_detail_scrolls_when_interaction_metadata_is_missing(monkeypatch):
+    partial = message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, [])
+    complete = message_detail.MessageDetailSnapshot("标题", "正文", None, "0", [], "还没有评论", ["0", "0", "0"])
     events = []
 
     class FakeDriver:
@@ -351,7 +533,6 @@ def test_browse_android_detail_scrolls_to_load_view_and_comment_metadata(monkeyp
 
     snapshot = message_detail.browse_note_detail(FakeDriver(), timeout=3)
 
-    assert snapshot.view_count == "61"
     assert snapshot.comment_count == "0"
     assert events == ["up"]
 
@@ -575,7 +756,7 @@ def test_build_changbaishan_note_draft_uses_requested_content():
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
     assert draft.location == "长白山"
-    assert draft.album == "长白山"
+    assert draft.album == "图片"
     assert draft.allow_comments is True
 
 
@@ -587,7 +768,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
     draft = load_message_note_draft("publish-note-changbaishan", testdata_path=testdata_path)
 
     assert draft.title == "测试 - 长白山真的有种让人瞬间安静下来的魔力"
-    assert draft.album == "长白山"
+    assert draft.album == "图片"
     assert draft.picture_index == 1
     assert draft.location == "长白山"
 
@@ -694,8 +875,9 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
     monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.album)))
-    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)))
-    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)))
+    monkeypatch.setattr(message_detail, "_ensure_note_source_image_recorded", lambda driver: events.append("record-image"))
+    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)) or True)
+    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)) or True)
     monkeypatch.setattr(
         message_detail,
         "_append_note_topics_to_body",
@@ -717,6 +899,7 @@ def test_fill_message_note_form_uploads_image_and_appends_topics_to_body(monkeyp
     assert events == [
         "wait-form",
         ("upload-image", draft.album),
+        "record-image",
         "wait-form",
         ("title", draft.title),
         ("body", draft.body),
@@ -738,8 +921,9 @@ def test_fill_message_note_form_skips_location_when_select_location_is_false(mon
 
     monkeypatch.setattr(message_detail, "wait_for_message_note_form", lambda driver, timeout: events.append("wait-form"))
     monkeypatch.setattr(message_detail, "_upload_note_image", lambda driver, draft: events.append(("upload-image", draft.album)))
-    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)))
-    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)))
+    monkeypatch.setattr(message_detail, "_ensure_note_source_image_recorded", lambda driver: events.append("record-image"))
+    monkeypatch.setattr(message_detail, "_fill_note_title", lambda driver, title: events.append(("title", title)) or True)
+    monkeypatch.setattr(message_detail, "_fill_note_body", lambda driver, body: events.append(("body", body)) or True)
     monkeypatch.setattr(
         message_detail,
         "_append_note_topics_to_body",
@@ -761,6 +945,7 @@ def test_fill_message_note_form_skips_location_when_select_location_is_false(mon
     assert events == [
         "wait-form",
         ("upload-image", draft.album),
+        "record-image",
         "wait-form",
         ("title", draft.title),
         ("body", draft.body),
@@ -781,6 +966,53 @@ def test_browse_note_detail_delegates_to_snapshot_reader(monkeypatch):
 
     assert message_detail.browse_note_detail(object(), timeout=18) is expected
     assert events == [("read-snapshot", 18)]
+
+
+def test_browse_note_detail_scrolls_android_when_comment_count_has_no_visible_comment(monkeypatch):
+    first_snapshot = message_detail.MessageDetailSnapshot(
+        title="出车出车",
+        body="出去玩当然要方便，这个车车太能装啦#公路车#休闲骑#户外玩耍",
+        view_count=None,
+        comment_count="1",
+        comments=[],
+        empty_comment_hint=None,
+        bottom_action_counts=["2", "1", "1"],
+    )
+    scrolled_source = """
+    <hierarchy>
+      <android.widget.TextView text="共 1 条评论" bounds="[42,320][1238,389]" />
+      <android.widget.TextView text="爱骑车的菜腿丁教练" bounds="[149,430][632,489]" />
+      <android.widget.TextView text="不错" bounds="[149,510][632,569]" />
+      <android.widget.TextView text="5 分钟前" bounds="[149,590][330,639]" />
+      <android.widget.TextView text="回复" bounds="[920,590][980,639]" />
+      <android.widget.TextView text="0" bounds="[1180,590][1220,639]" />
+      <android.widget.TextView text="2" bounds="[751,2585][835,2657]" />
+      <android.widget.TextView text="1" bounds="[953,2585][1037,2657]" />
+      <android.widget.TextView text="1" bounds="[1154,2585][1238,2657]" />
+    </hierarchy>
+    """
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(
+        message_detail,
+        "read_message_detail_snapshot",
+        lambda driver, timeout=20: first_snapshot,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "swipe_vertical",
+        lambda driver, direction="up": events.append(("swipe", direction)),
+    )
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: scrolled_source)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    snapshot = message_detail.browse_note_detail(FakeDriver(), timeout=1)
+
+    assert events == [("swipe", "up")]
+    assert snapshot.comments == ["不错"]
 
 
 def test_submit_message_note_treats_detail_page_as_success(monkeypatch):
@@ -1553,7 +1785,7 @@ def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch)
     monkeypatch.setattr(
         message_detail.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None: False,
+        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None, before_confirm_cropper=None: False,
     )
 
     try:
@@ -1571,15 +1803,21 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
     monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
     monkeypatch.setattr(message_detail, "_tap_note_image_plus", lambda driver: calls.append("tap-plus") or True)
     monkeypatch.setattr(
+        message_detail,
+        "_record_note_selected_album_image_source",
+        lambda driver, draft: calls.append(("record-source", draft.album, draft.picture_index)),
+    )
+    monkeypatch.setattr(
         message_detail.photo_picker,
         "choose_photo_from_library",
-        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None: calls.append(
+        lambda driver, album_name=None, picture_index=1, select_all_from_album=True, retry_sheet_option=None, before_confirm_cropper=None: calls.append(
             (
                 "choose-photo",
                 album_name,
                 picture_index,
                 select_all_from_album,
                 retry_sheet_option is message_detail._tap_note_photo_library_sheet_option,
+                before_confirm_cropper is None,
             )
         )
         or True,
@@ -1587,7 +1825,12 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
 
     message_detail._upload_note_image(object(), draft)
 
-    assert calls == ["clear", "tap-plus", ("choose-photo", "长白山", 1, False, True)]
+    assert calls == [
+        "clear",
+        "tap-plus",
+        ("choose-photo", draft.album, draft.picture_index, False, True, True),
+        ("record-source", draft.album, draft.picture_index),
+    ]
 
 
 def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypatch):
@@ -1613,6 +1856,7 @@ def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypa
         picture_indexes=(),
         select_all_from_album=True,
         retry_sheet_option=None,
+        before_confirm_cropper=None,
     ):
         calls.append(("choose-photo", album_name, picture_index, picture_indexes, select_all_from_album))
         if picture_indexes:
@@ -1685,6 +1929,75 @@ def test_fill_input_near_label_supports_android_edit_text_hint(monkeypatch):
 
     assert message_detail._fill_input_near_label(FakeDriver(), "标题", "洱海骑行计划") is True
     assert events == ["click", "clear", ("send-keys", "洱海骑行计划"), "hide-keyboard"]
+
+
+def test_fill_input_near_label_uses_ios_source_geometry(monkeypatch):
+    events = []
+    source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="标题" x="13" y="280" width="60" height="24" />
+      <XCUIElementTypeTextField visible="true" value="请输入标题" x="13" y="315" width="360" height="44" />
+    </AppiumAUT>
+    """
+
+    class FakeElement:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            events.append(("find", by, value))
+            if (
+                by == message_detail.AppiumBy.XPATH
+                and value == '//XCUIElementTypeTextField[@visible="true" and @x="13" and @y="315" and @width="360" and @height="44"]'
+            ):
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: source)
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    assert message_detail._fill_input_near_label(FakeDriver(), "标题", "长白山标题") is True
+    assert events == [
+        (
+            "find",
+            message_detail.AppiumBy.XPATH,
+            '//XCUIElementTypeTextField[@visible="true" and @x="13" and @y="315" and @width="360" and @height="44"]',
+        ),
+        "click",
+        "clear",
+        ("send-keys", "长白山标题"),
+        "hide-keyboard",
+    ]
+
+
+def test_replace_text_prefers_native_set_value_when_available():
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def set_value(self, value):
+            events.append(("set-value", value))
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    message_detail._replace_text(FakeElement(), "长白山标题")
+
+    assert events == ["click", "clear", ("set-value", "长白山标题")]
 
 
 def test_fill_note_body_taps_android_emulator_text_placeholder(monkeypatch):
@@ -1915,6 +2228,62 @@ def test_append_note_topics_refocuses_android_body_to_reveal_topic_action(monkey
     assert events == [
         "click-body",
         "tap-topic",
+        "click-body",
+        "clear-body",
+        ("send-keys", "第一次去长白山 #长白山 #旅行日记"),
+        "hide-keyboard",
+    ]
+
+
+def test_append_note_topics_uses_ios_body_geometry_without_topic_button(monkeypatch):
+    events = []
+    source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="正文" x="13" y="390" width="60" height="24" />
+      <XCUIElementTypeTextView visible="true" value="第一次去长白山" x="13" y="424" width="376" height="160" />
+      <XCUIElementTypeStaticText visible="true" name="#话题" x="13" y="610" width="60" height="28" />
+    </AppiumAUT>
+    """
+
+    class FakeElement:
+        def get_attribute(self, attribute):
+            if attribute == "value":
+                return "第一次去长白山"
+            return None
+
+        def click(self):
+            events.append("click-body")
+
+        def clear(self):
+            events.append("clear-body")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            events.append(("find", by, value))
+            if (
+                by == message_detail.AppiumBy.XPATH
+                and value == '//XCUIElementTypeTextView[@visible="true" and @x="13" and @y="424" and @width="376" and @height="160"]'
+            ):
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: source)
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: events.append(("tap-topic", text)) or False)
+    monkeypatch.setattr(message_detail, "_dismiss_editor_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    message_detail._append_note_topics_to_body(FakeDriver(), ["#长白山", "#旅行日记"])
+
+    assert events == [
+        (
+            "find",
+            message_detail.AppiumBy.XPATH,
+            '//XCUIElementTypeTextView[@visible="true" and @x="13" and @y="424" and @width="376" and @height="160"]',
+        ),
         "click-body",
         "clear-body",
         ("send-keys", "第一次去长白山 #长白山 #旅行日记"),
@@ -2749,6 +3118,29 @@ def test_choose_first_valid_location_from_picker_accepts_real_device_result_geom
 
     assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
     assert taps == [result_row]
+
+
+def test_choose_first_valid_location_from_picker_uses_ios_source_rect(monkeypatch):
+    taps = []
+    source = """
+    <AppiumAUT>
+      <XCUIElementTypeTextField visible="true" value="搜索地点" x="13" y="118" width="376" height="44" />
+      <XCUIElementTypeOther visible="true" name="长白山国家级自然保护区 吉林省白山市" x="13" y="196" width="376" height="82" />
+      <XCUIElementTypeOther visible="true" name="不标记地点" x="13" y="620" width="376" height="57" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: source if not taps else "发布笔记 标记地点 长白山")
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 201, "y": 237})]
 
 
 def test_find_location_results_supports_android_text_rows():

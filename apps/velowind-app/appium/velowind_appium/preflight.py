@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 import subprocess
 from typing import Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from .config import auto_detect_online_ios_udid, load_ios_config
 
@@ -26,6 +28,100 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw_value is None:
         return default
     return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_major_ios_version(platform_version: Optional[str]) -> Optional[int]:
+    if not platform_version:
+        return None
+    try:
+        return int(platform_version.split(".", 1)[0])
+    except ValueError:
+        return None
+
+
+def _remote_xpc_registry_is_reachable() -> bool:
+    try:
+        with urlopen("http://127.0.0.1:42314/remotexpc/tunnels", timeout=2) as response:
+            return 200 <= response.status < 300
+    except (OSError, URLError):
+        return False
+
+
+def _server_url_port(server_url: str) -> Optional[int]:
+    match = __import__("re").search(r":(\d+)(?:/|$)", server_url)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _listening_appium_process_has_env(port: int, env_name: str, env_value: str) -> bool:
+    try:
+        lsof_result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    for raw_pid in lsof_result.stdout.splitlines():
+        pid = raw_pid.strip()
+        if not pid:
+            continue
+        try:
+            ps_result = subprocess.run(
+                ["ps", "eww", "-p", pid],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        command = ps_result.stdout
+        if "appium" in command and f"{env_name}={env_value}" in command:
+            return True
+    return False
+
+
+def _run_real_device_transport_preflight(config) -> int:
+    if config.target != "device":
+        return 0
+
+    major_ios_version = _parse_major_ios_version(config.platform_version)
+    prefer_devicectl = os.environ.get("APPIUM_XCUITEST_PREFER_DEVICECTL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    server_port = _server_url_port(config.server_url)
+    if not prefer_devicectl and server_port is not None:
+        prefer_devicectl = _listening_appium_process_has_env(
+            server_port,
+            "APPIUM_XCUITEST_PREFER_DEVICECTL",
+            "1",
+        )
+    if not prefer_devicectl:
+        print(
+            "iOS real-device transport preflight: APPIUM_XCUITEST_PREFER_DEVICECTL=1 is required "
+            "for reliable device discovery with the current Appium/XCUITest stack."
+        )
+        print(
+            "Start Appium with: APPIUM_XCUITEST_PREFER_DEVICECTL=1 appium server "
+            "--address 127.0.0.1 --port 4723 --use-drivers=xcuitest --log-timestamp"
+        )
+        return 1
+
+    if major_ios_version is not None and major_ios_version >= 18 and not _remote_xpc_registry_is_reachable():
+        print("iOS real-device transport preflight: RemoteXPC tunnel registry is not reachable.")
+        print("Run this once in a normal Terminal and enter the macOS password when prompted:")
+        print("sudo appium driver run xcuitest tunnel-creation")
+        print("Keep that tunnel process running while executing iOS real-device Appium tests.")
+        return 1
+
+    return 0
 
 
 def is_wda_startup_error(message: str) -> bool:
@@ -172,6 +268,9 @@ def main() -> int:
     print(f"WDA signing id: {_format_config_value(config.xcode_signing_id or 'Apple Development')}")
     print(f"WDA bundle id: {_format_config_value(config.updated_wda_bundle_id)}")
     print(f"WDA allow provisioning registration: {config.allow_provisioning_device_registration}")
+    transport_status = _run_real_device_transport_preflight(config)
+    if transport_status != 0:
+        return transport_status
     return _run_wda_build_preflight(config)
 
 

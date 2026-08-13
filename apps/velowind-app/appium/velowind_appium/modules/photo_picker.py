@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import time
 from typing import Callable
+from xml.etree import ElementTree
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -15,6 +16,7 @@ from velowind_appium.actions import swipe_vertical, tap_text_if_present
 
 
 RetrySheetOption = Callable[[WebDriver], bool]
+CropperImageObserver = Callable[[WebDriver], None]
 DEFAULT_ANDROID_MEDIA_DIR = Path(__file__).resolve().parents[2] / "test-media" / "android"
 IOS_CROPPER_VISIBLE_PATTERNS = [
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -37,6 +39,7 @@ def choose_photo_from_library(
     select_all_from_album: bool = True,
     prefer_retry_sheet_option_first: bool = False,
     retry_sheet_option: RetrySheetOption | None = None,
+    before_confirm_cropper: CropperImageObserver | None = None,
 ) -> bool:
     visible = False
     if prefer_retry_sheet_option_first and retry_sheet_option is not None:
@@ -74,6 +77,8 @@ def choose_photo_from_library(
         "picture_index": picture_index,
         "select_all_from_album": select_all_from_album,
     }
+    if before_confirm_cropper is not None:
+        choose_kwargs["before_confirm_cropper"] = before_confirm_cropper
     if picture_indexes:
         choose_kwargs["picture_indexes"] = picture_indexes
     with _photo_picker_profile("choose-local-photo-primary"):
@@ -148,23 +153,28 @@ def choose_local_photo(
     picture_indexes: tuple[int, ...] = (),
     album_name: str | None = None,
     select_all_from_album: bool = True,
+    before_confirm_cropper: CropperImageObserver | None = None,
 ) -> bool:
     normalized_index = max(1, picture_index)
     normalized_indexes = _normalize_picture_indexes(picture_indexes)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
     if _is_android_gallery3d_picker(driver):
+        gallery_kwargs = {
+            "preferred_album_name": album_name,
+            "picture_index": normalized_index,
+        }
+        if before_confirm_cropper is not None:
+            gallery_kwargs["before_confirm_cropper"] = before_confirm_cropper
         if normalized_indexes:
+            gallery_kwargs["picture_indexes"] = normalized_indexes
             return _choose_local_photo_from_android_gallery3d(
                 driver,
-                preferred_album_name=album_name,
-                picture_index=normalized_index,
-                picture_indexes=normalized_indexes,
+                **gallery_kwargs,
             )
         return _choose_local_photo_from_android_gallery3d(
             driver,
-            preferred_album_name=album_name,
-            picture_index=normalized_index,
+            **gallery_kwargs,
         )
     if album_name:
         with _photo_picker_profile("open-photo-album"):
@@ -190,22 +200,31 @@ def choose_local_photo(
             if not candidate_tapped:
                 return False
         with _photo_picker_profile("confirm-system-selection"):
-            return confirm_system_photo_picker_selection(driver)
+            return _confirm_system_photo_picker_selection_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            )
     if normalized_indexes:
         with _photo_picker_profile("tap-photo-grid-candidates"):
             candidates_tapped = tap_photo_grid_candidates(driver, normalized_indexes)
         if candidates_tapped:
             with _photo_picker_profile("confirm-system-selection"):
-                return confirm_system_photo_picker_selection(driver)
+                return _confirm_system_photo_picker_selection_with_optional_observer(
+                    driver,
+                    before_confirm_cropper=before_confirm_cropper,
+                )
         return False
     with _photo_picker_profile("tap-photo-grid-candidate"):
         candidate_tapped = tap_photo_grid_candidate(driver, normalized_index)
     if candidate_tapped:
         with _photo_picker_profile("confirm-note-cropper"):
-            if confirm_note_image_cropper(driver):
+            if confirm_note_image_cropper(driver, before_confirm_cropper=before_confirm_cropper):
                 return True
         with _photo_picker_profile("confirm-system-selection"):
-            return confirm_system_photo_picker_selection(driver)
+            return _confirm_system_photo_picker_selection_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            )
     return False
 
 
@@ -216,6 +235,37 @@ def tap_photo_grid_candidates(driver: WebDriver, picture_indexes: tuple[int, ...
             tapped_any = True
             time.sleep(0.2)
     return tapped_any
+
+
+def _confirm_system_photo_picker_selection_with_optional_observer(
+    driver: WebDriver,
+    *,
+    before_confirm_cropper: CropperImageObserver | None,
+) -> bool:
+    if before_confirm_cropper is None:
+        return confirm_system_photo_picker_selection(driver)
+    return confirm_system_photo_picker_selection(driver, before_confirm_cropper=before_confirm_cropper)
+
+
+def _confirm_note_image_cropper_with_optional_observer(
+    driver: WebDriver,
+    *,
+    timeout: int,
+    before_confirm_cropper: CropperImageObserver | None,
+) -> bool:
+    if before_confirm_cropper is None:
+        return confirm_note_image_cropper(driver, timeout=timeout)
+    return confirm_note_image_cropper(driver, timeout=timeout, before_confirm_cropper=before_confirm_cropper)
+
+
+def _photo_picker_transition_completed_with_optional_observer(
+    driver: WebDriver,
+    *,
+    before_confirm_cropper: CropperImageObserver | None,
+) -> bool:
+    if before_confirm_cropper is None:
+        return _photo_picker_transition_completed(driver)
+    return _photo_picker_transition_completed(driver, before_confirm_cropper=before_confirm_cropper)
 
 
 def _normalize_picture_indexes(picture_indexes: tuple[int, ...]) -> tuple[int, ...]:
@@ -246,38 +296,53 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
             return False
         return _wait_until(lambda: bool(find_photo_grid_candidates(driver)), timeout=2)
 
-    current_title = photo_album_title(driver)
+    with _photo_picker_profile("open-photo-album-current-title"):
+        current_title = photo_album_title(driver)
     _photo_picker_debug(f"open album start; target={album_name} current={current_title}")
     if current_title == album_name:
         return True
     if current_title == "选择最多9张照片。":
-        if not _tap_photo_picker_back(driver):
+        with _photo_picker_profile("open-photo-album-leave-grid-back"):
+            left_grid = _tap_photo_picker_back(driver)
+        if not left_grid:
             _photo_picker_debug("failed to leave multi-select grid before opening requested album")
             return False
-        if not _wait_until(
-            lambda: _photo_picker_collections_visible(driver) or photo_album_title(driver) != current_title,
-            timeout=2,
-        ):
+        with _photo_picker_profile("open-photo-album-leave-grid-wait"):
+            left_grid_visible = _wait_until(
+                lambda: _photo_picker_collections_visible(driver) or photo_album_title(driver) != current_title,
+                timeout=2,
+            )
+        if not left_grid_visible:
             _photo_picker_debug(f"still on multi-select grid after back; current={photo_album_title(driver)}")
             return False
-        current_title = photo_album_title(driver)
+        with _photo_picker_profile("open-photo-album-title-after-grid"):
+            current_title = photo_album_title(driver)
         _photo_picker_debug(f"after leaving multi-select grid; current={current_title}")
     if current_title not in {None, "选择最多9张照片。"}:
-        if not _return_photo_picker_to_collections(driver, current_title=current_title):
+        with _photo_picker_profile("open-photo-album-return-collections"):
+            returned_to_collections = _return_photo_picker_to_collections(driver, current_title=current_title)
+        if not returned_to_collections:
             _photo_picker_debug(f"failed to return to collections from current={current_title}")
             return False
-        current_title = photo_album_title(driver)
+        with _photo_picker_profile("open-photo-album-title-after-return"):
+            current_title = photo_album_title(driver)
         _photo_picker_debug(f"after return to collections; current={current_title}")
-    if not switch_photo_picker_to_collections(driver, current_title=current_title):
+    with _photo_picker_profile("open-photo-album-switch-collections"):
+        switched_to_collections = switch_photo_picker_to_collections(driver, current_title=current_title)
+    if not switched_to_collections:
         _photo_picker_debug(f"failed to switch to collections; current={current_title}")
         return False
     for _ in range(4):
-        if _tap_named_element_center(driver, album_name):
-            if _wait_until(lambda: photo_album_title(driver) == album_name, timeout=2):
+        with _photo_picker_profile("open-photo-album-tap-target"):
+            tapped_album = _tap_ios_named_element_from_source(driver, album_name) or _tap_named_element_center(driver, album_name)
+        if tapped_album:
+            with _photo_picker_profile("open-photo-album-wait-target-title"):
+                target_opened = _wait_until(lambda: photo_album_title(driver) == album_name, timeout=2)
+            if target_opened:
                 _photo_picker_debug(f"opened target album={album_name}")
                 return True
         if not is_android and _swipe_ios_album_carousel_left(driver):
-            _wait_until(lambda: _tap_named_element_center(driver, album_name), timeout=1)
+            _wait_until(lambda: _tap_ios_named_element_from_source(driver, album_name) or _tap_named_element_center(driver, album_name), timeout=1)
         else:
             try:
                 swipe_vertical(driver, direction="up")
@@ -288,14 +353,19 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
     return False
 
 
-def tap_photo_grid_candidate(driver: WebDriver, picture_index: int) -> bool:
-    candidates = find_photo_grid_candidates(driver)
+def tap_photo_grid_candidate(
+    driver: WebDriver,
+    picture_index: int,
+) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    with _photo_picker_profile("find-photo-grid-candidates"):
+        candidates = find_photo_grid_candidates(driver)
     if not candidates:
         return False
     target_index = min(max(1, picture_index), len(candidates)) - 1
     candidate = candidates[target_index]
-    capabilities = getattr(driver, "capabilities", {}) or {}
-    if str(capabilities.get("platformName", "")).lower() == "ios":
+    if is_ios:
         return _tap_ios_photo_grid_candidate(driver, candidate)
     rect = _rect_snapshot(candidate)
     if rect is None:
@@ -434,15 +504,21 @@ def photo_album_title(driver: WebDriver) -> str | None:
 
 def switch_photo_picker_to_collections(driver: WebDriver, *, current_title: str | None = None) -> bool:
     if current_title is None:
-        current_title = photo_album_title(driver)
+        with _photo_picker_profile("switch-collections-current-title"):
+            current_title = photo_album_title(driver)
     if current_title == "精选集":
         return True
-    if not _tap_text_or_contains(driver, "精选集"):
+    with _photo_picker_profile("switch-collections-tap-tab"):
+        tapped_collections = _tap_ios_text_from_source(driver, "精选集") or _tap_text_or_contains(driver, "精选集")
+    if not tapped_collections:
         return False
-    return _wait_until(
-        lambda: photo_album_title(driver) == "精选集" or _visible_text_present(driver, "精选集"),
-        timeout=2,
-    )
+    with _photo_picker_profile("switch-collections-wait-visible"):
+        return _wait_until(
+            lambda: _photo_picker_collections_visible(driver)
+            or photo_album_title(driver) == "精选集"
+            or _visible_text_present(driver, "精选集"),
+            timeout=2,
+        )
 
 
 def _tap_photo_picker_back(driver: WebDriver) -> bool:
@@ -526,7 +602,12 @@ def _photo_picker_collections_visible(driver: WebDriver) -> bool:
     return any(text in page_source for text in ["精选集", "最近项目", "照片图库", "所有照片", "选择项目"])
 
 
-def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
+def confirm_note_image_cropper(
+    driver: WebDriver,
+    timeout: int = 10,
+    *,
+    before_confirm_cropper: CropperImageObserver | None = None,
+) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
     end_at = time.monotonic() + timeout
@@ -534,12 +615,22 @@ def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
         page_source = _safe_page_source(driver)
         if _cropper_visible(page_source, driver=driver):
             _photo_picker_debug(f"cropper visible; android={is_android}")
-            if _tap_cropper_confirm_button(driver) and _wait_until(
-                lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver)
-                if is_android
-                else not _cropper_visible(_safe_page_source(driver), driver=driver, allow_generic_text_fallback=False),
-                timeout=8,
-            ):
+            if before_confirm_cropper is not None:
+                before_confirm_cropper(driver)
+            with _photo_picker_profile("confirm-cropper-tap"):
+                tapped_confirm = _tap_cropper_confirm_button(driver)
+            with _photo_picker_profile("confirm-cropper-wait-exit"):
+                exited_cropper = tapped_confirm and _wait_until(
+                    lambda: _cropper_exit_confirmed(_safe_page_source(driver), driver=driver)
+                    if is_android
+                    else not _cropper_visible(
+                        _safe_page_source(driver),
+                        driver=driver,
+                        allow_generic_text_fallback=False,
+                    ),
+                    timeout=8,
+                )
+            if exited_cropper:
                 _photo_picker_debug("cropper confirm succeeded")
                 try:
                     setattr(driver, "_cropper_confirmed_once", True)
@@ -551,31 +642,60 @@ def confirm_note_image_cropper(driver: WebDriver, timeout: int = 10) -> bool:
     return False
 
 
-def confirm_system_photo_picker_selection(driver: WebDriver, timeout: int = 10) -> bool:
+def confirm_system_photo_picker_selection(
+    driver: WebDriver,
+    timeout: int = 10,
+    *,
+    before_confirm_cropper: CropperImageObserver | None = None,
+) -> bool:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
-        if _tap_photo_picker_done_button(driver) and _wait_until(
-            lambda: _photo_picker_transition_completed(driver),
-            timeout=2,
-        ):
+        with _photo_picker_profile("confirm-system-selection-tap-done"):
+            tapped_done = _tap_photo_picker_done_button(driver)
+        if not tapped_done:
+            time.sleep(0.2)
+            continue
+        with _photo_picker_profile("confirm-system-selection-wait-transition"):
+            transitioned = _wait_until(
+                lambda: _photo_picker_transition_completed_with_optional_observer(
+                    driver,
+                    before_confirm_cropper=before_confirm_cropper,
+                ),
+                timeout=2,
+            )
+        if transitioned:
             return True
         time.sleep(0.2)
     return False
 
 
-def _photo_picker_transition_completed(driver: WebDriver) -> bool:
+def _photo_picker_transition_completed(
+    driver: WebDriver,
+    *,
+    before_confirm_cropper: CropperImageObserver | None = None,
+) -> bool:
     page_source = _safe_page_source(driver)
     if not page_source:
         return False
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
     if _cropper_visible(page_source, driver=driver):
+        _photo_picker_debug(
+            "transition sees cropper; "
+            f"android={is_android} confirmed_once={getattr(driver, '_cropper_confirmed_once', False)} "
+            f"source={page_source[:240]}"
+        )
         if is_android and getattr(driver, "_cropper_confirmed_once", False) and not _android_cropper_visible(page_source):
             return True
-        return confirm_note_image_cropper(driver, timeout=5)
+        with _photo_picker_profile("transition-confirm-cropper"):
+            return _confirm_note_image_cropper_with_optional_observer(
+                driver,
+                timeout=5,
+                before_confirm_cropper=before_confirm_cropper,
+            )
     if is_android and _android_publish_selection_completed(page_source):
         return True
-    return not any(
+    completed = not any(
         text in page_source
         for text in [
             "选择最多9张照片。",
@@ -590,6 +710,8 @@ def _photo_picker_transition_completed(driver: WebDriver) -> bool:
             "发布活动",
         ]
     )
+    _photo_picker_debug(f"transition source completed={completed}; source={page_source[:240]}")
+    return completed
 
 
 def _tap_photo_source_option(driver: WebDriver, texts: list[str]) -> bool:
@@ -840,6 +962,115 @@ def _tap_text_or_contains(driver: WebDriver, text: str) -> bool:
     return False
 
 
+def _tap_ios_text_from_source(driver: WebDriver, text: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+    page_source = _safe_page_source(driver)
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        value = _ios_source_element_text(attrs)
+        if value != text:
+            continue
+        rect = _ios_source_element_rect(attrs)
+        if rect is not None:
+            candidates.append(rect)
+    if not candidates:
+        return False
+    left, top, right, bottom = min(candidates, key=lambda rect: (rect[1], rect[0]))
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
+
+
+def _tap_ios_named_element_from_source(driver: WebDriver, text: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+    page_source = _safe_page_source(driver)
+    rect = _ios_source_visible_text_rect(page_source, text)
+    if rect is None:
+        return False
+    snapshot = {"x": rect[0], "y": rect[1], "width": rect[2] - rect[0], "height": rect[3] - rect[1]}
+    if not _rect_center_inside_window(driver, snapshot):
+        _photo_picker_debug(f"skip offscreen iOS source element text={text} rect={snapshot}")
+        return False
+    return _tap_rect_center(driver, snapshot)
+
+
+def _ios_source_visible_text_rect(page_source: str, text: str) -> tuple[int, int, int, int] | None:
+    if "<XCUIElementType" not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        if _ios_source_element_text(attrs) != text:
+            continue
+        rect = _ios_source_element_rect(attrs)
+        if rect is not None:
+            candidates.append(rect)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda rect: (rect[1], rect[0]))
+
+
+def _ios_source_text_visible(driver: WebDriver, text: str) -> bool:
+    page_source = _safe_page_source(driver)
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+    return any(
+        element.attrib.get("visible") != "false"
+        and _ios_source_element_text(element.attrib) == text
+        for element in root.iter()
+    )
+
+
+def _ios_source_element_text(attributes: dict[str, str]) -> str:
+    for attribute in ("name", "label", "value"):
+        value = str(attributes.get(attribute, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _ios_source_element_rect(attributes: dict[str, str]) -> tuple[int, int, int, int] | None:
+    try:
+        left = int(float(attributes.get("x", "")))
+        top = int(float(attributes.get("y", "")))
+        width = int(float(attributes.get("width", "")))
+        height = int(float(attributes.get("height", "")))
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return left, top, left + width, top + height
+
+
 def _tap_texts_by_predicate(driver: WebDriver, texts: list[str]) -> bool:
     escaped_texts = [text.replace("\\", "\\\\").replace('"', '\\"') for text in texts]
     quoted = ", ".join(f'"{text}"' for text in escaped_texts)
@@ -914,14 +1145,31 @@ def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
 def _tap_ios_photo_grid_candidate(driver: WebDriver, candidate) -> bool:
     if _ios_photo_picker_selection_active(driver):
         return True
+    rect = _rect_snapshot(candidate)
+    if rect is not None:
+        try:
+            with _photo_picker_profile("ios-photo-candidate-rect-tap"):
+                rect_tapped = _tap_rect_center(driver, rect)
+            if rect_tapped:
+                with _photo_picker_profile("ios-photo-candidate-rect-wait"):
+                    rect_selected = _wait_until(
+                        lambda: _ios_photo_picker_selection_active(driver),
+                        timeout=0.8,
+                    )
+                if rect_selected:
+                    return True
+        except (AttributeError, WebDriverException):
+            pass
     try:
-        candidate.click()
-        if _wait_until(lambda: _ios_photo_picker_selection_active(driver), timeout=1):
+        with _photo_picker_profile("ios-photo-candidate-click"):
+            candidate.click()
+        with _photo_picker_profile("ios-photo-candidate-click-wait"):
+            click_selected = _wait_until(lambda: _ios_photo_picker_selection_active(driver), timeout=1)
+        if click_selected:
             return True
     except (AttributeError, WebDriverException):
         pass
 
-    rect = _rect_snapshot(candidate)
     if rect is None:
         return False
 
@@ -932,9 +1180,13 @@ def _tap_ios_photo_grid_candidate(driver: WebDriver, candidate) -> bool:
         (0.5, 0.35),
         (0.5, 0.65),
     ]:
-        if not _tap_rect_ratio(driver, rect, x_ratio=x_ratio, y_ratio=y_ratio):
+        with _photo_picker_profile(f"ios-photo-hotspot-tap-{x_ratio:.2f}-{y_ratio:.2f}"):
+            hotspot_tapped = _tap_rect_ratio(driver, rect, x_ratio=x_ratio, y_ratio=y_ratio)
+        if not hotspot_tapped:
             continue
-        if _wait_until(lambda: _ios_photo_picker_selection_active(driver), timeout=1):
+        with _photo_picker_profile(f"ios-photo-hotspot-wait-{x_ratio:.2f}-{y_ratio:.2f}"):
+            hotspot_selected = _wait_until(lambda: _ios_photo_picker_selection_active(driver), timeout=1)
+        if hotspot_selected:
             return True
     return False
 
@@ -958,6 +1210,8 @@ def _photo_picker_done_button_enabled(driver: WebDriver, *, page_source: str | N
     ]
     if any(pattern in source for pattern in enabled_patterns):
         return True
+    if page_source is not None and _ios_photo_picker_done_button_present_in_source(source):
+        return False
     for xpath in [
         '//*[@name="Add"]',
         '//*[@name="完成" or @label="完成" or @name="添加" or @label="添加"]',
@@ -975,12 +1229,26 @@ def _photo_picker_done_button_enabled(driver: WebDriver, *, page_source: str | N
     return False
 
 
+def _ios_photo_picker_done_button_present_in_source(page_source: str) -> bool:
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+    return any(
+        _ios_source_element_text(element.attrib) in {"Add", "完成", "添加"}
+        for element in root.iter()
+    )
+
+
 def _choose_local_photo_from_android_gallery3d(
     driver: WebDriver,
     *,
     preferred_album_name: str | None = None,
     picture_index: int = 1,
     picture_indexes: tuple[int, ...] = (),
+    before_confirm_cropper: CropperImageObserver | None = None,
 ) -> bool:
     size = _safe_window_size(driver)
     if size is None:
@@ -992,7 +1260,10 @@ def _choose_local_photo_from_android_gallery3d(
         normalized_indexes = _normalize_picture_indexes(picture_indexes)
         target_indexes = normalized_indexes or (max(1, picture_index),)
         if _tap_android_photo_selection_badges(driver, target_indexes):
-            return confirm_system_photo_picker_selection(driver)
+            return _confirm_system_photo_picker_selection_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            )
         return False
 
     album_name = preferred_album_name or _preferred_android_gallery3d_album_name()
@@ -1017,18 +1288,31 @@ def _choose_local_photo_from_android_gallery3d(
         current_page = _safe_page_source(driver)
         if _android_publish_selection_completed(current_page):
             return True
+        if _cropper_visible(current_page, driver=driver):
+            return confirm_note_image_cropper(driver, timeout=8, before_confirm_cropper=before_confirm_cropper)
         if not _tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size):
             continue
-        if _wait_until(lambda: _photo_picker_transition_completed(driver) or _cropper_visible(_safe_page_source(driver), driver=driver), timeout=2):
-            if _cropper_visible(_safe_page_source(driver), driver=driver):
-                return confirm_note_image_cropper(driver, timeout=5)
-            return True
-        if _adb_tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size) and _wait_until(
-            lambda: _photo_picker_transition_completed(driver) or _cropper_visible(_safe_page_source(driver), driver=driver),
+        if _wait_until(
+            lambda: _cropper_visible(_safe_page_source(driver), driver=driver)
+            or _photo_picker_transition_completed_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            ),
             timeout=2,
         ):
             if _cropper_visible(_safe_page_source(driver), driver=driver):
-                return confirm_note_image_cropper(driver, timeout=5)
+                return confirm_note_image_cropper(driver, timeout=5, before_confirm_cropper=before_confirm_cropper)
+            return True
+        if _adb_tap_by_ratio(driver, x_ratio=x_ratio, y_ratio=y_ratio, size=size) and _wait_until(
+            lambda: _cropper_visible(_safe_page_source(driver), driver=driver)
+            or _photo_picker_transition_completed_with_optional_observer(
+                driver,
+                before_confirm_cropper=before_confirm_cropper,
+            ),
+            timeout=2,
+        ):
+            if _cropper_visible(_safe_page_source(driver), driver=driver):
+                return confirm_note_image_cropper(driver, timeout=5, before_confirm_cropper=before_confirm_cropper)
             return True
         time.sleep(0.4)
         if _android_publish_selection_completed(_safe_page_source(driver)):

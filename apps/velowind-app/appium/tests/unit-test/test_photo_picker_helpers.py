@@ -184,6 +184,88 @@ def test_open_photo_album_enters_android_google_photos_device_folder(monkeypatch
     assert taps == [("mobile: tap", {"x": 273.0, "y": 526.0})]
 
 
+def test_open_photo_album_taps_ios_target_album_from_source_before_xpath(monkeypatch):
+    taps = []
+    titles = iter([None, "图片", "图片"])
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = """
+        <AppiumAUT>
+          <XCUIElementTypeStaticText visible="true" enabled="true" name="精选集" x="80" y="820" width="96" height="32" />
+          <XCUIElementTypeCell visible="true" enabled="true" name="图片" x="16" y="330" width="110" height="120" />
+        </AppiumAUT>
+        """
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(photo_picker, "_tap_ios_text_from_source", lambda driver, text: text == "精选集")
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: True)
+    monkeypatch.setattr(
+        photo_picker,
+        "_tap_named_element_center",
+        lambda driver, text: (_ for _ in ()).throw(AssertionError("target album should use XML rect before XPath")),
+    )
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert photo_picker.open_photo_album(FakeDriver(), "图片") is True
+    assert taps == [("mobile: tap", {"x": 71.0, "y": 390.0})]
+
+
+def test_tap_ios_text_from_source_uses_visible_rect():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = """
+        <AppiumAUT>
+          <XCUIElementTypeStaticText visible="true" enabled="true" name="精选集" x="80" y="820" width="96" height="32" />
+        </AppiumAUT>
+        """
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert photo_picker._tap_ios_text_from_source(FakeDriver(), "精选集") is True
+    assert taps == [("mobile: tap", {"x": 128, "y": 836})]
+
+
+def test_switch_photo_picker_to_collections_uses_ios_source_fast_path(monkeypatch):
+    taps = []
+    state = {"collections": False}
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @property
+        def page_source(self):
+            if state["collections"]:
+                return """
+                <AppiumAUT>
+                  <XCUIElementTypeNavigationBar visible="true">
+                    <XCUIElementTypeStaticText visible="true" enabled="true" name="精选集" />
+                  </XCUIElementTypeNavigationBar>
+                </AppiumAUT>
+                """
+            return """
+            <AppiumAUT>
+              <XCUIElementTypeStaticText visible="true" enabled="true" name="精选集" x="80" y="820" width="96" height="32" />
+            </AppiumAUT>
+            """
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+            state["collections"] = True
+
+    assert photo_picker.switch_photo_picker_to_collections(FakeDriver(), current_title="照片") is True
+    assert taps == [("mobile: tap", {"x": 128, "y": 836})]
+
+
 def test_photo_library_visible_does_not_accept_generic_photo_text(monkeypatch):
     monkeypatch.setattr(photo_picker.time, "monotonic", iter([0, 1]).__next__)
     monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
@@ -447,6 +529,7 @@ def test_tap_photo_grid_candidate_retries_ios_hotspots_until_done_enables(monkey
                 selection_state["selected"] = True
 
     monkeypatch.setattr(photo_picker, "find_photo_grid_candidates", lambda driver: [FakeElement()])
+    monkeypatch.setattr(photo_picker, "_tap_rect_center", lambda driver, rect: False)
     monkeypatch.setattr(
         photo_picker,
         "_safe_page_source",
@@ -458,6 +541,36 @@ def test_tap_photo_grid_candidate_retries_ios_hotspots_until_done_enables(monkey
         ("mobile: tap", {"x": 66.5, "y": 208.0}),
         ("mobile: tap", {"x": 46.55, "y": 208.0}),
     ]
+
+
+def test_tap_photo_grid_candidate_prefers_rect_tap_before_ios_element_click(monkeypatch):
+    events = []
+    selection_state = {"selected": False}
+
+    class FakeElement:
+        rect = {"x": 0, "y": 141, "width": 133, "height": 134}
+
+        def click(self):
+            raise AssertionError("slow iOS element click should be skipped after rect tap")
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+            selection_state["selected"] = True
+
+    monkeypatch.setattr(photo_picker, "find_photo_grid_candidates", lambda driver: [FakeElement()])
+    monkeypatch.setattr(
+        photo_picker,
+        "_safe_page_source",
+        lambda driver: 'name="Add" label="完成" enabled="true" visible="true"'
+        if selection_state["selected"]
+        else 'name="Add" label="完成" enabled="false" visible="true"',
+    )
+
+    assert photo_picker.tap_photo_grid_candidate(FakeDriver(), 1) is True
+    assert events == [("mobile: tap", {"x": 66.5, "y": 208.0})]
 
 
 def test_choose_album_photo_confirms_android_system_selection_before_cropper(monkeypatch):
@@ -648,8 +761,9 @@ def test_choose_local_photo_from_android_gallery3d_accepts_delayed_return_to_pub
 def test_confirm_system_photo_picker_selection_retries_when_done_tap_does_not_exit(monkeypatch):
     taps = []
     wait_results = iter([False, True])
+    clock = iter(range(100))
 
-    monkeypatch.setattr(photo_picker.time, "monotonic", iter([0, 1, 2]).__next__)
+    monkeypatch.setattr(photo_picker.time, "monotonic", clock.__next__)
     monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(photo_picker, "_safe_page_source", lambda driver: "照片")
     monkeypatch.setattr(photo_picker, "_tap_photo_picker_done_button", lambda driver: taps.append("done") or True)
@@ -744,6 +858,20 @@ def test_tap_photo_picker_done_button_taps_visible_enabled_add_center():
 
     assert photo_picker._tap_photo_picker_done_button(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 364.0, "y": 110.0})]
+
+
+def test_photo_picker_done_button_enabled_returns_false_for_disabled_ios_button_without_xpath_lookup():
+    class FakeDriver:
+        def find_element(self, by, value):
+            raise AssertionError("disabled Add button in XML should not fall back to slow XPath lookup")
+
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeButton name="Add" label="完成" enabled="false" visible="true" x="346" y="92" width="36" height="36" />
+    </AppiumAUT>
+    """
+
+    assert photo_picker._photo_picker_done_button_enabled(FakeDriver(), page_source=page_source) is False
 
 
 def test_tap_named_element_center_prefers_visible_ios_match():

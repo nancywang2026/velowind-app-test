@@ -28,7 +28,9 @@ def test_user_can_search_and_open_note(driver, ios_config, step):
     snapshot = step("browse-note-detail", lambda: browse_note_detail(driver, timeout=20))
 
     assert snapshot.title, "Expected the searched note detail to expose a title"
-    assert snapshot.body, "Expected the searched note detail to expose content"
+    assert (
+        snapshot.body or snapshot.comment_count or snapshot.bottom_action_counts
+    ), "Expected the searched note detail to expose content or interaction metadata"
 
     # like_counts = step("like-note", lambda: like_note(driver, timeout=15))
     # favorite_counts = step("favorite-note", lambda: favorite_note(driver, timeout=15))

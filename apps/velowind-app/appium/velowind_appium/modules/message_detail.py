@@ -6,6 +6,7 @@ import html
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 from xml.etree import ElementTree
@@ -13,6 +14,7 @@ from xml.etree import ElementTree
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
+from PIL import Image, ImageChops
 import yaml
 
 from velowind_appium.actions import (
@@ -24,6 +26,13 @@ from velowind_appium.actions import (
 )
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
+from velowind_appium.image_validation import (
+    compare_images_for_publish_note,
+    crop_image_from_screenshot,
+    find_largest_visible_image_bounds,
+    find_note_detail_image_bounds,
+)
+from velowind_appium.reporting import allure, attach_file_if_present
 import velowind_appium.modules.photo_picker as photo_picker
 from velowind_appium.modules.note_card_picker import tap_first_note_card
 
@@ -164,6 +173,8 @@ SYSTEM_MESSAGE_SKIP_TEXTS = {
     "Vertical scroll bar, 1 page",
     "Horizontal scroll bar, 1 page",
 }
+SUPPORTED_SOURCE_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+_LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS = ()
 CROPPER_VISIBLE_PATTERNS = [
     'name="publish-note-image-picker-cropper-viewport" enabled="true" visible="true"',
     'name="确认裁剪" label="确认裁剪" enabled="true" visible="true"',
@@ -325,7 +336,10 @@ def publish_message_note(
     with _note_profile("fill-form"):
         fill_message_note_form(driver, draft, timeout=timeout)
     with _note_profile("submit-note"):
-        return submit_message_note(driver, timeout=timeout)
+        success_signal = submit_message_note(driver, timeout=timeout)
+    with _note_profile("validate-published-image"):
+        _validate_published_note_image_matches_uploaded_preview(driver, timeout=min(timeout, 20))
+    return success_signal
 
 
 def open_message_note_publisher(
@@ -449,6 +463,8 @@ def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: 
 
     with _note_profile("upload-image"):
         _upload_note_image(driver, draft)
+    with _note_profile("validate-uploaded-image"):
+        _ensure_note_source_image_recorded(driver)
     with _note_profile("stabilize-form-after-upload"):
         _stabilize_android_note_form_after_upload(driver, timeout=min(timeout, 15))
     with _note_profile("fill-title"):
@@ -571,7 +587,7 @@ def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> Messag
 
         snapshot = parse_detail_snapshot(page_source)
         last_snapshot = snapshot
-        if _snapshot_is_detail_ready(snapshot):
+        if _snapshot_is_detail_ready(snapshot) or _android_image_note_detail_ready(page_source, snapshot):
             return snapshot
         time.sleep(0.2)
 
@@ -736,13 +752,19 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
     snapshot = read_message_detail_snapshot(driver, timeout=timeout)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
-    if is_android and (snapshot.view_count is None or snapshot.comment_count is None):
+    if is_android and (
+        not _android_detail_interaction_metadata_visible(snapshot)
+        or _android_detail_needs_comment_probe(snapshot)
+    ):
         swipe_vertical(driver, direction="up")
         end_at = time.monotonic() + timeout
         latest = snapshot
         while time.monotonic() < end_at:
-            latest = parse_detail_snapshot(_safe_page_source(driver))
-            if latest.view_count is not None and latest.comment_count is not None:
+            latest = _merge_detail_snapshots(snapshot, parse_detail_snapshot(_safe_page_source(driver)))
+            if (
+                _android_detail_interaction_metadata_visible(latest)
+                and not _android_detail_needs_comment_probe(latest)
+            ):
                 return latest
             time.sleep(0.2)
         return latest
@@ -1777,6 +1799,7 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
             "Photo library opened but no selectable photo was found. "
             "If this is a simulator, seed at least one image into Photos."
         )
+    _record_note_selected_album_image_source(driver, draft)
 
     if not picture_indexes:
         return
@@ -1803,6 +1826,129 @@ def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
     raise AssertionError(f"Expected {expected_count} note images after upload, got {_note_selected_image_count(driver)}")
 
 
+def _ensure_note_source_image_recorded(driver: WebDriver) -> None:
+    source_path = getattr(driver, "_publish_note_album_source_image_path", None)
+    if source_path is None:
+        raise AssertionError("Selected album image source was not recorded before publishing")
+    if not Path(source_path).exists():
+        raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
+
+
+def _validate_published_note_image_matches_uploaded_preview(driver: WebDriver, *, timeout: int = 20) -> None:
+    source_path = getattr(driver, "_publish_note_album_source_image_path", None)
+    if source_path is None:
+        raise AssertionError("Selected album image source was not recorded before publishing")
+    source_path = Path(source_path)
+    if not source_path.exists():
+        raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
+    if not _wait_until(lambda: find_note_detail_image_bounds(_safe_page_source(driver)) is not None, timeout=timeout):
+        raise AssertionError("Unable to locate the published note detail image for pixel validation")
+
+    bounds = find_note_detail_image_bounds(_safe_page_source(driver))
+    if bounds is None:
+        raise AssertionError("Unable to locate the published note detail image for pixel validation")
+    image_bounds = _open_published_note_image_viewer(driver, bounds, timeout=timeout)
+    detail_image = _capture_image_bounds(driver, image_bounds)
+    detail_path = _publish_note_validation_detail_path()
+    detail_path.parent.mkdir(parents=True, exist_ok=True)
+    detail_image.save(detail_path)
+    result = compare_images_for_publish_note(source_path, detail_path)
+    if not result.is_valid:
+        attachments = _save_publish_note_image_validation_artifacts(source_path, detail_path, result)
+        setattr(driver, "_publish_note_image_validation_artifacts", attachments)
+        raise AssertionError(f"Published note image does not match the selected album image: {result}")
+
+
+def _open_published_note_image_viewer(driver: WebDriver, bounds, *, timeout: int):
+    if not _tap_image_bounds_center(driver, bounds):
+        return bounds
+    if not _wait_until(lambda: find_largest_visible_image_bounds(_safe_page_source(driver)) is not None, timeout=min(timeout, 5)):
+        return bounds
+    viewer_bounds = find_largest_visible_image_bounds(_safe_page_source(driver))
+    return viewer_bounds or bounds
+
+
+def _tap_image_bounds_center(driver: WebDriver, bounds) -> bool:
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(bounds.x + bounds.width / 2),
+                "y": int(bounds.y + bounds.height / 2),
+            },
+        )
+        return True
+    except (AttributeError, TypeError, WebDriverException):
+        return False
+
+
+def _capture_image_bounds(driver: WebDriver, bounds):
+    try:
+        screenshot_png = driver.get_screenshot_as_png()
+        window = driver.get_window_size()
+    except (AttributeError, KeyError, TypeError, WebDriverException) as error:
+        raise AssertionError("Unable to capture note image for pixel validation") from error
+
+    return crop_image_from_screenshot(
+        screenshot_png,
+        bounds,
+        window_size=(int(window["width"]), int(window["height"])),
+    )
+
+
+def _publish_note_artifact_dir() -> Path:
+    return Path(os.environ.get("VW_APPIUM_ARTIFACT_DIR", ".tmp/appium-ios-device")).expanduser()
+
+
+def _publish_note_validation_detail_path() -> Path:
+    artifact_dir = _publish_note_artifact_dir()
+    base_name = f"publish-note-image-validation-{int(time.time())}"
+    return artifact_dir / f"{base_name}-detail-image.png"
+
+
+def _save_publish_note_image_validation_artifacts(source_path: Path, detail_path: Path, result):
+    global _LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS
+    artifact_dir = _publish_note_artifact_dir()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"publish-note-image-validation-{int(time.time())}"
+    diff_path = artifact_dir / f"{base_name}-diff.png"
+    summary_path = artifact_dir / f"{base_name}.txt"
+    with Image.open(source_path) as source_image, Image.open(detail_path) as detail_image:
+        source = source_image.convert("RGB")
+        detail = detail_image.convert("RGB")
+        diff_source = source.resize(detail.size)
+        ImageChops.difference(diff_source, detail).save(diff_path)
+    summary_path.write_text(
+        "\n".join(
+            [
+                f"source_path={source_path}",
+                f"detail_path={detail_path}",
+                f"comparison={result}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    attachments = (
+        (source_path, "publish-note-image-validation-source.png", allure.attachment_type.PNG),
+        (detail_path, "publish-note-image-validation-detail.png", allure.attachment_type.PNG),
+        (diff_path, "publish-note-image-validation-diff.png", allure.attachment_type.PNG),
+        (summary_path, "publish-note-image-validation.txt", allure.attachment_type.TEXT),
+    )
+    _LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS = attachments
+    _attach_publish_note_image_validation_artifacts(attachments)
+    return attachments
+
+
+def attach_recorded_publish_note_image_validation_artifacts(driver: WebDriver) -> None:
+    attachments = getattr(driver, "_publish_note_image_validation_artifacts", ()) or _LAST_PUBLISH_NOTE_IMAGE_VALIDATION_ARTIFACTS
+    _attach_publish_note_image_validation_artifacts(attachments)
+
+
+def _attach_publish_note_image_validation_artifacts(attachments) -> None:
+    for path, name, attachment_type in attachments:
+        attach_file_if_present(path, name=name, attachment_type=attachment_type)
+
+
 def _choose_note_image_from_library(
     driver: WebDriver,
     *,
@@ -1826,6 +1972,67 @@ def _choose_note_image_from_library(
         kwargs["picture_indexes"] = picture_indexes
     with _note_profile("upload-choose-photo-library"):
         return photo_picker.choose_photo_from_library(driver, **kwargs)
+
+
+def _record_note_cropper_image(driver: WebDriver) -> None:
+    bounds = find_largest_visible_image_bounds(_safe_page_source(driver))
+    if bounds is None:
+        return
+    setattr(driver, "_publish_note_uploaded_preview_image", _capture_image_bounds(driver, bounds))
+
+
+def _record_note_selected_album_image_source(driver: WebDriver, draft: MessageNoteDraft) -> None:
+    source_path = _resolve_note_selected_album_image_source(draft)
+    selected_index = _selected_note_picture_index(draft)
+    if source_path is None:
+        album = draft.album or "<default>"
+        raise AssertionError(f"Unable to resolve selected album image source: album={album} index={selected_index}")
+
+    artifact_dir = _publish_note_artifact_dir()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    album_label = _safe_artifact_name(draft.album or "default-album")
+    copied_path = artifact_dir / f"publish-note-album-source-{album_label}-index-{selected_index}-{source_path.name}"
+    shutil.copy2(source_path, copied_path)
+    setattr(driver, "_publish_note_album_source_image_path", copied_path)
+    setattr(
+        driver,
+        "_publish_note_album_source_position",
+        f"album={draft.album or '<default>'} index={selected_index} source={source_path.name}",
+    )
+
+
+def _resolve_note_selected_album_image_source(draft: MessageNoteDraft) -> Path | None:
+    media_dir = _note_source_media_dir()
+    selected_index = _selected_note_picture_index(draft)
+    source_dir = media_dir / draft.album if draft.album else media_dir
+    if not source_dir.exists() or not source_dir.is_dir():
+        return None
+    source_files = sorted(
+        path
+        for path in source_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SOURCE_IMAGE_SUFFIXES
+    )
+    if selected_index < 1 or selected_index > len(source_files):
+        return None
+    return source_files[selected_index - 1]
+
+
+def _selected_note_picture_index(draft: MessageNoteDraft) -> int:
+    picture_indexes = _normalize_picture_indexes(draft.picture_indexes)
+    if picture_indexes:
+        return picture_indexes[0]
+    return max(1, int(draft.picture_index or 1))
+
+
+def _note_source_media_dir() -> Path:
+    raw_value = os.environ.get("VW_ANDROID_MEDIA_DIR", "").strip()
+    if raw_value:
+        return Path(raw_value).expanduser()
+    return photo_picker.DEFAULT_ANDROID_MEDIA_DIR
+
+
+def _safe_artifact_name(value: str) -> str:
+    return re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("_") or "image"
 
 
 def _tap_note_photo_library_sheet_option(driver: WebDriver) -> bool:
@@ -1950,6 +2157,8 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
     if not topics:
         return
     platform_name = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower()
+    if platform_name == "ios" and _append_note_topics_to_ios_body_by_source(driver, topics):
+        return
     topic_action_visible = _tap_text_or_contains(driver, "#话题") or _tap_text_or_contains(driver, "话题")
     if not topic_action_visible:
         if platform_name == "android":
@@ -1980,6 +2189,21 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to append topics to the note body")
+
+
+def _append_note_topics_to_ios_body_by_source(driver: WebDriver, topics: list[str]) -> bool:
+    element = _find_ios_input_from_page_source_geometry(driver, "正文", prefer_text_view=True)
+    if element is None:
+        return False
+    existing_body = _text_input_current_value(element)
+    missing_topics = [topic for topic in topics if topic not in existing_body]
+    if not missing_topics:
+        _dismiss_editor_keyboard(driver)
+        return True
+    combined_body = f"{existing_body.rstrip()} {' '.join(missing_topics)}".strip()
+    _replace_text(element, combined_body)
+    _dismiss_editor_keyboard(driver)
+    return True
 
 
 def _focus_android_note_body_for_topic_action(driver: WebDriver) -> bool:
@@ -2458,12 +2682,17 @@ def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
 def _fill_note_location(driver: WebDriver, location: str) -> None:
     if _should_skip_note_location(location):
         return
-    _prepare_note_location_section(driver)
-    if _open_note_location_picker(driver):
-        if _choose_note_location_option(driver, location):
-            return
-        if _choose_note_location_option(driver, location):
-            return
+    with _note_profile("fill-location-prepare-section"):
+        _prepare_note_location_section(driver)
+    with _note_profile("fill-location-open-picker"):
+        picker_opened = _open_note_location_picker(driver)
+    if picker_opened:
+        with _note_profile("fill-location-choose-option-primary"):
+            if _choose_note_location_option(driver, location):
+                return
+        with _note_profile("fill-location-choose-option-retry"):
+            if _choose_note_location_option(driver, location):
+                return
     raise AssertionError("Unable to select a note location option")
 
 
@@ -2698,9 +2927,15 @@ def _android_location_search_ready(driver: WebDriver) -> bool:
 
 
 def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
-    result_elements = _find_location_result_elements(driver)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if not is_android and _tap_first_ios_location_result_from_source(driver):
+        return _wait_until(
+            lambda: not _location_picker_visible(_safe_page_source(driver)),
+            timeout=3,
+        )
+
+    result_elements = _find_location_result_elements(driver)
     for element in result_elements:
         if _tap_location_result(driver, element) and _wait_until(
             lambda: not _location_picker_visible(_safe_page_source(driver)),
@@ -2724,6 +2959,49 @@ def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
                 return True
         return False
     return False
+
+
+def _tap_first_ios_location_result_from_source(driver: WebDriver) -> bool:
+    result_rect = _first_ios_location_result_rect_from_source(_safe_page_source(driver))
+    if result_rect is None:
+        return False
+    left, top, right, bottom = result_rect
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
+
+
+def _first_ios_location_result_rect_from_source(page_source: str) -> tuple[int, int, int, int] | None:
+    if "<XCUIElementType" not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    candidates: list[tuple[int, int, tuple[int, int, int, int]]] = []
+    for element in root.iter():
+        if element.tag not in {"XCUIElementTypeOther", "XCUIElementTypeStaticText"}:
+            continue
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attrs)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        name = _source_element_text(attrs)
+        if not _looks_like_location_result(name, {"x": left, "y": top, "width": right - left, "height": bottom - top}):
+            continue
+        candidates.append((top, left, rect))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (item[0], item[1]))[0][2]
 
 
 def _tap_android_location_result_row(driver: WebDriver, element) -> bool:
@@ -2981,6 +3259,16 @@ def _fill_input_near_label(
         except (NoSuchElementException, WebDriverException):
             pass
 
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        element = _find_ios_input_from_page_source_geometry(driver, keyword, prefer_text_view=prefer_text_view)
+        if element is not None:
+            try:
+                _replace_text(element, value)
+                _hide_keyboard(driver)
+                return True
+            except WebDriverException:
+                pass
+
     element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"] if prefer_text_view else [
         "XCUIElementTypeTextField",
         "XCUIElementTypeTextView",
@@ -2997,6 +3285,99 @@ def _fill_input_near_label(
             except (NoSuchElementException, WebDriverException):
                 continue
     return False
+
+
+def _find_ios_input_from_page_source_geometry(
+    driver: WebDriver,
+    keyword: str,
+    *,
+    prefer_text_view: bool = False,
+):
+    page_source = _safe_page_source(driver)
+    target = _ios_input_target_from_page_source(page_source, keyword, prefer_text_view=prefer_text_view)
+    if target is None:
+        return None
+    element_type, rect = target
+    xpath = _ios_element_xpath_for_rect(element_type, rect)
+    try:
+        return driver.find_element(AppiumBy.XPATH, xpath)
+    except (NoSuchElementException, WebDriverException, AttributeError):
+        return None
+
+
+def _ios_input_target_from_page_source(
+    page_source: str,
+    keyword: str,
+    *,
+    prefer_text_view: bool = False,
+) -> tuple[str, dict[str, str]] | None:
+    if "<XCUIElementType" not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    labels: list[tuple[int, int, int, int]] = []
+    fields: list[tuple[str, tuple[int, int, int, int], dict[str, str]]] = []
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attrs)
+        if rect is None:
+            continue
+        tag_name = element.tag.rsplit("}", 1)[-1]
+        text = _source_element_text(attrs)
+        if keyword in text:
+            labels.append(rect)
+        if tag_name in {"XCUIElementTypeTextField", "XCUIElementTypeTextView"}:
+            fields.append((tag_name, rect, attrs))
+
+    candidates: list[tuple[int, int, str, dict[str, str]]] = []
+    for label_rect in labels:
+        for element_type, field_rect, attrs in fields:
+            distance = _ios_input_label_distance(label_rect, field_rect)
+            if distance is None:
+                continue
+            type_rank = 0 if (
+                (prefer_text_view and element_type == "XCUIElementTypeTextView")
+                or (not prefer_text_view and element_type == "XCUIElementTypeTextField")
+            ) else 1
+            rect_attrs = {key: attrs[key] for key in ("x", "y", "width", "height") if key in attrs}
+            if len(rect_attrs) != 4:
+                continue
+            candidates.append((distance, type_rank, element_type, rect_attrs))
+    if not candidates:
+        return None
+    _distance, _type_rank, element_type, rect_attrs = sorted(candidates, key=lambda item: (item[0], item[1]))[0]
+    return element_type, rect_attrs
+
+
+def _ios_input_label_distance(
+    label_rect: tuple[int, int, int, int],
+    field_rect: tuple[int, int, int, int],
+) -> int | None:
+    label_left, label_top, label_right, label_bottom = label_rect
+    field_left, field_top, field_right, field_bottom = field_rect
+    if field_bottom < label_top:
+        return None
+    vertical_gap = max(0, field_top - label_bottom)
+    horizontal_gap = 0
+    if field_right < label_left:
+        horizontal_gap = label_left - field_right
+    elif label_right < field_left:
+        horizontal_gap = field_left - label_right
+    if vertical_gap > 220 or horizontal_gap > 260:
+        return None
+    return vertical_gap * 1000 + horizontal_gap
+
+
+def _ios_element_xpath_for_rect(element_type: str, rect: dict[str, str]) -> str:
+    return (
+        f'//{element_type}[@visible="true" and @x="{rect["x"]}" and @y="{rect["y"]}" '
+        f'and @width="{rect["width"]}" and @height="{rect["height"]}"]'
+    )
 
 
 def _fill_first_available_text_input(driver: WebDriver, value: str) -> bool:
@@ -3020,6 +3401,11 @@ def _replace_text(element, value: str) -> None:
     try:
         element.clear()
     except WebDriverException:
+        pass
+    try:
+        element.set_value(value)
+        return
+    except (AttributeError, WebDriverException):
         pass
     element.send_keys(value)
 
@@ -3359,7 +3745,11 @@ def _extract_android_comments(page_source: str) -> list[str]:
             for entry in entries
             if abs(entry[1] - left) <= 30 and 0 < entry[2] - top <= 120
         ]
-        if text == "Nancy" and below_texts:
+        if (
+            below_texts
+            and not ANDROID_COMMENT_TIME_PATTERN.fullmatch(below_texts[0])
+            and not any(marker in text for marker in ("：", ":", "不错", "好", "赞"))
+        ):
             continue
         comments.append(text)
     return _dedupe_preserve_order(comments)
@@ -3456,9 +3846,44 @@ def _android_bottom_action_entries(page_source: str) -> list[tuple[str, int, int
 def _snapshot_is_detail_ready(snapshot: MessageDetailSnapshot) -> bool:
     if not snapshot.title or not snapshot.body:
         return False
+    return _android_detail_interaction_metadata_visible(snapshot) or bool(snapshot.view_count and snapshot.comment_count)
+
+
+def _android_image_note_detail_ready(page_source: str, snapshot: MessageDetailSnapshot) -> bool:
     return bool(
-        (snapshot.view_count and snapshot.comment_count)
-        or len(snapshot.bottom_action_counts) >= 3
+        "<android." in page_source
+        and _detail_shell_is_visible(page_source)
+        and snapshot.title
+        and not snapshot.body
+        and _android_detail_interaction_metadata_visible(snapshot)
+    )
+
+
+def _android_detail_interaction_metadata_visible(snapshot: MessageDetailSnapshot) -> bool:
+    return bool(snapshot.comment_count or len(snapshot.bottom_action_counts) >= 3)
+
+
+def _android_detail_needs_comment_probe(snapshot: MessageDetailSnapshot) -> bool:
+    return bool(
+        snapshot.comment_count
+        and snapshot.comment_count != "0"
+        and not snapshot.comments
+        and not snapshot.empty_comment_hint
+    )
+
+
+def _merge_detail_snapshots(
+    first: MessageDetailSnapshot,
+    latest: MessageDetailSnapshot,
+) -> MessageDetailSnapshot:
+    return MessageDetailSnapshot(
+        title=latest.title or first.title,
+        body=latest.body or first.body,
+        view_count=latest.view_count or first.view_count,
+        comment_count=latest.comment_count or first.comment_count,
+        comments=_dedupe_preserve_order([*first.comments, *latest.comments]),
+        empty_comment_hint=latest.empty_comment_hint or first.empty_comment_hint,
+        bottom_action_counts=latest.bottom_action_counts or first.bottom_action_counts,
     )
 
 

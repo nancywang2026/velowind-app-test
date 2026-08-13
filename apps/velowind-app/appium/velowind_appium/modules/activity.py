@@ -1121,6 +1121,15 @@ def _fill_input_near_label(
         return False
 
     if "<XCUIElementType" in page_source:
+        if _fill_ios_input_from_page_source_geometry(
+            driver,
+            keyword,
+            value,
+            page_source,
+            prefer_text_view=prefer_text_view,
+            overwrite_existing=overwrite_existing,
+        ):
+            return True
         return _fill_ios_input_near_visible_label(
             driver,
             keyword,
@@ -1199,6 +1208,99 @@ def _fill_ios_input_near_visible_label(
         except (WebDriverException, AttributeError):
             continue
     return False
+
+
+def _fill_ios_input_from_page_source_geometry(
+    driver: WebDriver,
+    keyword: str,
+    value: str,
+    page_source: str,
+    *,
+    prefer_text_view: bool = False,
+    overwrite_existing: bool = True,
+) -> bool:
+    target = _ios_input_target_from_page_source(page_source, keyword, prefer_text_view=prefer_text_view)
+    if target is None:
+        return False
+    element_type, rect = target
+    xpath = _ios_element_xpath_for_rect(element_type, rect)
+    try:
+        element = driver.find_element(AppiumBy.XPATH, xpath)
+        if not overwrite_existing and _field_has_user_value(element):
+            return True
+        _replace_text(element, value)
+        _hide_keyboard(driver)
+        return True
+    except (NoSuchElementException, WebDriverException, AttributeError):
+        return False
+
+
+def _ios_input_target_from_page_source(
+    page_source: str,
+    keyword: str,
+    *,
+    prefer_text_view: bool = False,
+) -> tuple[str, dict[str, str]] | None:
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return None
+
+    labels = []
+    fields = []
+    field_types = {"XCUIElementTypeTextView", "XCUIElementTypeTextField"} if prefer_text_view else {
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeTextView",
+    }
+    for element in root.iter():
+        if element.attrib.get("visible") != "true":
+            continue
+        text = _element_text(element)
+        rect = _ios_rect_from_attrs(element.attrib)
+        if rect is None:
+            continue
+        tag_name = element.tag.rsplit("}", 1)[-1]
+        if keyword in text:
+            labels.append(rect)
+        if tag_name in field_types:
+            fields.append((tag_name, rect))
+
+    candidates = []
+    for label_rect in labels:
+        for element_type, field_rect in fields:
+            distance = _ios_input_label_distance(label_rect, field_rect)
+            if distance is None:
+                continue
+            type_rank = 0 if (
+                prefer_text_view and element_type == "XCUIElementTypeTextView"
+                or not prefer_text_view and element_type == "XCUIElementTypeTextField"
+            ) else 1
+            candidates.append((distance, type_rank, element_type, field_rect))
+    if not candidates:
+        return None
+    _distance, _type_rank, element_type, rect = sorted(candidates, key=lambda item: (item[0], item[1]))[0]
+    return element_type, rect
+
+
+def _ios_rect_from_attrs(attrs: dict[str, str]) -> dict[str, str] | None:
+    rect = {}
+    for key in ["x", "y", "width", "height"]:
+        value = attrs.get(key)
+        if value is None:
+            return None
+        try:
+            float(value)
+        except ValueError:
+            return None
+        rect[key] = value
+    return rect
+
+
+def _ios_element_xpath_for_rect(element_type: str, rect: dict[str, str]) -> str:
+    return (
+        f'//{element_type}[@visible="true" and @x="{rect["x"]}" and @y="{rect["y"]}" '
+        f'and @width="{rect["width"]}" and @height="{rect["height"]}"]'
+    )
 
 
 def _find_ios_visible_elements_containing(driver: WebDriver, keyword: str):

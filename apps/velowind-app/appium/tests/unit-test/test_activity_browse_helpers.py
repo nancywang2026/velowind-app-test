@@ -153,6 +153,19 @@ def test_activity_card_tap_points_include_android_metric_container_when_title_is
     assert activity_browse._activity_card_tap_points(page_source) == [(540, 950), (540, 1043)]
 
 
+def test_ios_activity_card_tap_points_prefer_text_area_below_cover_image():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="张家界大环线2天1晚 浙江省·张家界市 Nancy 骑行 总里程 128 时长 2天1晚 场次 2场 难度等级" visible="true" x="13" y="119" width="376" height="283" />
+    </AppiumAUT>
+    """
+
+    points = activity_browse._activity_card_tap_points(page_source)
+
+    assert points[0] == (201, 322)
+    assert points[1] == (201, 368)
+
+
 def test_activity_feed_uses_category_tag_row_to_match_results():
     page_source = """
     <AppiumAUT>
@@ -395,6 +408,32 @@ def test_parse_activity_detail_snapshot_accepts_android_route_tab_and_empty_sess
     snapshot = activity_browse.parse_activity_detail_snapshot(page_source)
 
     assert snapshot.route_visible is True
+    assert snapshot.sessions_visible is True
+    assert snapshot.is_basic_detail_complete()
+
+
+def test_parse_activity_detail_snapshot_accepts_android_numbered_session_label():
+    page_source = """
+    <hierarchy>
+      <android.widget.FrameLayout resource-id="activity-route-detail-v3-hero-carousel" displayed="true" />
+      <android.widget.ImageView resource-id="image" displayed="true" />
+      <android.widget.TextView text="千岛湖 · 水陆双栖 · 两天一晚" displayed="true" bounds="[0,249][522,315]" />
+      <android.widget.TextView text="浙江省·杭州市" displayed="true" />
+      <android.widget.TextView text="去有光的地方" displayed="true" />
+      <android.widget.TextView text="路线主理人" displayed="true" />
+      <android.widget.TextView text="总里程" displayed="true" />
+      <android.widget.TextView text="参考时长" displayed="true" />
+      <android.widget.TextView text="风险等级" displayed="true" />
+      <android.widget.TextView text="风景标签" displayed="true" />
+      <android.widget.TextView text="沿途景点" displayed="true" />
+      <android.widget.TextView text="路线说明" displayed="true" />
+      <android.widget.TextView text="活动评论" displayed="true" />
+      <android.widget.TextView text="场次1" displayed="true" />
+    </hierarchy>
+    """
+
+    snapshot = activity_browse.parse_activity_detail_snapshot(page_source)
+
     assert snapshot.sessions_visible is True
     assert snapshot.is_basic_detail_complete()
 
