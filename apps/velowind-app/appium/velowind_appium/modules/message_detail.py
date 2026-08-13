@@ -752,13 +752,19 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
     snapshot = read_message_detail_snapshot(driver, timeout=timeout)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
-    if is_android and not _android_detail_interaction_metadata_visible(snapshot):
+    if is_android and (
+        not _android_detail_interaction_metadata_visible(snapshot)
+        or _android_detail_needs_comment_probe(snapshot)
+    ):
         swipe_vertical(driver, direction="up")
         end_at = time.monotonic() + timeout
         latest = snapshot
         while time.monotonic() < end_at:
-            latest = parse_detail_snapshot(_safe_page_source(driver))
-            if _android_detail_interaction_metadata_visible(latest):
+            latest = _merge_detail_snapshots(snapshot, parse_detail_snapshot(_safe_page_source(driver)))
+            if (
+                _android_detail_interaction_metadata_visible(latest)
+                and not _android_detail_needs_comment_probe(latest)
+            ):
                 return latest
             time.sleep(0.2)
         return latest
@@ -2151,6 +2157,8 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
     if not topics:
         return
     platform_name = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower()
+    if platform_name == "ios" and _append_note_topics_to_ios_body_by_source(driver, topics):
+        return
     topic_action_visible = _tap_text_or_contains(driver, "#话题") or _tap_text_or_contains(driver, "话题")
     if not topic_action_visible:
         if platform_name == "android":
@@ -2181,6 +2189,21 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to append topics to the note body")
+
+
+def _append_note_topics_to_ios_body_by_source(driver: WebDriver, topics: list[str]) -> bool:
+    element = _find_ios_input_from_page_source_geometry(driver, "正文", prefer_text_view=True)
+    if element is None:
+        return False
+    existing_body = _text_input_current_value(element)
+    missing_topics = [topic for topic in topics if topic not in existing_body]
+    if not missing_topics:
+        _dismiss_editor_keyboard(driver)
+        return True
+    combined_body = f"{existing_body.rstrip()} {' '.join(missing_topics)}".strip()
+    _replace_text(element, combined_body)
+    _dismiss_editor_keyboard(driver)
+    return True
 
 
 def _focus_android_note_body_for_topic_action(driver: WebDriver) -> bool:
@@ -2659,12 +2682,17 @@ def _choose_first_option(driver: WebDriver, preferred_texts: list[str]) -> bool:
 def _fill_note_location(driver: WebDriver, location: str) -> None:
     if _should_skip_note_location(location):
         return
-    _prepare_note_location_section(driver)
-    if _open_note_location_picker(driver):
-        if _choose_note_location_option(driver, location):
-            return
-        if _choose_note_location_option(driver, location):
-            return
+    with _note_profile("fill-location-prepare-section"):
+        _prepare_note_location_section(driver)
+    with _note_profile("fill-location-open-picker"):
+        picker_opened = _open_note_location_picker(driver)
+    if picker_opened:
+        with _note_profile("fill-location-choose-option-primary"):
+            if _choose_note_location_option(driver, location):
+                return
+        with _note_profile("fill-location-choose-option-retry"):
+            if _choose_note_location_option(driver, location):
+                return
     raise AssertionError("Unable to select a note location option")
 
 
@@ -2899,9 +2927,15 @@ def _android_location_search_ready(driver: WebDriver) -> bool:
 
 
 def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
-    result_elements = _find_location_result_elements(driver)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if not is_android and _tap_first_ios_location_result_from_source(driver):
+        return _wait_until(
+            lambda: not _location_picker_visible(_safe_page_source(driver)),
+            timeout=3,
+        )
+
+    result_elements = _find_location_result_elements(driver)
     for element in result_elements:
         if _tap_location_result(driver, element) and _wait_until(
             lambda: not _location_picker_visible(_safe_page_source(driver)),
@@ -2925,6 +2959,49 @@ def _choose_first_valid_location_from_picker(driver: WebDriver) -> bool:
                 return True
         return False
     return False
+
+
+def _tap_first_ios_location_result_from_source(driver: WebDriver) -> bool:
+    result_rect = _first_ios_location_result_rect_from_source(_safe_page_source(driver))
+    if result_rect is None:
+        return False
+    left, top, right, bottom = result_rect
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
+
+
+def _first_ios_location_result_rect_from_source(page_source: str) -> tuple[int, int, int, int] | None:
+    if "<XCUIElementType" not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    candidates: list[tuple[int, int, tuple[int, int, int, int]]] = []
+    for element in root.iter():
+        if element.tag not in {"XCUIElementTypeOther", "XCUIElementTypeStaticText"}:
+            continue
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attrs)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        name = _source_element_text(attrs)
+        if not _looks_like_location_result(name, {"x": left, "y": top, "width": right - left, "height": bottom - top}):
+            continue
+        candidates.append((top, left, rect))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (item[0], item[1]))[0][2]
 
 
 def _tap_android_location_result_row(driver: WebDriver, element) -> bool:
@@ -3182,6 +3259,16 @@ def _fill_input_near_label(
         except (NoSuchElementException, WebDriverException):
             pass
 
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        element = _find_ios_input_from_page_source_geometry(driver, keyword, prefer_text_view=prefer_text_view)
+        if element is not None:
+            try:
+                _replace_text(element, value)
+                _hide_keyboard(driver)
+                return True
+            except WebDriverException:
+                pass
+
     element_types = ["XCUIElementTypeTextView", "XCUIElementTypeTextField"] if prefer_text_view else [
         "XCUIElementTypeTextField",
         "XCUIElementTypeTextView",
@@ -3198,6 +3285,99 @@ def _fill_input_near_label(
             except (NoSuchElementException, WebDriverException):
                 continue
     return False
+
+
+def _find_ios_input_from_page_source_geometry(
+    driver: WebDriver,
+    keyword: str,
+    *,
+    prefer_text_view: bool = False,
+):
+    page_source = _safe_page_source(driver)
+    target = _ios_input_target_from_page_source(page_source, keyword, prefer_text_view=prefer_text_view)
+    if target is None:
+        return None
+    element_type, rect = target
+    xpath = _ios_element_xpath_for_rect(element_type, rect)
+    try:
+        return driver.find_element(AppiumBy.XPATH, xpath)
+    except (NoSuchElementException, WebDriverException, AttributeError):
+        return None
+
+
+def _ios_input_target_from_page_source(
+    page_source: str,
+    keyword: str,
+    *,
+    prefer_text_view: bool = False,
+) -> tuple[str, dict[str, str]] | None:
+    if "<XCUIElementType" not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    labels: list[tuple[int, int, int, int]] = []
+    fields: list[tuple[str, tuple[int, int, int, int], dict[str, str]]] = []
+    for element in root.iter():
+        attrs = element.attrib
+        if attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attrs)
+        if rect is None:
+            continue
+        tag_name = element.tag.rsplit("}", 1)[-1]
+        text = _source_element_text(attrs)
+        if keyword in text:
+            labels.append(rect)
+        if tag_name in {"XCUIElementTypeTextField", "XCUIElementTypeTextView"}:
+            fields.append((tag_name, rect, attrs))
+
+    candidates: list[tuple[int, int, str, dict[str, str]]] = []
+    for label_rect in labels:
+        for element_type, field_rect, attrs in fields:
+            distance = _ios_input_label_distance(label_rect, field_rect)
+            if distance is None:
+                continue
+            type_rank = 0 if (
+                (prefer_text_view and element_type == "XCUIElementTypeTextView")
+                or (not prefer_text_view and element_type == "XCUIElementTypeTextField")
+            ) else 1
+            rect_attrs = {key: attrs[key] for key in ("x", "y", "width", "height") if key in attrs}
+            if len(rect_attrs) != 4:
+                continue
+            candidates.append((distance, type_rank, element_type, rect_attrs))
+    if not candidates:
+        return None
+    _distance, _type_rank, element_type, rect_attrs = sorted(candidates, key=lambda item: (item[0], item[1]))[0]
+    return element_type, rect_attrs
+
+
+def _ios_input_label_distance(
+    label_rect: tuple[int, int, int, int],
+    field_rect: tuple[int, int, int, int],
+) -> int | None:
+    label_left, label_top, label_right, label_bottom = label_rect
+    field_left, field_top, field_right, field_bottom = field_rect
+    if field_bottom < label_top:
+        return None
+    vertical_gap = max(0, field_top - label_bottom)
+    horizontal_gap = 0
+    if field_right < label_left:
+        horizontal_gap = label_left - field_right
+    elif label_right < field_left:
+        horizontal_gap = field_left - label_right
+    if vertical_gap > 220 or horizontal_gap > 260:
+        return None
+    return vertical_gap * 1000 + horizontal_gap
+
+
+def _ios_element_xpath_for_rect(element_type: str, rect: dict[str, str]) -> str:
+    return (
+        f'//{element_type}[@visible="true" and @x="{rect["x"]}" and @y="{rect["y"]}" '
+        f'and @width="{rect["width"]}" and @height="{rect["height"]}"]'
+    )
 
 
 def _fill_first_available_text_input(driver: WebDriver, value: str) -> bool:
@@ -3221,6 +3401,11 @@ def _replace_text(element, value: str) -> None:
     try:
         element.clear()
     except WebDriverException:
+        pass
+    try:
+        element.set_value(value)
+        return
+    except (AttributeError, WebDriverException):
         pass
     element.send_keys(value)
 
@@ -3560,7 +3745,11 @@ def _extract_android_comments(page_source: str) -> list[str]:
             for entry in entries
             if abs(entry[1] - left) <= 30 and 0 < entry[2] - top <= 120
         ]
-        if text == "Nancy" and below_texts:
+        if (
+            below_texts
+            and not ANDROID_COMMENT_TIME_PATTERN.fullmatch(below_texts[0])
+            and not any(marker in text for marker in ("：", ":", "不错", "好", "赞"))
+        ):
             continue
         comments.append(text)
     return _dedupe_preserve_order(comments)
@@ -3672,6 +3861,30 @@ def _android_image_note_detail_ready(page_source: str, snapshot: MessageDetailSn
 
 def _android_detail_interaction_metadata_visible(snapshot: MessageDetailSnapshot) -> bool:
     return bool(snapshot.comment_count or len(snapshot.bottom_action_counts) >= 3)
+
+
+def _android_detail_needs_comment_probe(snapshot: MessageDetailSnapshot) -> bool:
+    return bool(
+        snapshot.comment_count
+        and snapshot.comment_count != "0"
+        and not snapshot.comments
+        and not snapshot.empty_comment_hint
+    )
+
+
+def _merge_detail_snapshots(
+    first: MessageDetailSnapshot,
+    latest: MessageDetailSnapshot,
+) -> MessageDetailSnapshot:
+    return MessageDetailSnapshot(
+        title=latest.title or first.title,
+        body=latest.body or first.body,
+        view_count=latest.view_count or first.view_count,
+        comment_count=latest.comment_count or first.comment_count,
+        comments=_dedupe_preserve_order([*first.comments, *latest.comments]),
+        empty_comment_hint=latest.empty_comment_hint or first.empty_comment_hint,
+        bottom_action_counts=latest.bottom_action_counts or first.bottom_action_counts,
+    )
 
 
 def _detail_shell_is_visible(page_source: str) -> bool:

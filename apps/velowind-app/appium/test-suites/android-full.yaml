@@ -54,4 +54,4 @@ tests:
     methods:
       - test_user_can_create_rental_order_and_leave_payment_unfinished
 pytest_args:
-  - --maxfail=10
+  - --maxfail=1

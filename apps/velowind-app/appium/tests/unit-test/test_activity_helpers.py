@@ -209,6 +209,38 @@ def test_fill_ios_input_near_label_fills_nearby_visible_input(monkeypatch):
     assert field.sent_keys == ["128"]
 
 
+def test_fill_ios_input_near_label_uses_page_source_geometry_fast_path(monkeypatch):
+    field = FakeActivityElement({"x": 26, "y": 420, "width": 350, "height": 44})
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="总里程" x="26" y="380" width="80" height="24" />
+      <XCUIElementTypeTextField visible="true" value="例如：128" x="26" y="420" width="350" height="44" />
+    </AppiumAUT>
+    """
+    calls = []
+
+    class FakeDriver:
+        def find_element(self, _by, xpath):
+            calls.append(("find_element", xpath))
+            if 'XCUIElementTypeTextField' in xpath and '@x="26"' in xpath and '@y="420"' in xpath:
+                return field
+            raise activity.NoSuchElementException("not found")
+
+        def find_elements(self, _by, xpath):
+            raise AssertionError(f"slow find_elements path should not run: {xpath}")
+
+    monkeypatch.setattr(activity, "_hide_keyboard", lambda driver: None)
+
+    assert activity._fill_input_near_label(FakeDriver(), "总里程", "128", page_source=page_source) is True
+    assert field.sent_keys == ["128"]
+    assert calls == [
+        (
+            "find_element",
+            '//XCUIElementTypeTextField[@visible="true" and @x="26" and @y="420" and @width="350" and @height="44"]',
+        )
+    ]
+
+
 def test_fill_advanced_field_prefers_exact_placeholder(monkeypatch):
     field = FakeActivityElement({"x": 26, "y": 337, "width": 350, "height": 21})
     calls = []

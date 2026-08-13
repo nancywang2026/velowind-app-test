@@ -4,7 +4,6 @@
   "private": true,
   "scripts": {
     "appium:ios:test": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_ios_tests -m smoke",
-    "appium:ios:test:local:publish": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_ios_tests --suite apps/velowind-app/appium/test-suites/ios-message-publish.yaml",
     "appium:ios:test:local:publish_note": "pnpm appium:ios:test:local:publish",
     "appium:ios:test:full": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_ios_tests --all",
     "appium:ios:test:suite": "pnpm appium:ios:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.run_ios_tests --suite",

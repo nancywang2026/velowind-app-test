@@ -171,7 +171,6 @@ def test_android_activity_publish_suite_uses_platform_neutral_activity_case():
         / "velowind-app"
         / "appium"
         / "test-suites"
-        / "android-activity-publish.yaml"
     )
 
     suite = run_android_tests.load_test_suite(suite_file)

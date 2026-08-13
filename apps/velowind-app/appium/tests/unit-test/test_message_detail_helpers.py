@@ -968,6 +968,53 @@ def test_browse_note_detail_delegates_to_snapshot_reader(monkeypatch):
     assert events == [("read-snapshot", 18)]
 
 
+def test_browse_note_detail_scrolls_android_when_comment_count_has_no_visible_comment(monkeypatch):
+    first_snapshot = message_detail.MessageDetailSnapshot(
+        title="出车出车",
+        body="出去玩当然要方便，这个车车太能装啦#公路车#休闲骑#户外玩耍",
+        view_count=None,
+        comment_count="1",
+        comments=[],
+        empty_comment_hint=None,
+        bottom_action_counts=["2", "1", "1"],
+    )
+    scrolled_source = """
+    <hierarchy>
+      <android.widget.TextView text="共 1 条评论" bounds="[42,320][1238,389]" />
+      <android.widget.TextView text="爱骑车的菜腿丁教练" bounds="[149,430][632,489]" />
+      <android.widget.TextView text="不错" bounds="[149,510][632,569]" />
+      <android.widget.TextView text="5 分钟前" bounds="[149,590][330,639]" />
+      <android.widget.TextView text="回复" bounds="[920,590][980,639]" />
+      <android.widget.TextView text="0" bounds="[1180,590][1220,639]" />
+      <android.widget.TextView text="2" bounds="[751,2585][835,2657]" />
+      <android.widget.TextView text="1" bounds="[953,2585][1037,2657]" />
+      <android.widget.TextView text="1" bounds="[1154,2585][1238,2657]" />
+    </hierarchy>
+    """
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(
+        message_detail,
+        "read_message_detail_snapshot",
+        lambda driver, timeout=20: first_snapshot,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "swipe_vertical",
+        lambda driver, direction="up": events.append(("swipe", direction)),
+    )
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: scrolled_source)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+
+    snapshot = message_detail.browse_note_detail(FakeDriver(), timeout=1)
+
+    assert events == [("swipe", "up")]
+    assert snapshot.comments == ["不错"]
+
+
 def test_submit_message_note_treats_detail_page_as_success(monkeypatch):
     events = []
     recorded_sources = []
@@ -1884,6 +1931,75 @@ def test_fill_input_near_label_supports_android_edit_text_hint(monkeypatch):
     assert events == ["click", "clear", ("send-keys", "洱海骑行计划"), "hide-keyboard"]
 
 
+def test_fill_input_near_label_uses_ios_source_geometry(monkeypatch):
+    events = []
+    source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="标题" x="13" y="280" width="60" height="24" />
+      <XCUIElementTypeTextField visible="true" value="请输入标题" x="13" y="315" width="360" height="44" />
+    </AppiumAUT>
+    """
+
+    class FakeElement:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            events.append(("find", by, value))
+            if (
+                by == message_detail.AppiumBy.XPATH
+                and value == '//XCUIElementTypeTextField[@visible="true" and @x="13" and @y="315" and @width="360" and @height="44"]'
+            ):
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: source)
+    monkeypatch.setattr(message_detail, "_hide_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    assert message_detail._fill_input_near_label(FakeDriver(), "标题", "长白山标题") is True
+    assert events == [
+        (
+            "find",
+            message_detail.AppiumBy.XPATH,
+            '//XCUIElementTypeTextField[@visible="true" and @x="13" and @y="315" and @width="360" and @height="44"]',
+        ),
+        "click",
+        "clear",
+        ("send-keys", "长白山标题"),
+        "hide-keyboard",
+    ]
+
+
+def test_replace_text_prefers_native_set_value_when_available():
+    events = []
+
+    class FakeElement:
+        def click(self):
+            events.append("click")
+
+        def clear(self):
+            events.append("clear")
+
+        def set_value(self, value):
+            events.append(("set-value", value))
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    message_detail._replace_text(FakeElement(), "长白山标题")
+
+    assert events == ["click", "clear", ("set-value", "长白山标题")]
+
+
 def test_fill_note_body_taps_android_emulator_text_placeholder(monkeypatch):
     events = []
 
@@ -2112,6 +2228,62 @@ def test_append_note_topics_refocuses_android_body_to_reveal_topic_action(monkey
     assert events == [
         "click-body",
         "tap-topic",
+        "click-body",
+        "clear-body",
+        ("send-keys", "第一次去长白山 #长白山 #旅行日记"),
+        "hide-keyboard",
+    ]
+
+
+def test_append_note_topics_uses_ios_body_geometry_without_topic_button(monkeypatch):
+    events = []
+    source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="正文" x="13" y="390" width="60" height="24" />
+      <XCUIElementTypeTextView visible="true" value="第一次去长白山" x="13" y="424" width="376" height="160" />
+      <XCUIElementTypeStaticText visible="true" name="#话题" x="13" y="610" width="60" height="28" />
+    </AppiumAUT>
+    """
+
+    class FakeElement:
+        def get_attribute(self, attribute):
+            if attribute == "value":
+                return "第一次去长白山"
+            return None
+
+        def click(self):
+            events.append("click-body")
+
+        def clear(self):
+            events.append("clear-body")
+
+        def send_keys(self, value):
+            events.append(("send-keys", value))
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            events.append(("find", by, value))
+            if (
+                by == message_detail.AppiumBy.XPATH
+                and value == '//XCUIElementTypeTextView[@visible="true" and @x="13" and @y="424" and @width="376" and @height="160"]'
+            ):
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: source)
+    monkeypatch.setattr(message_detail, "_tap_text_or_contains", lambda driver, text: events.append(("tap-topic", text)) or False)
+    monkeypatch.setattr(message_detail, "_dismiss_editor_keyboard", lambda driver: events.append("hide-keyboard"))
+
+    message_detail._append_note_topics_to_body(FakeDriver(), ["#长白山", "#旅行日记"])
+
+    assert events == [
+        (
+            "find",
+            message_detail.AppiumBy.XPATH,
+            '//XCUIElementTypeTextView[@visible="true" and @x="13" and @y="424" and @width="376" and @height="160"]',
+        ),
         "click-body",
         "clear-body",
         ("send-keys", "第一次去长白山 #长白山 #旅行日记"),
@@ -2946,6 +3118,29 @@ def test_choose_first_valid_location_from_picker_accepts_real_device_result_geom
 
     assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
     assert taps == [result_row]
+
+
+def test_choose_first_valid_location_from_picker_uses_ios_source_rect(monkeypatch):
+    taps = []
+    source = """
+    <AppiumAUT>
+      <XCUIElementTypeTextField visible="true" value="搜索地点" x="13" y="118" width="376" height="44" />
+      <XCUIElementTypeOther visible="true" name="长白山国家级自然保护区 吉林省白山市" x="13" y="196" width="376" height="82" />
+      <XCUIElementTypeOther visible="true" name="不标记地点" x="13" y="620" width="376" height="57" />
+    </AppiumAUT>
+    """
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: source if not taps else "发布笔记 标记地点 长白山")
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert message_detail._choose_first_valid_location_from_picker(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 201, "y": 237})]
 
 
 def test_find_location_results_supports_android_text_rows():

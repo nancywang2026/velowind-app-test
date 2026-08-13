@@ -201,7 +201,7 @@ pnpm appium:ios:test:full
 如果希望像 `testng.xml` 一样按配置指定本次要跑的用例，可以传入 suite 文件：
 
 ```bash
-pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/message-publish.yaml
+pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-full.yaml
 ```
 
 也可以按固定运行层级执行：

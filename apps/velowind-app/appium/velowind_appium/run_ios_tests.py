@@ -17,7 +17,6 @@ TEST_PATH = REPO_ROOT / "apps" / "velowind-app" / "appium" / "tests"
 DEFAULT_SUITE_FILE = REPO_ROOT / "apps" / "velowind-app" / "appium" / "test-suites" / "smoke.yaml"
 SUITE_PROFILE_FILES = {
     "smoke": DEFAULT_SUITE_FILE,
-    "publish": REPO_ROOT / "apps" / "velowind-app" / "appium" / "test-suites" / "ios-message-publish.yaml",
     "full": REPO_ROOT / "apps" / "velowind-app" / "appium" / "test-suites" / "ios-full.yaml",
 }
 

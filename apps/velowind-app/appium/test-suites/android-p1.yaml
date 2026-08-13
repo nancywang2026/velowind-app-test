@@ -1,0 +1,29 @@
+tests:
+   # 基础功能巡检
+  - file: smoke/test_ios_feature_walkthrough.py
+    methods:
+      - test_ios_feature_walkthrough
+      - test_bottom_tabs_are_reachable
+  # 发布笔记
+  - file: message/test_ios_publish_note.py
+    methods:
+      - test_user_can_publish_note_for_review
+  # 浏览笔记详情
+  - file: message/test_ios_message_browse.py
+    methods:
+      - test_logged_in_user_can_browse_comment_and_interact_with_note
+      - test_user_can_view_system_message_detail
+  # 发布活动
+  - file: activity/test_publish_activity.py
+    methods:
+      - test_user_can_publish_activity_for_review
+  # 增加场次
+  - file: activity/test_manage_activity_session.py
+    methods:
+      - test_user_can_add_activity_session_from_my_approved_activity
+  # 下单租车
+  - file: rental/test_rental_order.py
+    methods:
+      - test_user_can_create_rental_order_and_leave_payment_unfinished
+pytest_args:
+  - --maxfail=1
