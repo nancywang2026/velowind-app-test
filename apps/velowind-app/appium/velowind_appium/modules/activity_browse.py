@@ -298,7 +298,36 @@ def activity_text_search_result_texts(page_source: str, keyword: str) -> list[st
     ]
     if card_matches:
         return card_matches
+    visible_activity_matches = _visible_activity_text_search_matches(page_source, normalized_keyword)
+    if visible_activity_matches:
+        return visible_activity_matches
     return _android_visible_text_search_matches(page_source, normalized_keyword)
+
+
+def _visible_activity_text_search_matches(page_source: str, keyword: str) -> list[str]:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+    matches: list[str] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        if element.attrib.get("visible") == "false" or element.attrib.get("displayed") == "false":
+            continue
+        text = (
+            element.attrib.get("name", "")
+            or element.attrib.get("label", "")
+            or element.attrib.get("value", "")
+            or element.attrib.get("text", "")
+        ).strip()
+        if keyword not in text or not all(marker in text for marker in ACTIVITY_CARD_MARKERS):
+            continue
+        normalized = " ".join(text.split())
+        if normalized in seen:
+            continue
+        matches.append(normalized)
+        seen.add(normalized)
+    return matches
 
 
 def _android_visible_text_search_matches(page_source: str, keyword: str) -> list[str]:

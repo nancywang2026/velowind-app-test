@@ -213,6 +213,66 @@ def test_build_ios_capabilities_includes_use_preinstalled_wda_override(monkeypat
     assert capabilities["appium:usePreinstalledWDA"] is True
 
 
+def test_simulator_defaults_to_reusing_preinstalled_wda(tmp_path, monkeypatch):
+    config_file = tmp_path / "ios-appium.yaml"
+    config_file.write_text(
+        """
+target: simulator
+simulator:
+  udid: SIM-001
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("VW_IOS_USE_PREINSTALLED_WDA", raising=False)
+
+    config = load_ios_config()
+    capabilities = build_ios_capabilities(config)
+
+    assert config.use_preinstalled_wda is True
+    assert capabilities["appium:usePreinstalledWDA"] is True
+
+
+def test_device_does_not_default_to_preinstalled_wda(tmp_path, monkeypatch):
+    config_file = tmp_path / "ios-appium.yaml"
+    config_file.write_text(
+        """
+target: device
+device:
+  udid: DEVICE-001
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("VW_IOS_USE_PREINSTALLED_WDA", raising=False)
+
+    config = load_ios_config()
+    capabilities = build_ios_capabilities(config)
+
+    assert config.use_preinstalled_wda is None
+    assert "appium:usePreinstalledWDA" not in capabilities
+
+
+def test_simulator_preinstalled_wda_default_can_be_disabled(tmp_path, monkeypatch):
+    config_file = tmp_path / "ios-appium.yaml"
+    config_file.write_text(
+        """
+target: simulator
+simulator:
+  udid: SIM-001
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
+    monkeypatch.setenv("VW_IOS_USE_PREINSTALLED_WDA", "false")
+
+    config = load_ios_config()
+    capabilities = build_ios_capabilities(config)
+
+    assert config.use_preinstalled_wda is False
+    assert capabilities["appium:usePreinstalledWDA"] is False
+
+
 def test_load_ios_config_auto_detects_online_device(monkeypatch):
     monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-appium-config.yaml")
     monkeypatch.delenv("VW_IOS_UDID", raising=False)

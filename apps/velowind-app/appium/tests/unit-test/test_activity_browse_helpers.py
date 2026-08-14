@@ -244,6 +244,19 @@ def test_activity_text_search_result_texts_returns_visible_keyword_cards_only():
     ]
 
 
+def test_activity_text_search_result_texts_accepts_ios_aggregated_visible_results():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeTextField value="张家界" visible="true" placeholderValue="请输入内容" />
+      <XCUIElementTypeOther name="全国 全部活动 骑行 徒步 上海出发到杭州 浙江省·杭州 Nancy 骑行 总里程 -- 时长 -- 场次 2场 难度等级 张家界大环线2天1晚 浙江省·张家界市 Nancy 骑行 总里程 128 时长 2天1晚 场次 0场 难度等级 张家界大环线 2 天 1 晚 湖南省·张家界市 寻风者 骑行 总里程 64 时长 2天1晚 场次 0场 难度等级 搜索" visible="true" />
+    </AppiumAUT>
+    """
+
+    assert activity_browse.activity_text_search_result_texts(page_source, "张家界") == [
+        "全国 全部活动 骑行 徒步 上海出发到杭州 浙江省·杭州 Nancy 骑行 总里程 -- 时长 -- 场次 2场 难度等级 张家界大环线2天1晚 浙江省·张家界市 Nancy 骑行 总里程 128 时长 2天1晚 场次 0场 难度等级 张家界大环线 2 天 1 晚 湖南省·张家界市 寻风者 骑行 总里程 64 时长 2天1晚 场次 0场 难度等级 搜索"
+    ]
+
+
 def test_open_activity_search_coordinate_fallback_targets_android_header_icon(monkeypatch):
     events = []
     page_sources = iter(["activity-feed", "activity-feed", "activity-search"])

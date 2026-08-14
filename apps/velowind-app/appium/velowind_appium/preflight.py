@@ -66,6 +66,7 @@ def _listening_appium_process_has_env(port: int, env_name: str, env_value: str) 
     except (OSError, subprocess.TimeoutExpired):
         return False
 
+    found_appium_process = False
     for raw_pid in lsof_result.stdout.splitlines():
         pid = raw_pid.strip()
         if not pid:
@@ -81,9 +82,12 @@ def _listening_appium_process_has_env(port: int, env_name: str, env_value: str) 
         except (OSError, subprocess.TimeoutExpired):
             continue
         command = ps_result.stdout
-        if "appium" in command and f"{env_name}={env_value}" in command:
-            return True
-    return False
+        if "appium" not in command:
+            continue
+        found_appium_process = True
+        if f"{env_name}={env_value}" not in command:
+            return False
+    return found_appium_process
 
 
 def _run_real_device_transport_preflight(config) -> int:
@@ -104,13 +108,14 @@ def _run_real_device_transport_preflight(config) -> int:
             "1",
         )
     if not prefer_devicectl:
+        appium_port = server_port or 4723
         print(
             "iOS real-device transport preflight: APPIUM_XCUITEST_PREFER_DEVICECTL=1 is required "
             "for reliable device discovery with the current Appium/XCUITest stack."
         )
         print(
             "Start Appium with: APPIUM_XCUITEST_PREFER_DEVICECTL=1 appium server "
-            "--address 127.0.0.1 --port 4723 --use-drivers=xcuitest --log-timestamp"
+            f"--address 127.0.0.1 --port {appium_port} --use-drivers=xcuitest --log-timestamp"
         )
         return 1
 

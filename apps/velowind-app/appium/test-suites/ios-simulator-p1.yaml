@@ -1,0 +1,45 @@
+tests:
+#   # 基础功能巡检
+#  - file: smoke/test_ios_feature_walkthrough.py
+#    methods:
+#      - test_ios_feature_walkthrough
+#      - test_bottom_tabs_are_reachable
+#  # 按类型筛选笔记
+#  - file: message/test_ios_search_by_type.py
+#    methods:
+#      - test_user_can_filter_notes_by_type
+#  # 搜索笔记
+#  - file: message/test_ios_search_note.py
+#    methods:
+#      - test_user_can_search_and_open_note
+  # 保存笔记草稿
+  - file: draft/test_ios_save_note_draft.py
+    methods:
+      - test_user_can_save_note_as_draft_and_open_me_page
+#  # 浏览笔记详情
+#  - file: message/test_ios_message_browse.py
+#    methods:
+#      - test_logged_in_user_can_browse_comment_and_interact_with_note
+#      - test_user_can_view_system_message_detail
+#  # 浏览首页笔记并互动
+#  - file: message/test_ios_home_note_interactions.py
+#    methods:
+#      - test_user_can_comment_on_first_home_note
+#      - test_user_can_like_and_favorite_second_home_note
+  # 浏览活动
+  - file: activity/test_ios_activity_browse.py
+    methods:
+#      - test_user_can_fill_activity_signup_identity_fields
+#      - test_user_can_submit_activity_signup_to_payment_page
+#      - test_user_can_browse_activity_detail_fields
+#      - test_user_can_open_my_activity_signup_list
+#      - test_user_can_open_my_activity_liked_list
+#      - test_user_can_open_my_activity_favorite_list
+#      - test_user_can_filter_activities_by_cycling
+      - test_user_can_search_activities_by_title_or_location
+  # 下单租车
+  - file: rental/test_rental_order.py
+    methods:
+      - test_user_can_create_rental_order_and_leave_payment_unfinished
+pytest_args:
+  - --maxfail=1

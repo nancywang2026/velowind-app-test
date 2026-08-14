@@ -79,9 +79,16 @@ def driver(ios_config):
 
 
 def prepare_logged_in_session(driver, ios_config) -> bool:
-    if _test_platform() == "android":
+    if _test_platform() == "android" or _is_ios_simulator_config(ios_config):
         return ensure_logged_in_from_me_then_home(driver, ios_config)
     return ensure_logged_in_on_home(driver, ios_config)
+
+
+def _is_ios_simulator_config(config) -> bool:
+    if str(getattr(config, "target", "")).strip().lower() == "simulator":
+        return True
+    udid = str(getattr(config, "udid", "") or "").strip()
+    return udid.count("-") >= 4
 
 
 def should_restore_home_after_case(request) -> bool:

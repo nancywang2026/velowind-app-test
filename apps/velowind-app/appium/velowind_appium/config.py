@@ -158,12 +158,25 @@ def auto_detect_online_ios_udid() -> Optional[str]:
 def load_ios_config() -> IosAppiumConfig:
     yaml_config = _read_yaml_config()
     target = _env_text("VW_IOS_TARGET") or _yaml_text(yaml_config, "target") or "device"
+    target_config = yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}
     explicit_udid = _env_text("VW_IOS_UDID")
     target_udid = _yaml_text(yaml_config, target, "udid")
     bundle_id = _env_text("VW_IOS_BUNDLE_ID") or _yaml_text(yaml_config, "bundle_id") or DEFAULT_BUNDLE_ID
     app_path = _env_text("VW_IOS_APP") or _yaml_text(yaml_config, "app_path")
     platform_version = _env_text("VW_IOS_PLATFORM_VERSION") or _yaml_text(yaml_config, target, "platform_version")
     device_name = _env_text("VW_IOS_DEVICE_NAME") or _yaml_text(yaml_config, target, "device_name")
+    explicit_use_preinstalled_wda = _env_optional_bool("VW_IOS_USE_PREINSTALLED_WDA")
+    yaml_has_use_preinstalled_wda = _yaml_text(yaml_config, target, "use_preinstalled_wda") is not None or (
+        "use_preinstalled_wda" in target_config
+    )
+    if explicit_use_preinstalled_wda is not None:
+        use_preinstalled_wda = explicit_use_preinstalled_wda
+    elif yaml_has_use_preinstalled_wda:
+        use_preinstalled_wda = _yaml_bool(target_config, "use_preinstalled_wda", False)
+    elif target == "simulator":
+        use_preinstalled_wda = True
+    else:
+        use_preinstalled_wda = None
     return IosAppiumConfig(
         target=target,
         server_url=os.environ.get("VW_APPIUM_SERVER_URL", DEFAULT_SERVER_URL).strip() or DEFAULT_SERVER_URL,
@@ -184,15 +197,7 @@ def load_ios_config() -> IosAppiumConfig:
             _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "allow_provisioning_device_registration", False),
         ),
         use_new_wda=_env_bool("VW_IOS_USE_NEW_WDA", _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "use_new_wda", False)),
-        use_preinstalled_wda=_env_optional_bool("VW_IOS_USE_PREINSTALLED_WDA")
-        if _env_optional_bool("VW_IOS_USE_PREINSTALLED_WDA") is not None
-        else (
-            _yaml_bool(yaml_config.get(target, {}) if isinstance(yaml_config.get(target), dict) else {}, "use_preinstalled_wda", False)
-            if _yaml_text(yaml_config, target, "use_preinstalled_wda") is not None or (
-                isinstance(yaml_config.get(target), dict) and "use_preinstalled_wda" in yaml_config.get(target, {})
-            )
-            else None
-        ),
+        use_preinstalled_wda=use_preinstalled_wda,
         wda_local_port=_env_int("VW_IOS_WDA_LOCAL_PORT") or _yaml_int(yaml_config, target, "wda_local_port"),
         wda_launch_timeout=_env_int("VW_IOS_WDA_LAUNCH_TIMEOUT")
         or _yaml_int(yaml_config, target, "wda_launch_timeout"),

@@ -151,6 +151,24 @@ def test_ios_runner_does_not_retry_when_switch_is_off(monkeypatch):
     assert len(calls) == 1
 
 
+def test_ios_runner_runs_pytest_without_media_sync_precondition(monkeypatch):
+    calls = []
+    artifacts = SimpleNamespace(results=Path("/tmp/allure-results"))
+
+    monkeypatch.setattr(run_ios_tests.sys, "argv", ["run_ios_tests", "-m", "smoke"])
+    monkeypatch.setattr(run_ios_tests, "allure_artifacts", lambda: artifacts)
+    monkeypatch.setattr(
+        run_ios_tests,
+        "_run",
+        lambda command: calls.append(("pytest", command)) or type("Result", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(run_ios_tests, "_generate_and_open_report", lambda: calls.append(("report", None)))
+
+    assert run_ios_tests.main() == 0
+    assert calls[0][0] == "pytest"
+    assert calls[-1] == ("report", None)
+
+
 def test_build_pytest_command_rejects_empty_suite_file(tmp_path):
     suite_file = tmp_path / "empty.yaml"
     suite_file.write_text("{}", encoding="utf-8")

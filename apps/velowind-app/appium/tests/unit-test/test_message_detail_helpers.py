@@ -273,6 +273,57 @@ def test_ios_publish_entry_coordinate_keeps_existing_center_target(monkeypatch):
     assert taps == [("mobile: tap", {"x": 589, "y": 2377})]
 
 
+def test_open_message_note_publisher_does_not_prepare_login_inside_business_step(monkeypatch):
+    from velowind_appium import session
+
+    class FakeDriver:
+        pass
+
+    def fail_if_login_prepare_is_called(driver, ios_config):
+        raise AssertionError("business step should not prepare login")
+
+    monkeypatch.setattr(session, "ensure_logged_in_for_publish_entry", fail_if_login_prepare_is_called)
+    monkeypatch.setattr(message_detail, "_prepare_android_publish_entry", lambda driver: None)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "手机号登录 请输入手机号 密码登录 验证并登录")
+
+    with pytest.raises(AssertionError, match="session is not logged in"):
+        message_detail.open_message_note_publisher(FakeDriver(), ios_config=object(), timeout=1)
+
+
+def test_open_message_note_publisher_fails_when_publish_tap_opens_login_page(monkeypatch):
+    from velowind_appium import session
+
+    clock = {"now": 0.0}
+    page = {"source": "首页 笔记 活动 消息 我的 全国 推荐"}
+
+    class FakeDriver:
+        pass
+
+    def tap_publish_entry(driver):
+        page["source"] = "手机号登录 请输入手机号 密码登录 验证并登录"
+        return True
+
+    def wait_for_form(condition, timeout):
+        clock["now"] = 21.0
+        return False
+
+    def fail_if_login_prepare_is_called(driver, ios_config):
+        raise AssertionError("business step should not prepare login")
+
+    monkeypatch.setattr(message_detail.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(session, "ensure_logged_in_for_publish_entry", fail_if_login_prepare_is_called)
+    monkeypatch.setattr(message_detail, "_prepare_android_publish_entry", lambda driver: None)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: page["source"])
+    monkeypatch.setattr(message_detail, "_publish_sheet_visible", lambda page_source: False)
+    monkeypatch.setattr(message_detail, "_tap_publish_entry_if_present", tap_publish_entry)
+    monkeypatch.setattr(message_detail, "_tap_note_type_if_present", lambda driver: False)
+    monkeypatch.setattr(message_detail, "_wait_until", wait_for_form)
+
+    with pytest.raises(AssertionError, match="session is not logged in"):
+        message_detail.open_message_note_publisher(FakeDriver(), ios_config=object(), timeout=20)
+
+
 def test_find_note_search_input_supports_android_edit_text():
     expected = object()
 
@@ -1722,13 +1773,18 @@ def test_return_to_home_after_share_prefers_ios_header_back_from_source(monkeypa
 
 def test_open_message_note_publisher_taps_publish_entry_before_note_type(monkeypatch):
     events = []
+    page = {"source": ""}
 
-    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "")
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: page["source"])
     monkeypatch.setattr(message_detail, "login_required_from_page_source", lambda source: False)
-    monkeypatch.setattr(message_detail, "message_note_form_is_visible", lambda source: False)
+    monkeypatch.setattr(message_detail, "message_note_form_is_visible", lambda source: source == "message-note-form")
     monkeypatch.setattr(message_detail, "_tap_publish_entry_if_present", lambda driver: events.append("publish-entry") or True)
     monkeypatch.setattr(message_detail, "_tap_note_type_if_present", lambda driver: events.append("note-type") or True)
-    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(
+        message_detail,
+        "_wait_until",
+        lambda predicate, timeout: page.update(source="message-note-form") or predicate(),
+    )
     monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
 
     message_detail.open_message_note_publisher(object(), timeout=5)

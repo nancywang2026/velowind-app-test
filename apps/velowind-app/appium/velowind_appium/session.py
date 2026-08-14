@@ -65,6 +65,32 @@ def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
                     f"dismiss-alert-{text}",
                     lambda matched=matched: matched,
                 )
+    _accept_startup_agreement_if_present(driver)
+
+
+def _accept_startup_agreement_if_present(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    if "agreement-popup-backdrop" not in page_source and "请阅读并同意以下条款" not in page_source:
+        return False
+    if tap_text_if_present(driver, "同意并继续", timeout=0.8):
+        return True
+    try:
+        rect = driver.get_window_rect()
+        width = int(rect.get("width", 0))
+        height = int(rect.get("height", 0))
+        if width <= 0 or height <= 0:
+            return False
+        for x_ratio, y_ratio in [(0.72, 0.82), (0.70, 0.78), (0.75, 0.86)]:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": int(width * x_ratio), "y": int(height * y_ratio)},
+            )
+            time.sleep(0.3)
+            if "agreement-popup-backdrop" not in _safe_page_source(driver):
+                return True
+    except (WebDriverException, AttributeError, TypeError, ValueError):
+        return False
+    return False
 
 
 def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumConfig) -> bool:
@@ -91,6 +117,9 @@ def ensure_logged_in_from_me_then_home(driver: WebDriver, ios_config: IosAppiumC
             if not me_tab_opened and not login_required_from_page_source(_safe_page_source(driver)):
                 ensure_logged_in_on_home(driver, ios_config)
                 me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=5)
+        elif not login_required_from_page_source(_safe_page_source(driver)):
+            ensure_logged_in_on_home(driver, ios_config)
+            me_tab_opened = tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=5)
         if not me_tab_opened and not login_required_from_page_source(_safe_page_source(driver)):
             raise AssertionError("Unable to open the Me tab before running regression cases")
     if _login_required_after_short_wait(driver):
@@ -125,9 +154,20 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         return _tap_home_tab(driver, timeout=5) or _tap_home_tab_by_coordinate(driver)
 
     def _wait_home():
-        if _home_visible(driver):
-            return True
-        return wait_for_home_feed(driver, timeout=20)
+        end_at = time.monotonic() + 20
+        last_error: Exception | None = None
+        while time.monotonic() < end_at:
+            _accept_startup_agreement_if_present(driver)
+            if _home_visible(driver):
+                return True
+            try:
+                wait_for_home_feed(driver, timeout=2)
+                return True
+            except Exception as error:
+                last_error = error
+        if last_error is not None:
+            raise last_error
+        return wait_for_home_feed(driver, timeout=1)
 
     def _relaunch_from_android_launcher() -> bool:
         if not _android_launcher_visible(driver):
@@ -144,6 +184,10 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
 
     def _recover_to_home():
         for _ in range(5):
+            if _accept_startup_agreement_if_present(driver):
+                time.sleep(0.5)
+                if _home_visible(driver):
+                    return True
             if _home_visible(driver):
                 return True
             if _dismiss_android_cancel_signup_dialog(driver):
@@ -185,6 +229,11 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
     def _prepare() -> bool:
         if _relaunch_from_android_launcher():
             return False
+
+        if login_required_from_page_source(_safe_page_source(driver)):
+            logged_in = ensure_logged_in_if_needed(driver, ios_config)
+            _recover_to_home()
+            return bool(logged_in)
 
         if _home_or_login_visible(driver) and _go_home():
             try:
