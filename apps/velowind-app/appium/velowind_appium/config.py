@@ -173,8 +173,6 @@ def load_ios_config() -> IosAppiumConfig:
         use_preinstalled_wda = explicit_use_preinstalled_wda
     elif yaml_has_use_preinstalled_wda:
         use_preinstalled_wda = _yaml_bool(target_config, "use_preinstalled_wda", False)
-    elif target == "simulator":
-        use_preinstalled_wda = True
     else:
         use_preinstalled_wda = None
     return IosAppiumConfig(

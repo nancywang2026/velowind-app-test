@@ -4,6 +4,10 @@ tests:
     methods:
       - test_ios_feature_walkthrough
       - test_bottom_tabs_are_reachable
+  # 增加场次
+  - file: activity/test_manage_activity_session.py
+    methods:
+      - test_user_can_add_activity_session_from_my_approved_activity
   # 发布笔记
   - file: message/test_ios_publish_note.py
     methods:
@@ -17,10 +21,6 @@ tests:
   - file: activity/test_publish_activity.py
     methods:
       - test_user_can_publish_activity_for_review
-  # 增加场次
-  - file: activity/test_manage_activity_session.py
-    methods:
-      - test_user_can_add_activity_session_from_my_approved_activity
   # 下单租车
   - file: rental/test_rental_order.py
     methods:
