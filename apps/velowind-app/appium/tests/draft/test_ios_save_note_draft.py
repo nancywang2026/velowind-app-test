@@ -10,7 +10,7 @@ from velowind_appium.modules import (
     save_draft_dialog_is_visible,
     wait_for_save_draft_dialog,
 )
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_for_publish_entry
+from velowind_appium.session import dismiss_common_system_alerts
 
 
 NOTE_DRAFT_TITLE = "测试 - 草稿标题"
@@ -20,8 +20,7 @@ NOTE_DRAFT_TITLE = "测试 - 草稿标题"
 def test_user_can_save_note_as_draft_and_open_me_page(driver, ios_config, step):
     dismiss_common_system_alerts(driver, step)
 
-    step("prepare-home-session", lambda: ensure_logged_in_for_publish_entry(driver, ios_config))
-    step("open-note-draft-editor", lambda: open_note_draft_editor(driver, ios_config=ios_config, timeout=20))
+    step("open-note-draft-editor", lambda: open_note_draft_editor(driver, timeout=20))
     step("fill-note-draft-title", lambda: fill_note_draft_title(driver, NOTE_DRAFT_TITLE, timeout=12))
     step("go-back-from-note-editor", lambda: go_back_from_note_editor(driver, timeout=10))
     step("wait-save-draft-dialog", lambda: wait_for_save_draft_dialog(driver, timeout=10))

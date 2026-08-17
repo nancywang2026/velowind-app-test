@@ -86,20 +86,52 @@ def test_create_test_driver_uses_android_driver_when_platform_is_android(monkeyp
     assert conftest.create_test_driver(config) is expected
 
 
-def test_prepare_logged_in_session_delegates_to_recoverable_home_setup(monkeypatch):
+def test_prepare_logged_in_session_checks_me_tab_first_on_ios(monkeypatch):
     driver = object()
-    ios_config = object()
+    ios_config = type("Config", (), {"target": "simulator", "udid": "SIM-001"})()
     calls = []
     monkeypatch.setenv("VW_APPIUM_PLATFORM", "ios")
 
-    def fake_ensure_logged_in_on_home(received_driver, received_config):
+    def fake_ensure_logged_in_from_me_then_home(received_driver, received_config):
         calls.append((received_driver, received_config))
         return True
 
     monkeypatch.setattr(
         conftest,
+        "ensure_logged_in_from_me_then_home",
+        fake_ensure_logged_in_from_me_then_home,
+    )
+
+    assert conftest.prepare_logged_in_session(driver, ios_config) is True
+    assert calls == [(driver, ios_config)]
+
+
+def test_prepare_logged_in_session_treats_uuid_udid_as_ios_simulator(monkeypatch):
+    driver = object()
+    ios_config = type("Config", (), {"target": "device", "udid": "6C7DEC8B-93A0-447A-834E-180CF29F0C56"})()
+    calls = []
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "ios")
+
+    monkeypatch.setattr(
+        conftest,
+        "ensure_logged_in_from_me_then_home",
+        lambda received_driver, received_config: calls.append((received_driver, received_config)) or True,
+    )
+
+    assert conftest.prepare_logged_in_session(driver, ios_config) is True
+    assert calls == [(driver, ios_config)]
+
+
+def test_prepare_logged_in_session_keeps_physical_ios_device_on_home_setup(monkeypatch):
+    driver = object()
+    ios_config = type("Config", (), {"target": "device", "udid": "00008150-0006799C2693401C"})()
+    calls = []
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "ios")
+
+    monkeypatch.setattr(
+        conftest,
         "ensure_logged_in_on_home",
-        fake_ensure_logged_in_on_home,
+        lambda received_driver, received_config: calls.append((received_driver, received_config)) or True,
     )
 
     assert conftest.prepare_logged_in_session(driver, ios_config) is True
@@ -895,6 +927,38 @@ def test_ensure_logged_in_from_me_then_home_can_login_when_me_tab_is_not_tappabl
     assert "login" in events
 
 
+def test_ensure_logged_in_from_me_then_home_recovers_ios_page_before_opening_me(monkeypatch):
+    events = []
+    tap_attempts = {"me": 0}
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    def fake_tap_tab(driver, accessibility_id, text, timeout=3):
+        events.append(("tap-tab", accessibility_id, text))
+        if accessibility_id == "bottom-nav-me":
+            tap_attempts["me"] += 1
+            return tap_attempts["me"] > 1
+        return True
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "_dismiss_android_cancel_signup_dialog", lambda driver: False)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "tap_accessibility_id_or_text_if_present", fake_tap_tab)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: "系统消息 活动通知")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "ensure_logged_in_on_home", lambda driver, config: events.append("recover-home") or False)
+    monkeypatch.setattr(session, "_home_visible", lambda driver: True)
+
+    assert session.ensure_logged_in_from_me_then_home(FakeDriver(), object()) is True
+    assert events == [
+        ("tap-tab", "bottom-nav-me", "我的"),
+        "recover-home",
+        ("tap-tab", "bottom-nav-me", "我的"),
+        ("tap-tab", "bottom-nav-home", "笔记"),
+    ]
+
+
 def test_ensure_logged_in_from_me_then_home_recovers_android_search_page_before_opening_me(monkeypatch):
     state = {"page": "search"}
     events = []
@@ -1113,6 +1177,25 @@ def test_ensure_read_session_on_home_falls_back_to_full_prepare_when_home_is_not
         ("tap-text", "同意"),
         "full-prepare",
     ]
+
+
+def test_ensure_logged_in_on_home_logs_in_immediately_from_login_page(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: events.append("dismiss"))
+    monkeypatch.setattr(session, "_dismiss_android_cancel_signup_dialog", lambda driver: False)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: "手机号登录 请输入手机号 密码登录 验证并登录 登录")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: True)
+    monkeypatch.setattr(session, "ensure_logged_in_if_needed", lambda driver, config: events.append("login") or True)
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: events.append("home-or-login") or True)
+    monkeypatch.setattr(session, "_tap_home_tab", lambda driver, timeout=3: events.append("tap-home") or True)
+    monkeypatch.setattr(session, "_tap_home_tab_by_coordinate", lambda driver: events.append("tap-home-coordinate") or True)
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: events.append("wait-home") or True)
+
+    assert session.ensure_logged_in_on_home(object(), object()) is True
+    assert "login" in events
+    assert "wait-home" not in events[: events.index("login")]
 
 
 def test_ensure_logged_in_on_home_uses_android_adb_back_for_blocking_detail(monkeypatch):

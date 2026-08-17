@@ -24,7 +24,7 @@ from velowind_appium.actions import (
     tap_text_if_present,
     wait_for_any_accessibility_id_or_text,
 )
-from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
+from velowind_appium.auth import login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
 from velowind_appium.image_validation import (
     compare_images_for_publish_note,
@@ -348,40 +348,48 @@ def open_message_note_publisher(
     ios_config: IosAppiumConfig | None = None,
     timeout: int = 30,
 ) -> None:
-    end_at = time.monotonic() + timeout
-    if ios_config is not None:
-        try:
-            from velowind_appium.session import ensure_logged_in_for_publish_entry
-
-            ensure_logged_in_for_publish_entry(driver, ios_config)
-        except Exception:
-            pass
     _prepare_android_publish_entry(driver)
+
+    end_at = time.monotonic() + timeout
+
+    def _form_or_login_visible() -> bool:
+        page_source = _safe_page_source(driver)
+        return message_note_form_is_visible(page_source) or login_required_from_page_source(page_source)
+
+    def _raise_if_login_required(page_source: str) -> None:
+        if login_required_from_page_source(page_source):
+            raise AssertionError(
+                "Publish flow reached a login page; session is not logged in. "
+                "The logged_in_session fixture should authenticate before business steps."
+            )
 
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
-        if login_required_from_page_source(page_source):
-            if ios_config is None:
-                raise AssertionError("Publish flow reached a login page but no iOS config was provided for re-login")
-            ensure_logged_in_if_needed(driver, ios_config)
-            end_at = time.monotonic() + timeout
-            time.sleep(1)
-            continue
+        _raise_if_login_required(page_source)
 
         if message_note_form_is_visible(page_source):
             return
 
         if _publish_sheet_visible(page_source) and _tap_note_type_if_present(driver):
-            if _wait_until(lambda: message_note_form_is_visible(_safe_page_source(driver)), timeout=10):
-                return
+            if _wait_until(_form_or_login_visible, timeout=10):
+                page_source = _safe_page_source(driver)
+                _raise_if_login_required(page_source)
+                if message_note_form_is_visible(page_source):
+                    return
 
         if _tap_publish_entry_if_present(driver):
             time.sleep(0.5)
             _tap_note_type_if_present(driver)
-            if _wait_until(lambda: message_note_form_is_visible(_safe_page_source(driver)), timeout=10):
-                return
+            if _wait_until(_form_or_login_visible, timeout=10):
+                page_source = _safe_page_source(driver)
+                _raise_if_login_required(page_source)
+                if message_note_form_is_visible(page_source):
+                    return
+            _raise_if_login_required(_safe_page_source(driver))
         time.sleep(0.5)
 
+    page_source = _safe_page_source(driver)
+    _raise_if_login_required(page_source)
     raise AssertionError("Unable to open the message note publisher from the home page")
 
 

@@ -221,8 +221,9 @@ def submit_session_form(driver: WebDriver, *, expected_title: str, timeout: int 
         for token in ["保存成功", "新增成功", "创建成功", "提交成功"]:
             if token in page_source:
                 return token
-        if "场次管理" in page_source and not _session_form_visible(page_source):
-            return "场次管理"
+        for manage_title in ["管理场次", "场次管理"]:
+            if manage_title in page_source and not _session_form_visible(page_source):
+                return manage_title
         if expected_title in page_source and not _session_form_visible(page_source):
             return expected_title
         time.sleep(0.5)

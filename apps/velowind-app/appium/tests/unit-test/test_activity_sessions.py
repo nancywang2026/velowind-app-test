@@ -1759,6 +1759,15 @@ def test_submit_session_form_does_not_treat_expected_title_on_create_page_as_suc
         raise AssertionError("submit_session_form should not accept the draft title alone on the create form")
 
 
+def test_submit_session_form_accepts_android_manage_sessions_page_title(monkeypatch):
+    driver = object()
+
+    monkeypatch.setattr(activity_sessions, "_tap_submit", lambda received: True)
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: "管理场次 测试 - 场次 0812 查看 编辑 下架")
+
+    assert activity_sessions.submit_session_form(driver, expected_title="测试 - 场次 0813", timeout=1) == "管理场次"
+
+
 def test_open_my_activity_publish_list_taps_my_activity_when_already_on_me_page(monkeypatch):
     driver = FakeDriver("Nancy 我的笔记 我的活动 我的租车 我的卡券")
     events = []
