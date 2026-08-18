@@ -1829,6 +1829,77 @@ def test_tap_more_for_approved_activity_uses_ios_page_source_badge_y_without_ele
     ]
 
 
+def test_tap_more_for_approved_activity_uses_ios_more_button_center(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther visible="true" name="太行山峡谷耐力骑行挑战 通过 未发布" x="13" y="217" width="376" height="105">
+        <XCUIElementTypeOther visible="true" name="太行山峡谷耐力骑行挑战 通过 未发布" x="111" y="228" width="231" height="83">
+          <XCUIElementTypeOther visible="true" name="太行山峡谷耐力骑行挑战 通过 未发布" x="111" y="228" width="231" height="38">
+            <XCUIElementTypeOther visible="true" name="通过" x="258" y="237" width="34" height="20" />
+            <XCUIElementTypeOther visible="true" name="未发布" x="297" y="237" width="45" height="20" />
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther visible="true" x="347" y="224" width="34" height="34">
+          <XCUIElementTypeOther visible="true" x="356" y="233" width="16" height="16" />
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+    driver = FakeDriver(page_source, width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: page_source)
+    monkeypatch.setattr(activity_sessions, "_wait_until", lambda predicate, timeout: False)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is True
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 366, "y": 241}),
+    ]
+
+
+def test_tap_more_for_approved_activity_does_not_scan_ios_elements_before_source_coordinates(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther visible="true" name="太行山峡谷耐力骑行挑战 通过 上架" x="13" y="220" width="376" height="105" />
+      <XCUIElementTypeOther visible="true" name="通过" x="269" y="240" width="34" height="20" />
+      <XCUIElementTypeOther visible="true" x="347" y="227" width="34" height="34" />
+    </AppiumAUT>
+    """
+    driver = FakeDriver(page_source, width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: page_source)
+    monkeypatch.setattr(activity_sessions, "_wait_until", lambda predicate, timeout: False)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
+
+    def fail_on_full_tree_scan(*args):
+        raise AssertionError("iOS full-tree element scan should not run before source-coordinate tap")
+
+    monkeypatch.setattr(driver, "find_elements", fail_on_full_tree_scan, raising=False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is True
+    assert driver.scripts == [
+        ("mobile: tap", {"x": 366, "y": 244}),
+    ]
+
+
+def test_tap_more_for_approved_activity_falls_back_to_ios_more_element_click(monkeypatch):
+    page_source = "通过"
+    driver = FakeDriver(page_source, width=402, height=874)
+    driver.capabilities = {"platformName": "iOS"}
+    more_button = FakeElement({"x": 347, "y": 224, "width": 34, "height": 34})
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda received: page_source)
+    monkeypatch.setattr(activity_sessions, "_wait_until", lambda predicate, timeout: False)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", lambda driver, text, timeout=0.5: False)
+    monkeypatch.setattr(driver, "find_elements", lambda *args: [more_button], raising=False)
+
+    assert activity_sessions._tap_more_for_approved_activity(driver) is True
+    assert more_button.clicked is True
+    assert driver.scripts == []
+
+
 def test_tap_more_for_approved_activity_tries_next_approved_card_when_first_has_no_manage_menu(monkeypatch):
     driver = FakeDriver("我的活动 发布 显示下架活动 第一条 通过 第二条 通过", width=402, height=874)
     badge_elements = [

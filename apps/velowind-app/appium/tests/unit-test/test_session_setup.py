@@ -1394,6 +1394,30 @@ def test_ensure_logged_in_on_home_relaunches_android_app_from_launcher(monkeypat
     assert state["page"] == "home"
 
 
+def test_ensure_logged_in_on_home_reactivates_ios_app_when_system_page_is_foreground(monkeypatch):
+    events = []
+    state = {"page": "settings"}
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def activate_app(self, bundle_id):
+            events.append(("activate-app", bundle_id))
+            state["page"] = "home"
+
+    monkeypatch.setattr(session, "dismiss_common_system_alerts", lambda driver: None)
+    monkeypatch.setattr(session, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: state["page"])
+    monkeypatch.setattr(session, "_home_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "_home_or_login_visible", lambda driver: state["page"] == "home")
+    monkeypatch.setattr(session, "login_required_from_page_source", lambda page_source: False)
+    monkeypatch.setattr(session, "_tap_home_tab", lambda driver, timeout=5: True)
+    monkeypatch.setattr(session, "wait_for_home_feed", lambda driver, timeout=20: True)
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), type("Config", (), {"bundle_id": "com.velowind.rider"})()) is False
+    assert events == [("activate-app", "com.velowind.rider")]
+
+
 def test_home_or_login_visible_allows_message_tab_with_system_message_text(monkeypatch):
     page_source = "消息 系统通知 系统消息 笔记 活动 我的"
 

@@ -2223,7 +2223,23 @@ def _tap_more_for_approved_activity(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if "通过" in page_source:
         tapped_any_approved_card = False
-        center_ys = _ios_approved_badge_center_ys_from_source(driver, page_source) if _is_ios_driver(driver) else []
+        center_ys = (
+            _ios_approved_more_button_center_ys_from_source(driver, page_source)
+            if _is_ios_driver(driver)
+            else []
+        )
+        if _is_ios_driver(driver) and not center_ys:
+            center_ys = _ios_approved_badge_center_ys_from_source(driver, page_source)
+        if _is_ios_driver(driver) and center_ys:
+            for y in center_ys:
+                if _tap_right_side_of_approved_card_at_y(driver, y):
+                    tapped_any_approved_card = True
+                    if _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=1):
+                        return True
+            if tapped_any_approved_card:
+                return True
+        if _is_ios_driver(driver) and _tap_ios_approved_more_element(driver):
+            return True
         if _is_ios_driver(driver) and "<XCUIElementType" in page_source and not center_ys:
             return False
         if not center_ys:
@@ -2279,6 +2295,97 @@ def _tap_right_side_of_approved_card_at_y(driver: WebDriver, y: int | None) -> b
 def _top_approved_badge_center_y(driver: WebDriver) -> int | None:
     center_ys = _approved_badge_center_ys(driver)
     return center_ys[0] if center_ys else None
+
+
+def _tap_ios_approved_more_element(driver: WebDriver) -> bool:
+    try:
+        window_width = int(driver.get_window_rect()["width"])
+        window_height = int(driver.get_window_rect()["height"])
+        elements = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        return False
+
+    approved_center_ys = _approved_badge_center_ys(driver)
+    if not approved_center_ys:
+        return False
+
+    candidates = []
+    for element in elements:
+        try:
+            if not element.is_displayed():
+                continue
+            rect = element.rect
+            x = int(rect["x"])
+            y = int(rect["y"])
+            width = int(rect["width"])
+            height = int(rect["height"])
+            if any(str(element.get_attribute(name) or "").strip() for name in ["name", "label", "value"]):
+                continue
+        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if (
+            x < int(window_width * 0.82)
+            or y < 150
+            or y >= window_height
+            or width < 26
+            or width > 40
+            or height < 26
+            or height > 40
+        ):
+            continue
+        if not any(abs((y + int(height / 2)) - approved_y) <= 16 for approved_y in approved_center_ys):
+            continue
+        candidates.append((y, x, element))
+
+    for _y, _x, element in sorted(candidates):
+        try:
+            element.click()
+            return True
+        except (WebDriverException, AttributeError):
+            continue
+    return False
+
+
+def _ios_approved_more_button_center_ys_from_source(driver: WebDriver, page_source: str) -> list[int]:
+    if "<XCUIElementType" not in page_source:
+        return []
+    try:
+        window_width = int(driver.get_window_rect()["width"])
+        window_height = int(driver.get_window_rect()["height"])
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        window_width = 402
+        window_height = 874
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+
+    center_ys = []
+    for element in root.iter():
+        attributes = element.attrib
+        if attributes.get("visible") == "false":
+            continue
+        if any(attributes.get(name, "").strip() for name in ["name", "label", "value"]):
+            continue
+        try:
+            x = int(float(attributes.get("x", "")))
+            y = int(float(attributes.get("y", "")))
+            width = int(float(attributes.get("width", "")))
+            height = int(float(attributes.get("height", "")))
+        except (TypeError, ValueError):
+            continue
+        if (
+            x < int(window_width * 0.82)
+            or y < 150
+            or y >= window_height
+            or width < 26
+            or width > 40
+            or height < 26
+            or height > 40
+        ):
+            continue
+        center_ys.append(y + int(height / 2))
+    return sorted(set(center_ys))
 
 
 def _ios_approved_badge_center_ys_from_source(driver: WebDriver, page_source: str) -> list[int]:
