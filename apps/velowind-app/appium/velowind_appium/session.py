@@ -150,6 +150,21 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
     tap_text_if_present(driver, "同意并继续", timeout=2)
     tap_text_if_present(driver, "同意", timeout=1)
 
+    def _reactivate_ios_app() -> bool:
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        if str(capabilities.get("platformName", "")).lower() != "ios":
+            return False
+        activate_app = getattr(driver, "activate_app", None)
+        bundle_id = getattr(ios_config, "bundle_id", None)
+        if not callable(activate_app) or not bundle_id:
+            return False
+        try:
+            activate_app(str(bundle_id))
+            time.sleep(1)
+            return _home_visible(driver) or _home_or_login_visible(driver)
+        except Exception:
+            return False
+
     def _go_home():
         return _tap_home_tab(driver, timeout=5) or _tap_home_tab_by_coordinate(driver)
 
@@ -227,6 +242,13 @@ def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, ste
         return True
 
     def _prepare() -> bool:
+        if not _home_or_login_visible(driver) and _reactivate_ios_app():
+            try:
+                _wait_home()
+                return False
+            except Exception:
+                pass
+
         if _relaunch_from_android_launcher():
             return False
 

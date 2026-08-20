@@ -213,7 +213,7 @@ def test_build_ios_capabilities_includes_use_preinstalled_wda_override(monkeypat
     assert capabilities["appium:usePreinstalledWDA"] is True
 
 
-def test_simulator_defaults_to_reusing_preinstalled_wda(tmp_path, monkeypatch):
+def test_simulator_does_not_default_to_preinstalled_wda(tmp_path, monkeypatch):
     config_file = tmp_path / "ios-appium.yaml"
     config_file.write_text(
         """
@@ -229,8 +229,8 @@ simulator:
     config = load_ios_config()
     capabilities = build_ios_capabilities(config)
 
-    assert config.use_preinstalled_wda is True
-    assert capabilities["appium:usePreinstalledWDA"] is True
+    assert config.use_preinstalled_wda is None
+    assert "appium:usePreinstalledWDA" not in capabilities
 
 
 def test_device_does_not_default_to_preinstalled_wda(tmp_path, monkeypatch):
