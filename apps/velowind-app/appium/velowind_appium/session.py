@@ -294,6 +294,8 @@ def ensure_read_session_on_home(driver: WebDriver, ios_config: IosAppiumConfig) 
 
 
 def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:
+    if _publish_entry_ready(driver):
+        return False
     dismiss_common_system_alerts(driver)
     tap_text_if_present(driver, "同意并继续", timeout=2)
     tap_text_if_present(driver, "同意", timeout=1)

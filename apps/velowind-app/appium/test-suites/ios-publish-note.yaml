@@ -1,0 +1,6 @@
+tests:
+  - file: message/test_ios_publish_note.py
+    methods:
+      - test_user_can_publish_note_for_review
+pytest_args:
+  - --maxfail=1
