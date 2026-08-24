@@ -6,21 +6,32 @@ from velowind_appium.modules import (
     publish_message_note,
 )
 from velowind_appium.reporting import attach_text
-from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_for_publish_entry
+from velowind_appium.session import ensure_logged_in_for_publish_entry
 
 
 TESTDATA_PATH = Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
-SUCCESS_TOKENS = ["成功", "审核", "待审核", "已发布", "detail-page"]
+SUCCESS_TOKENS = ["成功", "审核", "待审核", "已发布", "视频上传中", "视频上传完成", "detail-page"]
 
 
 def publish_note_use_case_ids() -> list[str]:
-    return list_message_note_use_case_ids(testdata_path=TESTDATA_PATH)
+    return [
+        use_case_id
+        for use_case_id in list_message_note_use_case_ids(testdata_path=TESTDATA_PATH)
+        if load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH).media_type == "image"
+    ]
+
+
+def publish_video_note_use_case_ids() -> list[str]:
+    return [
+        use_case_id
+        for use_case_id in list_message_note_use_case_ids(testdata_path=TESTDATA_PATH)
+        if load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH).media_type == "video"
+    ]
 
 
 def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, verification_label: str, assertion_label: str) -> None:
     draft = load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH)
 
-    dismiss_common_system_alerts(app_driver, step)
     step("prepare-home-session", lambda: ensure_logged_in_for_publish_entry(app_driver, app_config))
     success_signal = step(
         f"publish-note-for-review-{use_case_id}",

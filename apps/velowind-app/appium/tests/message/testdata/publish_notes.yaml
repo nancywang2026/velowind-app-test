@@ -13,6 +13,19 @@ use_cases:
         - "#东北旅行"
       location: 长白山
       allow_comments: true
+  - id: publish-note-video
+    description: 发布视频笔记 - 长白山
+    note:
+      title: 测试 - 长白山视频记录
+      body: 用一段视频记录长白山的风和云，现场比照片更有临场感。
+      media_type: video
+      album: 视频
+      topics:
+        - "#长白山"
+        - "#旅行日记"
+        - "#视频记录"
+      location: 长白山
+      allow_comments: true
 #  - id: publish-note-changbaishan-no-location
 #    description: 发布笔记 - 长白山（不选地点）
 #    note:

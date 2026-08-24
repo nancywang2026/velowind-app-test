@@ -94,6 +94,110 @@ def choose_photo_from_library(
         return choose_local_photo(driver, **choose_kwargs)
 
 
+def choose_video_from_library(driver: WebDriver, *, video_index: int = 1) -> bool:
+    """Choose the first video from the system picker without opening collections."""
+    picker_visible = photo_library_visible(driver, timeout=2)
+    if not picker_visible:
+        source_chosen = choose_photo_library_source(driver)
+        if not source_chosen:
+            return False
+        picker_visible = photo_library_visible(driver, timeout=5)
+    if not picker_visible:
+        return False
+    dismiss_photo_permission_alerts(driver)
+    filter_selected = _select_ios_video_filter(driver)
+    _photo_picker_debug(f"video-filter-selected={filter_selected}")
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        candidate_tapped = _tap_first_ios_video_candidate(driver)
+    else:
+        candidate_tapped = tap_photo_grid_candidate(driver, max(1, video_index))
+    if not candidate_tapped and _wait_for_ios_video_preview(driver, timeout=5):
+        candidate_tapped = True
+    if not candidate_tapped:
+        _photo_picker_debug(f"video-grid-tap-failed source={_safe_page_source(driver)[:600]}")
+        return False
+    return _confirm_video_picker_selection(driver)
+
+
+def _tap_first_ios_video_candidate(driver: WebDriver) -> bool:
+    """Tap the first visible iOS picker thumbnail with one element query."""
+    try:
+        candidates = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeImage")
+    except (AttributeError, WebDriverException):
+        return False
+    visible_candidates = []
+    for candidate in candidates:
+        rect = _rect_snapshot(candidate)
+        if rect is None or rect["y"] < 135 or rect["width"] < 80 or rect["height"] < 80:
+            continue
+        visible_candidates.append((rect["y"], rect["x"], rect, candidate))
+    if not visible_candidates:
+        return False
+    _, _, rect, _ = min(visible_candidates, key=lambda item: (item[0], item[1]))
+    if not _tap_rect_center(driver, rect):
+        return False
+    return _wait_for_ios_video_preview(driver, timeout=10)
+
+
+def _confirm_video_picker_selection(driver: WebDriver) -> bool:
+    if not _visible_text_present(driver, "预览视频"):
+        if not _wait_for_ios_video_preview(driver, timeout=10):
+            _photo_picker_debug("video-preview-not-visible; refusing to tap confirm")
+            return False
+    _wait_until(lambda: _video_preview_confirmation_ready(driver), timeout=10)
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        try:
+            driver.execute_script("mobile: tap", {"x": 298, "y": 806})
+            _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30)
+            return True
+        except WebDriverException:
+            pass
+    for text in ["确认", "Confirm", "完成", "Done"]:
+        if _tap_text_or_contains(driver, text):
+            _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30)
+            return True
+    return confirm_system_photo_picker_selection(driver)
+
+
+def _video_preview_confirmation_ready(driver: WebDriver) -> bool:
+    """Return as soon as the preview and its confirm action are both ready."""
+    if not _visible_text_present(driver, "预览视频"):
+        return False
+    return any(_visible_text_present(driver, text) for text in ["确认", "Confirm", "完成", "Done"])
+
+
+def _wait_for_ios_video_preview(driver: WebDriver, *, timeout: int) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        if _visible_text_present(driver, "预览视频"):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _select_ios_video_filter(driver: WebDriver) -> bool:
+    """Use the picker's top video mode without opening the collections view."""
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        # The lower "视频" album card belongs to collections and is never tapped.
+        if _tap_ios_text_from_source(driver, "视频"):
+            time.sleep(0.8)
+            return True
+        try:
+            driver.execute_script("mobile: tap", {"x": 169, "y": 110})
+            time.sleep(0.8)
+            return True
+        except WebDriverException:
+            pass
+    for text in ["视频", "Videos"]:
+        if _tap_ios_text_from_source(driver, text):
+            time.sleep(0.8)
+            return True
+    return False
+
+
 def dismiss_photo_permission_alerts(driver: WebDriver) -> None:
     page_source = _safe_page_source(driver)
     alert_texts = ["Allow all", "允许访问所有照片", "允许", "Allow", "好"]
@@ -135,6 +239,7 @@ def photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
                 "最近项目",
                 "照片图库",
                 "所有照片",
+                "精选集",
                 "选择项目",
                 "选择照片",
                 "Select photos",

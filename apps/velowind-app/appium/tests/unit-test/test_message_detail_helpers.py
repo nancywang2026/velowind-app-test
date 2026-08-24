@@ -909,6 +909,31 @@ def test_message_note_publish_success_signal_detects_published_detail_state():
     assert message_note_publish_success_signal(page_source) == "已发布"
 
 
+def test_message_note_publish_success_signal_detects_video_upload_progress_on_my_notes():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="我的笔记" label="我的笔记" />
+      <XCUIElementTypeOther name="进行中" label="进行中" />
+    </AppiumAUT>
+    """
+
+    assert (
+        message_note_publish_success_signal(page_source, allow_video_upload_progress=True)
+        == "视频上传中"
+    )
+
+
+def test_wait_for_video_upload_completion_returns_progress_signal_after_grace_period(monkeypatch):
+    sources = iter(["我的笔记 进行中"])
+    sleeps = []
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: next(sources, "我的笔记 进行中"))
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert message_detail.wait_for_video_upload_completion(object(), timeout=3, hold_seconds=2) == "视频上传中"
+    assert sleeps == [2]
+
+
 def test_message_note_publish_error_signal_detects_backend_failure():
     page_source = """
     <AppiumAUT>
@@ -1887,6 +1912,36 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
         ("choose-photo", draft.album, draft.picture_index, False, True, True),
         ("record-source", draft.album, draft.picture_index),
     ]
+
+
+def test_load_message_note_draft_parses_video_media_type(tmp_path):
+    testdata = tmp_path / "publish_notes.yaml"
+    testdata.write_text(
+        """use_cases:\n  - id: publish-note-video\n    note:\n      title: 视频标题\n      body: 视频正文\n      media_type: video\n      album: 视频\n      location: 长白山\n""",
+        encoding="utf-8",
+    )
+
+    draft = load_message_note_draft("publish-note-video", testdata_path=testdata)
+
+    assert draft.media_type == "video"
+    assert draft.album == "视频"
+
+
+def test_upload_note_media_uses_video_picker_without_image_validation(monkeypatch):
+    calls = []
+    draft = MessageNoteDraft(title="标题", body="正文", topics=[], location="", media_type="video")
+
+    monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
+    monkeypatch.setattr(message_detail, "_tap_note_video_entry", lambda driver: calls.append("tap-video") or True)
+    monkeypatch.setattr(
+        message_detail.photo_picker,
+        "choose_video_from_library",
+        lambda driver, video_index=1: calls.append(("choose-video", video_index)) or True,
+    )
+
+    message_detail._upload_note_media(object(), draft)
+
+    assert calls == ["clear", "tap-video", ("choose-video", 1)]
 
 
 def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypatch):
