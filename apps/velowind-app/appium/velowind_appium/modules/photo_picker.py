@@ -818,7 +818,7 @@ def switch_photo_picker_to_collections(driver: WebDriver, *, current_title: str 
             lambda: _photo_picker_collections_visible(driver)
             or photo_album_title(driver) == "精选集"
             or _visible_text_present(driver, "精选集"),
-            timeout=2,
+            timeout=1,
         )
 
 
@@ -861,7 +861,7 @@ def _return_photo_picker_to_collections(driver: WebDriver, *, current_title: str
             return False
         if _wait_until(
             lambda: _photo_picker_collections_visible(driver) or photo_album_title(driver) != current_title,
-            timeout=2,
+            timeout=1,
         ):
             _photo_picker_debug(f"back navigation left album {current_title}; now={photo_album_title(driver)}")
             return True

@@ -2045,6 +2045,47 @@ def test_android_note_image_plus_taps_first_image_slot_center():
     assert taps == [("mobile: tap", {"x": 155.0, "y": 444.0})]
 
 
+def test_ios_note_image_plus_uses_updated_top_image_slot_from_source(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = """
+        <AppiumAUT>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" name="image" label="image"
+            enabled="true" visible="true" accessible="false" x="14" y="132" width="96" height="96" />
+        </AppiumAUT>
+        """
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+        def find_element(self, by, value):
+            raise NoSuchElementException()
+
+    monkeypatch.setattr(message_detail, "tap_if_present", lambda driver, value, timeout=1: False)
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda driver, value, timeout=1: False)
+    monkeypatch.setattr(message_detail, "_wait_for_note_photo_picker_opened", lambda driver, timeout=2: True)
+
+    assert message_detail._tap_note_image_plus(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 62, "y": 156})]
+
+
+def test_ios_note_image_plus_coordinate_fallback_requires_picker_transition(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_wait_for_note_photo_picker_opened", lambda driver, timeout=2: False)
+
+    assert message_detail._tap_note_image_plus_by_coordinate(FakeDriver()) is False
+    assert taps == [("mobile: tap", {"x": 60, "y": 170})]
+
+
 def test_fill_input_near_label_supports_android_edit_text_hint(monkeypatch):
     events = []
 

@@ -404,6 +404,39 @@ def test_switch_photo_picker_to_collections_uses_ios_source_fast_path(monkeypatc
     assert taps == [("mobile: tap", {"x": 128, "y": 836})]
 
 
+def test_switch_photo_picker_to_collections_uses_short_wait(monkeypatch):
+    waits = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(photo_picker, "_tap_ios_text_from_source", lambda driver, text: True)
+    monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: False)
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: "精选集")
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: False)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: waits.append(timeout) or predicate())
+
+    assert photo_picker.switch_photo_picker_to_collections(FakeDriver(), current_title="照片") is True
+    assert waits == [1]
+
+
+def test_return_photo_picker_to_collections_uses_short_wait(monkeypatch):
+    waits = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: False)
+    monkeypatch.setattr(photo_picker, "_tap_photo_picker_back", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: "照片")
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: waits.append(timeout) or True)
+
+    assert photo_picker._return_photo_picker_to_collections(FakeDriver(), current_title="照片") is True
+    assert waits == [1]
+
+
 def test_photo_library_visible_does_not_accept_generic_photo_text(monkeypatch):
     monkeypatch.setattr(photo_picker.time, "monotonic", iter([0, 1]).__next__)
     monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)

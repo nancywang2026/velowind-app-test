@@ -2476,7 +2476,9 @@ def _text_input_current_value(element) -> str:
 
 
 def _tap_note_image_plus(driver: WebDriver) -> bool:
-    if _tap_note_image_plus_by_coordinate(driver):
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    if not is_ios and _tap_note_image_plus_by_coordinate(driver):
         return True
     for accessibility_id in [
         "note-image-add",
@@ -2484,10 +2486,14 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
         "post-image-add",
         "publish-image-add",
     ]:
-        if tap_if_present(driver, accessibility_id, timeout=1):
+        if tap_if_present(driver, accessibility_id, timeout=1) and (
+            not is_ios or _wait_for_note_photo_picker_opened(driver)
+        ):
             return True
     for text in ["添加图片", "上传图片", "+", "＋"]:
-        if tap_text_if_present(driver, text, timeout=1):
+        if tap_text_if_present(driver, text, timeout=1) and (
+            not is_ios or _wait_for_note_photo_picker_opened(driver)
+        ):
             return True
     for xpath in [
         '//*[@name="+" or @label="+" or @value="+"]',
@@ -2498,9 +2504,14 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
     ]:
         try:
             driver.find_element(AppiumBy.XPATH, xpath).click()
-            return True
+            if not is_ios or _wait_for_note_photo_picker_opened(driver):
+                return True
         except (NoSuchElementException, WebDriverException):
             continue
+    if is_ios:
+        if _tap_ios_note_image_plus_from_source(driver):
+            return True
+        return _tap_note_image_plus_by_coordinate(driver)
     try:
         driver.execute_script("mobile: tap", {"x": 60, "y": 206})
         return True
@@ -2549,10 +2560,85 @@ def _tap_note_image_plus_by_coordinate(driver: WebDriver) -> bool:
         return False
 
     try:
-        driver.execute_script("mobile: tap", {"x": 60, "y": 206})
-        return True
+        driver.execute_script("mobile: tap", {"x": 60, "y": 170})
+        return _wait_for_note_photo_picker_opened(driver)
     except WebDriverException:
         return False
+
+
+def _tap_ios_note_image_plus_from_source(driver: WebDriver) -> bool:
+    source = _safe_page_source(driver)
+    if not source:
+        return False
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return False
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        if element.tag not in {
+            "XCUIElementTypeOther",
+            "XCUIElementTypeImage",
+            "XCUIElementTypeButton",
+        }:
+            continue
+        if element.attrib.get("visible", "true").lower() == "false":
+            continue
+        try:
+            x = int(float(element.attrib.get("x", "0")))
+            y = int(float(element.attrib.get("y", "0")))
+            width = int(float(element.attrib.get("width", "0")))
+            height = int(float(element.attrib.get("height", "0")))
+        except (TypeError, ValueError):
+            continue
+        if y < 90 or y > 340 or width < 70 or height < 70:
+            continue
+        ratio = width / height if height else 0
+        if not 0.65 <= ratio <= 1.5:
+            continue
+        searchable = " ".join(
+            str(element.attrib.get(attribute, ""))
+            for attribute in ("name", "label", "value", "type")
+        ).lower()
+        if not any(token in searchable for token in ("image", "图片", "上传", "添加", "+", "＋")):
+            continue
+        candidates.append((y, x, width, height))
+
+    for y, x, width, height in sorted(set(candidates)):
+        try:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": x + width // 2, "y": y + height // 4},
+            )
+        except WebDriverException:
+            continue
+        if _wait_for_note_photo_picker_opened(driver):
+            return True
+    return False
+
+
+def _wait_for_note_photo_picker_opened(driver: WebDriver, timeout: int = 2) -> bool:
+    return _wait_until(lambda: _note_photo_picker_opened(driver), timeout=timeout)
+
+
+def _note_photo_picker_opened(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    return any(
+        marker in page_source
+        for marker in [
+            "从手机相册选择",
+            "手机相册",
+            "从相册选择",
+            "照片图库",
+            "最近项目",
+            "所有照片",
+            "选择项目",
+            "选择最多9张照片。",
+            "PUPickerContainer",
+            "photosView_content_scroll_view",
+        ]
+    )
 
 
 def _choose_photo_library_source(driver: WebDriver) -> bool:

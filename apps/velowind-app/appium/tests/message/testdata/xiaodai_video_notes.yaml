@@ -3,25 +3,25 @@ dataset:
   root: /Users/test/Nancy/Testing/testingdata/小黛/视频
   video_order: iPhone 视频相册从上到下，最新导入的视频为第 1 个
 use_cases:
-#  - id: xiaodai-0410
-#    description: 小黛 0410 视频上传
-#    note:
-#      title: Velowind｜踩上踏板，即刻出发
-#      body: |-
-#        不是所有出发都需要计划很久
-#        节奏一直在你脚下
-#      media_type: video
-#      video_index: 1
-#      source_video: 0410/视频_0410.mp4
-#      caption_image: 0410/文案.docx
-#      topics:
-#        - "#寻风集velowind"
-#        - "#寻风集户外专用保障车"
-#        - "#户外"
-#        - "#骑友圈"
-#        - "#运动生活方式"
-#      location: ""
-#      allow_comments: true
+  - id: xiaodai-0410
+    description: 小黛 0410 视频上传
+    note:
+      title: Velowind｜踩上踏板，即刻出发
+      body: |-
+        不是所有出发都需要计划很久
+        节奏一直在你脚下
+      media_type: video
+      video_index: 1
+      source_video: 0410/视频_0410.mp4
+      caption_image: 0410/文案.docx
+      topics:
+        - "#寻风集velowind"
+        - "#寻风集户外专用保障车"
+        - "#户外"
+        - "#骑友圈"
+        - "#运动生活方式"
+      location: ""
+      allow_comments: true
 #  - id: xiaodai-0424
 #    description: 小黛 0424 视频上传
 #    note:
@@ -69,32 +69,32 @@ use_cases:
 #        - "#航拍"
 #      location: 千岛湖
 #      allow_comments: true
-  - id: xiaodai-0511
-    description: 小黛 0511 视频上传
-    note:
-      title: 活动回顾📷｜寻风集in上海自行车展
-      body: |-
-        5月5日-5月8日
-        2026中国国际自行车展览会收官🎉
-
-        这几天，寻风集用镜头记录每一个鲜活瞬间🌼
-        这次展会对我们来说收获满满，不仅有许多骑行爱好者驻足交流，更有不少合作伙伴来到现场深入了解并体验我们的户外保障车辆，给予寻风集宝贵的关注与认可🥰
-
-        从展位打卡到现场互动，大家边逛边聊，骑行的热爱在这里不断汇聚与延续。感谢每一位到场的伙伴，让这场活动更加有温度，同时下一次的活动已经在筹备当中～
-      media_type: video
-      video_index: 1
-      album: 小黛0511
-      source_video: 0511/视频.mp4
-      caption_image: 0511/文案.png
-      topics:
-        - "#活动回顾"
-        - "#中国国际自行车展"
-        - "#上海自行车展"
-        - "#寻风集"
-        - "#寻风集户外专用保障车"
-        - "#展会"
-      location: 上海
-      allow_comments: true
+#  - id: xiaodai-0511
+#    description: 小黛 0511 视频上传
+#    note:
+#      title: 活动回顾📷｜寻风集in上海自行车展
+#      body: |-
+#        5月5日-5月8日
+#        2026中国国际自行车展览会收官🎉
+#
+#        这几天，寻风集用镜头记录每一个鲜活瞬间🌼
+#        这次展会对我们来说收获满满，不仅有许多骑行爱好者驻足交流，更有不少合作伙伴来到现场深入了解并体验我们的户外保障车辆，给予寻风集宝贵的关注与认可🥰
+#
+#        从展位打卡到现场互动，大家边逛边聊，骑行的热爱在这里不断汇聚与延续。感谢每一位到场的伙伴，让这场活动更加有温度，同时下一次的活动已经在筹备当中～
+#      media_type: video
+#      video_index: 1
+#      album: 小黛0511
+#      source_video: 0511/视频.mp4
+#      caption_image: 0511/文案.png
+#      topics:
+#        - "#活动回顾"
+#        - "#中国国际自行车展"
+#        - "#上海自行车展"
+#        - "#寻风集"
+#        - "#寻风集户外专用保障车"
+#        - "#展会"
+#      location: 上海
+#      allow_comments: true
 #  - id: xiaodai-0526
 #    description: 小黛 0526 视频上传
 #    note:
