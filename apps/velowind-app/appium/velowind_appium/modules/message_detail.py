@@ -400,7 +400,11 @@ def publish_message_note(
             success_signal = wait_for_video_upload_completion(driver, timeout=timeout)
     if draft.media_type == "image":
         with _note_profile("validate-published-image"):
-            _validate_published_note_image_matches_uploaded_preview(driver, timeout=min(timeout, 20))
+            _validate_published_note_image_matches_uploaded_preview(
+                driver,
+                timeout=min(timeout, 20),
+                title=draft.title,
+            )
     return success_signal
 
 
@@ -2033,13 +2037,23 @@ def _ensure_note_source_image_recorded(driver: WebDriver) -> None:
         raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
 
 
-def _validate_published_note_image_matches_uploaded_preview(driver: WebDriver, *, timeout: int = 20) -> None:
+def _validate_published_note_image_matches_uploaded_preview(
+    driver: WebDriver,
+    *,
+    timeout: int = 20,
+    title: str | None = None,
+) -> None:
     source_path = getattr(driver, "_publish_note_album_source_image_path", None)
     if source_path is None:
         raise AssertionError("Selected album image source was not recorded before publishing")
     source_path = Path(source_path)
     if not source_path.exists():
         raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
+    if not message_detail_is_visible(driver):
+        if title:
+            _open_published_note_detail_from_my_notes(driver, title, timeout=timeout)
+        elif not _wait_until(lambda: message_detail_is_visible(driver), timeout=timeout):
+            raise AssertionError("Published note detail did not become visible for pixel validation")
     if not _wait_until(lambda: find_note_detail_image_bounds(_safe_page_source(driver)) is not None, timeout=timeout):
         raise AssertionError("Unable to locate the published note detail image for pixel validation")
 
@@ -2056,6 +2070,56 @@ def _validate_published_note_image_matches_uploaded_preview(driver: WebDriver, *
         attachments = _save_publish_note_image_validation_artifacts(source_path, detail_path, result)
         setattr(driver, "_publish_note_image_validation_artifacts", attachments)
         raise AssertionError(f"Published note image does not match the selected album image: {result}")
+
+
+def _open_published_note_detail_from_my_notes(driver: WebDriver, title: str, *, timeout: int = 20) -> None:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if message_detail_is_visible(driver):
+            return
+        if _tap_published_note_title(driver, title, page_source=page_source):
+            if _wait_until(lambda: message_detail_is_visible(driver), timeout=5):
+                return
+        if not _my_notes_list_visible(page_source):
+            if tap_text_if_present(driver, "我的笔记", timeout=1):
+                continue
+            if tap_text_if_present(driver, "我的", timeout=1):
+                continue
+        if not _scroll_my_notes_list(driver):
+            break
+        time.sleep(0.3)
+    raise AssertionError(f"Unable to open published note detail from My Notes for title: {title}")
+
+
+def _my_notes_list_visible(page_source: str) -> bool:
+    return "我的笔记" in page_source and any(token in page_source for token in ["发布", "草稿箱", "我的发布"])
+
+
+def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str | None = None) -> bool:
+    page_source = page_source or _safe_page_source(driver)
+    if not page_source:
+        return False
+    escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    for xpath in [
+        f'//*[contains(@text, "{escaped_title}") or contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
+        f'//*[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+        except (NoSuchElementException, WebDriverException):
+            continue
+        if _wait_until(lambda: message_detail_is_visible(driver), timeout=1.5):
+            return True
+    return tap_text_if_present(driver, title, timeout=1)
+
+
+def _scroll_my_notes_list(driver: WebDriver) -> bool:
+    try:
+        swipe_vertical(driver, direction="up")
+        return True
+    except (WebDriverException, AttributeError):
+        return False
 
 
 def _open_published_note_image_viewer(driver: WebDriver, bounds, *, timeout: int):

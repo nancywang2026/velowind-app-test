@@ -187,6 +187,45 @@ def test_publish_note_image_validation_opens_detail_image_before_capture(monkeyp
     assert events == [("open-viewer", "detail-bounds", 12), ("capture", "viewer-bounds")]
 
 
+def test_publish_note_image_validation_opens_my_notes_detail_by_title_before_capture(monkeypatch, tmp_path):
+    source_path = tmp_path / "album-source.jpg"
+    source_path.write_bytes(b"source")
+    actual_path = tmp_path / "detail.png"
+    events = []
+
+    class FakeResult:
+        is_valid = True
+
+    class FakeImage:
+        def save(self, path):
+            actual_path.write_bytes(b"actual")
+
+    class FakeDriver:
+        _publish_note_album_source_image_path = source_path
+
+    monkeypatch.setattr(message_detail, "message_detail_is_visible", lambda driver: False)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "我的笔记 测试标题 发布")
+    monkeypatch.setattr(
+        message_detail,
+        "_open_published_note_detail_from_my_notes",
+        lambda driver, title, timeout=20: events.append(("open-my-notes", title, timeout)),
+    )
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(message_detail, "find_note_detail_image_bounds", lambda page_source: "detail-bounds")
+    monkeypatch.setattr(message_detail, "_open_published_note_image_viewer", lambda driver, bounds, timeout: bounds)
+    monkeypatch.setattr(
+        message_detail,
+        "_capture_image_bounds",
+        lambda driver, bounds: events.append(("capture", bounds)) or FakeImage(),
+    )
+    monkeypatch.setattr(message_detail, "_publish_note_validation_detail_path", lambda: actual_path)
+    monkeypatch.setattr(message_detail, "compare_images_for_publish_note", lambda source, actual: FakeResult())
+
+    message_detail._validate_published_note_image_matches_uploaded_preview(FakeDriver(), title="测试标题")
+
+    assert events == [("open-my-notes", "测试标题", 20), ("capture", "detail-bounds")]
+
+
 def test_ios_note_search_entry_coordinate_defers_visibility_wait(monkeypatch):
     calls = []
 
