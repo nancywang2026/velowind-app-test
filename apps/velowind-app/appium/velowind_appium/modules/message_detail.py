@@ -29,7 +29,7 @@ from velowind_appium.actions import (
     ios_predicate as locator_ios_predicate,
     xpath as locator_xpath,
 )
-from velowind_appium.auth import login_required_from_page_source
+from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
 from velowind_appium.image_validation import (
     compare_images_for_publish_note,
@@ -267,6 +267,9 @@ class MessageNoteDraft:
     picture_indexes: tuple[int, ...] = ()
     allow_comments: bool = True
     media_type: str = "image"
+    video_index: int = 1
+    source_video: str = ""
+    caption_image: str = ""
 
 
 def build_changbaishan_note_draft() -> MessageNoteDraft:
@@ -321,6 +324,11 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
     allow_comments = note.get("allow_comments", True)
     if isinstance(allow_comments, str):
         allow_comments = allow_comments.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
+    raw_video_index = note.get("video_index", 1)
+    try:
+        video_index = max(1, int(raw_video_index))
+    except (TypeError, ValueError):
+        video_index = 1
     return MessageNoteDraft(
         title=title,
         body=body,
@@ -331,6 +339,9 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         picture_indexes=picture_indexes,
         allow_comments=bool(allow_comments),
         media_type=str(note.get("media_type", "image")).strip().lower() or "image",
+        video_index=video_index,
+        source_video=str(note.get("source_video", "")).strip(),
+        caption_image=str(note.get("caption_image", "")).strip(),
     )
 
 
@@ -443,9 +454,19 @@ def open_message_note_publisher(
                 "The logged_in_session fixture should authenticate before business steps."
             )
 
+    def _recover_from_login_page() -> bool:
+        if ios_config is None:
+            return False
+        if not getattr(ios_config, "login_username", None) or not getattr(ios_config, "login_password", None):
+            return False
+        return ensure_logged_in_if_needed(driver, ios_config)
+
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
-        _raise_if_login_required(page_source)
+        if login_required_from_page_source(page_source):
+            if _recover_from_login_page():
+                continue
+            _raise_if_login_required(page_source)
 
         if message_note_form_is_visible(page_source):
             return
@@ -453,6 +474,8 @@ def open_message_note_publisher(
         if _publish_sheet_visible(page_source) and _tap_note_type_if_present(driver):
             if _wait_until(_form_or_login_visible, timeout=10):
                 page_source = _safe_page_source(driver)
+                if login_required_from_page_source(page_source) and _recover_from_login_page():
+                    continue
                 _raise_if_login_required(page_source)
                 if message_note_form_is_visible(page_source):
                     return
@@ -461,6 +484,8 @@ def open_message_note_publisher(
             _tap_note_type_if_present(driver)
             if _wait_until(_form_or_login_visible, timeout=10):
                 page_source = _safe_page_source(driver)
+                if login_required_from_page_source(page_source) and _recover_from_login_page():
+                    continue
                 _raise_if_login_required(page_source)
                 if message_note_form_is_visible(page_source):
                     return
@@ -1129,7 +1154,7 @@ def _tap_publish_entry_by_coordinate(driver: WebDriver) -> bool:
                 ):
                     return True
             return False
-        driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * 0.93)})
+        driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * 0.86)})
         return _wait_until(
             lambda: _publish_entry_opened(_safe_page_source(driver)),
             timeout=1,
@@ -1943,7 +1968,11 @@ def _upload_note_media(driver: WebDriver, draft: MessageNoteDraft) -> None:
         _clear_existing_note_images(driver)
         if not _tap_note_video_entry(driver):
             raise AssertionError("Unable to find the note video upload button")
-        if not photo_picker.choose_video_from_library(driver, video_index=1):
+        if not photo_picker.choose_video_from_library(
+            driver,
+            album_name=draft.album,
+            video_index=draft.video_index,
+        ):
             raise AssertionError(
                 "Video library opened but no selectable video was found. "
                 "Seed at least one video into Photos on the device."

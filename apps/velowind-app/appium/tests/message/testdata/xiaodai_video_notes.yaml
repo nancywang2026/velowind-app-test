@@ -1,0 +1,243 @@
+dataset:
+  name: 小黛视频上传
+  root: /Users/test/Nancy/Testing/testingdata/小黛/视频
+  video_order: iPhone 视频相册从上到下，最新导入的视频为第 1 个
+use_cases:
+#  - id: xiaodai-0410
+#    description: 小黛 0410 视频上传
+#    note:
+#      title: Velowind｜踩上踏板，即刻出发
+#      body: |-
+#        不是所有出发都需要计划很久
+#        节奏一直在你脚下
+#      media_type: video
+#      video_index: 1
+#      source_video: 0410/视频_0410.mp4
+#      caption_image: 0410/文案.docx
+#      topics:
+#        - "#寻风集velowind"
+#        - "#寻风集户外专用保障车"
+#        - "#户外"
+#        - "#骑友圈"
+#        - "#运动生活方式"
+#      location: ""
+#      allow_comments: true
+#  - id: xiaodai-0424
+#    description: 小黛 0424 视频上传
+#    note:
+#      title: Velowind｜解锁轻松骑行状态 🚲
+#      body: |-
+#        跳出紧绷的生活步调
+#        在风中调整呼吸
+#        享受骑行的舒缓时刻 🫧
+#      media_type: video
+#      video_index: 1
+#      album: 小黛0424
+#      source_video: 0424/视频.mp4
+#      caption_image: 0424/文案.png
+#      topics:
+#        - "#寻风集velowind"
+#        - "#寻风集户外专用保障车"
+#        - "#户外"
+#        - "#骑友圈"
+#        - "#运动生活方式"
+#      location: ""
+#      allow_comments: true
+#  - id: xiaodai-0430
+#    description: 小黛 0430 视频上传
+#    note:
+#      title: 千岛湖东北环湖骑行/静谧小众 🌲
+#      body: |-
+#        不想再走千岛湖热门常规路线
+#        这次来跟随寻风集解锁环东北湖区绿道🚲
+#
+#        该线路以进贤湾游客中心为起终点，形成了一条闭环环骑路线。沿途经过环左线、丰茂隧道、昌丰线、九龙大桥等路段，最终穿越千岛湖大道与千岛湖大桥，回归起点，长约50km。
+#
+#        东北环湖绿道临湖延伸，静谧小众、路况平缓。结伴沿湖慢骑，拥抱澄澈湖风与山野风光。寻风集户外保障车随行，让骑行自在又踏实，享受户外松弛时刻。
+#      media_type: video
+#      video_index: 1
+#      album: 小黛0430
+#      source_video: 0430/视频.mp4
+#      caption_image: 0430/文案.png
+#      topics:
+#        - "#骑友圈"
+#        - "#寻风集velowind"
+#        - "#寻风集户外专用保障车"
+#        - "#户外"
+#        - "#运动生活方式"
+#        - "#千岛湖"
+#        - "#航拍"
+#      location: 千岛湖
+#      allow_comments: true
+  - id: xiaodai-0511
+    description: 小黛 0511 视频上传
+    note:
+      title: 活动回顾📷｜寻风集in上海自行车展
+      body: |-
+        5月5日-5月8日
+        2026中国国际自行车展览会收官🎉
+
+        这几天，寻风集用镜头记录每一个鲜活瞬间🌼
+        这次展会对我们来说收获满满，不仅有许多骑行爱好者驻足交流，更有不少合作伙伴来到现场深入了解并体验我们的户外保障车辆，给予寻风集宝贵的关注与认可🥰
+
+        从展位打卡到现场互动，大家边逛边聊，骑行的热爱在这里不断汇聚与延续。感谢每一位到场的伙伴，让这场活动更加有温度，同时下一次的活动已经在筹备当中～
+      media_type: video
+      video_index: 1
+      album: 小黛0511
+      source_video: 0511/视频.mp4
+      caption_image: 0511/文案.png
+      topics:
+        - "#活动回顾"
+        - "#中国国际自行车展"
+        - "#上海自行车展"
+        - "#寻风集"
+        - "#寻风集户外专用保障车"
+        - "#展会"
+      location: 上海
+      allow_comments: true
+#  - id: xiaodai-0526
+#    description: 小黛 0526 视频上传
+#    note:
+#      title: 骑过山与海的距离
+#      body: |-
+#        沿着海南的海岸线慢慢骑
+#        感受海风的惬意 🌊
+#      media_type: video
+#      video_index: 1
+#      album: 小黛0526
+#      source_video: 0526/视频.mp4
+#      caption_image: 0526/文案.png
+#      topics:
+#        - "#寻风集velowind"
+#        - "#寻风集户外专用保障车"
+#        - "#户外"
+#        - "#海南骑行"
+#        - "#拥抱自由的风"
+#        - "#穿越海岸线"
+#      location: 上海
+#      allow_comments: true
+#  - id: xiaodai-0603
+#    description: 小黛 0603 视频上传
+#    note:
+#      title: 跟着寻风集去踩线！Pt.1
+#      body: |-
+#        在寻找更精彩的骑行路线的过程中，寻风集前往苏州太湖西山岛展开为期1天的踩线之旅。
+#        正是枇杷结果的季节，整座小岛草木成荫，一路伴着开阔治愈的大湖风光，在轻松的同行氛围里，感受出发最纯粹的美好。
+#
+#        全部内容即将上线
+#      media_type: video
+#      album: 小黛0603
+#      video_index: 1
+#      source_video: 0603/视频.mp4
+#      caption_image: 0603/文案.png
+#      topics:
+#        - "#寻风集户外专用保障车"
+#        - "#寻风集velowind"
+#        - "#一起追风去"
+#        - "#西山岛"
+#        - "#骑行路线推荐"
+#      location: 上海
+#      allow_comments: true
+#  - id: xiaodai-0611
+#    description: 小黛 0611 视频上传
+#    note:
+#      title: 跟着寻风集去踩线！Pt.2
+#      body: |-
+#        在轻松的同行氛围里
+#        感受出发最纯粹的美好
+#      media_type: video
+#      album: 小黛0611
+#      video_index: 1
+#      source_video: 0611/视频.mp4
+#      caption_image: 0611/文案.png
+#      topics:
+#        - "#寻风集户外专用保障车"
+#        - "#寻风集velowind"
+#        - "#一起追风去"
+#        - "#西山岛"
+#        - "#骑行路线推荐"
+#        - "#户外"
+#        - "#运动生活方式"
+#      location: 上海
+#      allow_comments: true
+#  - id: xiaodai-0626
+#    description: 小黛 0626 视频上传
+#    note:
+#      title: 阳光和骑行适配度满分 🚲
+#      body: |-
+#        城市漫游模式开启
+#        在江边骑车兜风
+#        在徐浦大桥遇见日落
+#        把好天气和风景都留在这一程里 🏃
+#      media_type: video
+#      album: 小黛0626
+#      video_index: 1
+#      source_video: 0626/6月24日.mp4
+#      caption_image: 0626/文案.png
+#      topics:
+#        - "#寻风集户外专用保障车"
+#        - "#寻风集velowind"
+#        - "#骑友圈"
+#        - "#户外"
+#        - "#骑行一夏"
+#        - "#一起去骑行"
+#        - "#就这样骑进夏天吧"
+#        - "#我的骑行日志"
+#      location: 上海
+#      allow_comments: true
+#  - id: xiaodai-0701
+#    description: 小黛 0701 视频上传
+#    note:
+#      title: 解锁硬核户外｜丽江原始森林越野 🌲
+#      body: |-
+#        来到丽江老君山原始森林
+#        感受属于高海拔的山野气息
+#        油门拧到底🏍️
+#        享受草甸驰骋的自由
+#        这一刻可以忘记所有的焦虑疲惫
+#
+#        寻风集户外保障车一路随行 🚌
+#      media_type: video
+#      video_index: 1
+#      album: 小黛0701
+#      source_video: 0701/视频.mp4
+#      caption_image: 0701/文案.jpg
+#      topics:
+#        - "#寻风集户外专用保障车"
+#        - "#户外"
+#        - "#寻风集velowind"
+#        - "#越野"
+#        - "#格拉丹"
+#        - "#最野户外照"
+#        - "#寻找野外户外人"
+#        - "#呼叫野生科学家"
+#        - "#小红书户外有局"
+#      location: 上海
+#      allow_comments: true
+#  - id: xiaodai-0822
+#    description: 小黛 0822 视频上传
+#    note:
+#      title: 一辆骑行保障车内部长什么样？ 🚌
+#      body: |-
+#        7座空间，6辆自行车专用固定，骑行装备可以集中收纳；车内保留宽敞的乘坐与活动空间，配备移动电源、急救包、充气筒、冰箱、折叠桌，满足骑行出发前后的各种需求。
+#
+#        4+2出行模式，自行车和骑行伙伴一起上车，抵达骑行起点，下车即骑。骑行间隙，车内也可以作为临时休息、整理装备的空间，骑不动就上保障车。
+#
+#        从装车出发，到驰入户外，把骑行所需的空间都留在一辆车里💪
+#      media_type: video
+#      video_index: 1
+#      album: 小黛0822
+#      source_video: 0822/寻风集车辆展示.mp4
+#      caption_image: 0822/文案.png
+#      topics:
+#        - "#寻风集velowind"
+#        - "#寻风集户外专用保障车"
+#        - "#户外"
+#        - "#howto驶进山野"
+#        - "#移动的生活空间"
+#        - "#保障车"
+#        - "#骑行保障车"
+#        - "#骑友圈"
+#        - "#骑行"
+#      location: 上海
+#      allow_comments: true

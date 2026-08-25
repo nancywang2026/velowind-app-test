@@ -1,0 +1,8 @@
+tests:
+  - file: message/test_ios_xiaodai_publish_video.py
+    methods:
+      - test_user_can_publish_xiaodai_video_note_for_review
+markers:
+  - full
+pytest_args:
+  - --maxfail=1
