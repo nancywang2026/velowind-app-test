@@ -18,13 +18,18 @@ from PIL import Image, ImageChops
 import yaml
 
 from velowind_appium.actions import (
+    accessibility_id as locator_accessibility_id,
     swipe_vertical,
+    tap_first,
     tap_accessibility_id_or_text_if_present,
     tap_if_present,
     tap_text_if_present,
+    wait_for_first,
     wait_for_any_accessibility_id_or_text,
+    ios_predicate as locator_ios_predicate,
+    xpath as locator_xpath,
 )
-from velowind_appium.auth import login_required_from_page_source
+from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
 from velowind_appium.image_validation import (
     compare_images_for_publish_note,
@@ -75,6 +80,41 @@ PUBLISH_ENTRY_IDS = [
     "home-create-entry",
 ]
 PUBLISH_ENTRY_TEXTS = ["发布", "创建", "+", "＋"]
+
+PUBLISH_ENTRY_CANDIDATES = [
+    locator_accessibility_id("bottom-nav-publish"),
+    locator_accessibility_id("bottom-nav-plus"),
+    locator_accessibility_id("bottom-nav-add"),
+    locator_accessibility_id("home-publish-entry"),
+    locator_accessibility_id("home-create-entry"),
+    *[locator_ios_predicate(f'name == "{value}" OR label == "{value}" OR value == "{value}"') for value in PUBLISH_ENTRY_TEXTS],
+]
+NOTE_TYPE_CANDIDATES = [
+    locator_accessibility_id("publish-type-note"),
+    locator_accessibility_id("note-publish-type"),
+    locator_ios_predicate('name == "发布笔记" OR label == "发布笔记" OR value == "发布笔记"'),
+    locator_ios_predicate('name == "笔记" OR label == "笔记" OR value == "笔记"'),
+]
+NOTE_TITLE_CANDIDATES = [
+    locator_accessibility_id("note-title-input"),
+    locator_ios_predicate('type == "XCUIElementTypeTextField" AND (value CONTAINS "标题" OR label CONTAINS "标题")'),
+    locator_xpath('//XCUIElementTypeTextField[contains(@value, "标题")]'),
+    locator_xpath("//XCUIElementTypeTextField[1]"),
+]
+NOTE_BODY_CANDIDATES = [
+    locator_accessibility_id("note-body-input"),
+    locator_ios_predicate('type == "XCUIElementTypeTextView" AND (value CONTAINS "正文" OR value CONTAINS "分享" OR value CONTAINS "内容")'),
+    locator_xpath('//XCUIElementTypeTextView[contains(@value, "正文") or contains(@value, "分享") or contains(@value, "内容")]'),
+    locator_xpath("//XCUIElementTypeTextView[1]"),
+]
+NOTE_SUBMIT_CANDIDATES = [
+    locator_accessibility_id("note-submit-button"),
+    locator_accessibility_id("message-submit-button"),
+    locator_accessibility_id("post-submit-button"),
+    locator_accessibility_id("publish-submit-button"),
+    locator_ios_predicate('name == "提交审核" OR label == "提交审核" OR value == "提交审核"'),
+    locator_ios_predicate('name == "发布" OR label == "发布" OR value == "发布"'),
+]
 PUBLISH_SHEET_TEXTS = ["选择发布类型"]
 NOTE_TYPE_IDS = [
     "publish-type-note",
@@ -107,6 +147,7 @@ NOTE_FORM_READY_TEXTS = [
     "提交审核",
 ]
 NOTE_SUCCESS_TEXTS = ["发布成功", "提交成功", "审核中", "待审核", "提交审核成功", "已发布"]
+VIDEO_UPLOAD_PROGRESS_TEXTS = ["进行中", "上传中", "上传进度"]
 NOTE_SUCCESS_IDS = [
     "note-publish-success",
     "message-publish-success",
@@ -225,6 +266,10 @@ class MessageNoteDraft:
     picture_index: int = 1
     picture_indexes: tuple[int, ...] = ()
     allow_comments: bool = True
+    media_type: str = "image"
+    video_index: int = 1
+    source_video: str = ""
+    caption_image: str = ""
 
 
 def build_changbaishan_note_draft() -> MessageNoteDraft:
@@ -279,6 +324,11 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
     allow_comments = note.get("allow_comments", True)
     if isinstance(allow_comments, str):
         allow_comments = allow_comments.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
+    raw_video_index = note.get("video_index", 1)
+    try:
+        video_index = max(1, int(raw_video_index))
+    except (TypeError, ValueError):
+        video_index = 1
     return MessageNoteDraft(
         title=title,
         body=body,
@@ -288,6 +338,10 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         picture_index=picture_index,
         picture_indexes=picture_indexes,
         allow_comments=bool(allow_comments),
+        media_type=str(note.get("media_type", "image")).strip().lower() or "image",
+        video_index=video_index,
+        source_video=str(note.get("source_video", "")).strip(),
+        caption_image=str(note.get("caption_image", "")).strip(),
     )
 
 
@@ -336,10 +390,47 @@ def publish_message_note(
     with _note_profile("fill-form"):
         fill_message_note_form(driver, draft, timeout=timeout)
     with _note_profile("submit-note"):
-        success_signal = submit_message_note(driver, timeout=timeout)
-    with _note_profile("validate-published-image"):
-        _validate_published_note_image_matches_uploaded_preview(driver, timeout=min(timeout, 20))
+        success_signal = submit_message_note(
+            driver,
+            timeout=timeout,
+            allow_video_upload_progress=draft.media_type == "video",
+        )
+    if draft.media_type == "video" and success_signal == "视频上传中":
+        with _note_profile("hold-video-upload-progress"):
+            success_signal = wait_for_video_upload_completion(driver, timeout=timeout)
+    if draft.media_type == "image":
+        with _note_profile("validate-published-image"):
+            _validate_published_note_image_matches_uploaded_preview(driver, timeout=min(timeout, 20))
     return success_signal
+
+
+def wait_for_video_upload_completion(
+    driver: WebDriver,
+    timeout: int = 90,
+    *,
+    hold_seconds: float | None = None,
+) -> str:
+    """Treat the visible post-submit upload progress as the success signal.
+
+    The app performs video upload asynchronously on the ``我的笔记`` page and
+    may keep the progress label visible for a long time.  Waiting for that
+    label to disappear makes the test fail even after the publish flow has
+    succeeded.  We therefore observe the signal, keep the Appium session alive
+    for a short grace period, and return the progress signal itself.
+    """
+    if hold_seconds is None:
+        try:
+            hold_seconds = max(0.0, float(os.environ.get("VW_VIDEO_UPLOAD_HOLD_SECONDS", "5")))
+        except (TypeError, ValueError):
+            hold_seconds = 5.0
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if "我的笔记" in page_source and any(token in page_source for token in VIDEO_UPLOAD_PROGRESS_TEXTS):
+            time.sleep(hold_seconds)
+            return "视频上传中"
+        time.sleep(0.5)
+    raise AssertionError("Video upload progress was not visible after submitting the note")
 
 
 def open_message_note_publisher(
@@ -363,9 +454,19 @@ def open_message_note_publisher(
                 "The logged_in_session fixture should authenticate before business steps."
             )
 
+    def _recover_from_login_page() -> bool:
+        if ios_config is None:
+            return False
+        if not getattr(ios_config, "login_username", None) or not getattr(ios_config, "login_password", None):
+            return False
+        return ensure_logged_in_if_needed(driver, ios_config)
+
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
-        _raise_if_login_required(page_source)
+        if login_required_from_page_source(page_source):
+            if _recover_from_login_page():
+                continue
+            _raise_if_login_required(page_source)
 
         if message_note_form_is_visible(page_source):
             return
@@ -373,15 +474,18 @@ def open_message_note_publisher(
         if _publish_sheet_visible(page_source) and _tap_note_type_if_present(driver):
             if _wait_until(_form_or_login_visible, timeout=10):
                 page_source = _safe_page_source(driver)
+                if login_required_from_page_source(page_source) and _recover_from_login_page():
+                    continue
                 _raise_if_login_required(page_source)
                 if message_note_form_is_visible(page_source):
                     return
 
         if _tap_publish_entry_if_present(driver):
-            time.sleep(0.5)
             _tap_note_type_if_present(driver)
             if _wait_until(_form_or_login_visible, timeout=10):
                 page_source = _safe_page_source(driver)
+                if login_required_from_page_source(page_source) and _recover_from_login_page():
+                    continue
                 _raise_if_login_required(page_source)
                 if message_note_form_is_visible(page_source):
                     return
@@ -469,10 +573,14 @@ def _android_adb_back(driver: WebDriver) -> bool:
 def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: int = 60) -> None:
     wait_for_message_note_form(driver, timeout=timeout)
 
-    with _note_profile("upload-image"):
-        _upload_note_image(driver, draft)
-    with _note_profile("validate-uploaded-image"):
-        _ensure_note_source_image_recorded(driver)
+    with _note_profile("upload-media"):
+        if draft.media_type == "video":
+            _upload_note_media(driver, draft)
+        else:
+            _upload_note_image(driver, draft)
+    if draft.media_type == "image":
+        with _note_profile("validate-uploaded-image"):
+            _ensure_note_source_image_recorded(driver)
     with _note_profile("stabilize-form-after-upload"):
         _stabilize_android_note_form_after_upload(driver, timeout=min(timeout, 15))
     with _note_profile("fill-title"):
@@ -488,7 +596,12 @@ def fill_message_note_form(driver: WebDriver, draft: MessageNoteDraft, timeout: 
         _set_allow_comments(driver, draft.allow_comments)
 
 
-def submit_message_note(driver: WebDriver, timeout: int = 30) -> str:
+def submit_message_note(
+    driver: WebDriver,
+    timeout: int = 30,
+    *,
+    allow_video_upload_progress: bool = False,
+) -> str:
     _hide_keyboard(driver)
     if not _tap_note_submit(driver):
         raise AssertionError("Unable to find the publish action on the message note form")
@@ -499,7 +612,13 @@ def submit_message_note(driver: WebDriver, timeout: int = 30) -> str:
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
         last_source = page_source
-        success_signal = message_note_publish_success_signal(page_source)
+        if allow_video_upload_progress:
+            success_signal = message_note_publish_success_signal(
+                page_source,
+                allow_video_upload_progress=True,
+            )
+        else:
+            success_signal = message_note_publish_success_signal(page_source)
         if success_signal:
             return success_signal
         error_signal = message_note_publish_error_signal(page_source)
@@ -538,7 +657,11 @@ def message_note_form_is_visible(page_source: str) -> bool:
     return has_form_action and any(token in joined for token in NOTE_FORM_READY_TEXTS if token != "发布笔记")
 
 
-def message_note_publish_success_signal(page_source: str) -> str | None:
+def message_note_publish_success_signal(
+    page_source: str,
+    *,
+    allow_video_upload_progress: bool = False,
+) -> str | None:
     texts = _extract_strings(page_source)
     for token in NOTE_SUCCESS_TEXTS:
         if token in texts or token in page_source:
@@ -546,6 +669,9 @@ def message_note_publish_success_signal(page_source: str) -> str | None:
     for accessibility_id in NOTE_SUCCESS_IDS:
         if accessibility_id in page_source:
             return accessibility_id
+    if allow_video_upload_progress and "我的笔记" in page_source:
+        if any(token in page_source for token in VIDEO_UPLOAD_PROGRESS_TEXTS):
+            return "视频上传中"
     if "审核" in page_source and "成功" in page_source:
         return "审核成功提示"
     return None
@@ -855,6 +981,17 @@ def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
 
 
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        if tap_first(
+            driver,
+            PUBLISH_ENTRY_CANDIDATES,
+            logical_name="publish entry",
+            timeout=0.8,
+            required=False,
+        ):
+            if _wait_until(lambda: _publish_entry_opened(_safe_page_source(driver)), timeout=1):
+                return True
     if _tap_publish_entry_by_coordinate(driver):
         return True
     for accessibility_id in PUBLISH_ENTRY_IDS:
@@ -1017,7 +1154,7 @@ def _tap_publish_entry_by_coordinate(driver: WebDriver) -> bool:
                 ):
                     return True
             return False
-        driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * 0.93)})
+        driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * 0.86)})
         return _wait_until(
             lambda: _publish_entry_opened(_safe_page_source(driver)),
             timeout=1,
@@ -1595,6 +1732,15 @@ def _tap_first_note_search_result_by_coordinate(driver: WebDriver) -> bool:
 
 
 def _tap_note_type_if_present(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios" and tap_first(
+        driver,
+        NOTE_TYPE_CANDIDATES,
+        logical_name="note publish type",
+        timeout=0.8,
+        required=False,
+    ):
+        return True
     for accessibility_id in NOTE_TYPE_IDS:
         if _tap_accessibility_id_now(driver, accessibility_id):
             return True
@@ -1663,6 +1809,18 @@ def _tap_texts_now(driver: WebDriver, texts: list[str]) -> bool:
 def _fill_note_title(driver: WebDriver, title: str) -> None:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if not is_android:
+        element = wait_for_first(
+            driver,
+            NOTE_TITLE_CANDIDATES,
+            logical_name="note title input",
+            timeout=2,
+            required=False,
+        )
+        if element is not None:
+            _replace_text(element, title)
+            _hide_keyboard(driver)
+            return
     attempts = 2 if is_android else 1
     for attempt in range(attempts):
         for keyword in TITLE_FIELD_KEYWORDS:
@@ -1738,6 +1896,19 @@ def _adb_input_tap(driver: WebDriver, x: int, y: int) -> bool:
 
 
 def _fill_note_body(driver: WebDriver, body: str) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        element = wait_for_first(
+            driver,
+            NOTE_BODY_CANDIDATES,
+            logical_name="note body input",
+            timeout=2,
+            required=False,
+        )
+        if element is not None:
+            _replace_text(element, body)
+            _hide_keyboard(driver)
+            return
     for keyword in BODY_FIELD_KEYWORDS:
         if _fill_input_near_label(driver, keyword, body, prefer_text_view=True):
             return
@@ -1789,6 +1960,26 @@ def _is_android_emulator_capabilities(capabilities: dict) -> bool:
 
 
 def _upload_note_image(driver: WebDriver, draft: MessageNoteDraft) -> None:
+    _upload_note_media(driver, draft)
+
+
+def _upload_note_media(driver: WebDriver, draft: MessageNoteDraft) -> None:
+    if draft.media_type == "video":
+        _clear_existing_note_images(driver)
+        if not _tap_note_video_entry(driver):
+            raise AssertionError("Unable to find the note video upload button")
+        if not photo_picker.choose_video_from_library(
+            driver,
+            album_name=draft.album,
+            video_index=draft.video_index,
+        ):
+            raise AssertionError(
+                "Video library opened but no selectable video was found. "
+                "Seed at least one video into Photos on the device."
+            )
+        return
+    if draft.media_type != "image":
+        raise AssertionError(f"Unsupported note media type: {draft.media_type}")
     with _note_profile("upload-clear-existing-images"):
         _clear_existing_note_images(driver)
     picture_indexes = _normalize_picture_indexes(draft.picture_indexes)
@@ -2315,6 +2506,24 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
         return True
     except WebDriverException:
         return False
+
+
+def _tap_note_video_entry(driver: WebDriver) -> bool:
+    for accessibility_id in ["note-video-add", "publish-video-add", "post-video-add"]:
+        if tap_if_present(driver, accessibility_id, timeout=1):
+            return True
+    for text in ["添加视频", "上传视频", "视频"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            return True
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        for x, y in [(60, 199), (60, 206), (60, 190)]:
+            try:
+                driver.execute_script("mobile: tap", {"x": x, "y": y})
+                return True
+            except WebDriverException:
+                continue
+    return False
 
 
 def _tap_note_image_plus_by_coordinate(driver: WebDriver) -> bool:
@@ -3529,6 +3738,14 @@ def _confirm_overlay(driver: WebDriver) -> None:
 
 
 def _tap_note_submit(driver: WebDriver) -> bool:
+    if tap_first(
+        driver,
+        NOTE_SUBMIT_CANDIDATES,
+        logical_name="note submit button",
+        timeout=0.8,
+        required=False,
+    ):
+        return True
     for accessibility_id in ["note-submit-button", "message-submit-button", "post-submit-button", "publish-submit-button"]:
         if tap_if_present(driver, accessibility_id, timeout=2):
             return True

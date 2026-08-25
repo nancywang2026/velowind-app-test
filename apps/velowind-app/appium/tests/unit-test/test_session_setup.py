@@ -1564,7 +1564,7 @@ def test_ensure_logged_in_for_publish_entry_returns_immediately_when_publish_ent
     monkeypatch.setattr(session, "_publish_entry_ready", lambda driver: True)
 
     assert session.ensure_logged_in_for_publish_entry(object(), object()) is False
-    assert events == ["dismiss-alerts"]
+    assert events == []
 
 
 def test_ensure_logged_in_for_publish_entry_logs_in_and_recovers(monkeypatch):

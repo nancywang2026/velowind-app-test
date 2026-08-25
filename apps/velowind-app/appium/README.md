@@ -206,6 +206,15 @@ pnpm appium:ios:test:full
 pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-full.yaml
 ```
 
+发布笔记优化试点可单独运行，并打开阶段耗时 profiling：
+
+```bash
+VW_APPIUM_PROFILE=1 VW_APPIUM_AUTO_OPEN_REPORT=false \
+pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-publish-note.yaml
+```
+
+模拟器或真机可通过 `VW_IOS_TARGET=simulator` / `VW_IOS_TARGET=device` 显式指定。统一定位层失败时会报告逻辑控件、候选定位顺序、等待耗时和页面摘要；完整截图/XML 仍写入当前 run 的 artifact 目录。
+
 也可以按固定运行层级执行：
 
 ```bash

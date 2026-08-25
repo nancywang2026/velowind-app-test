@@ -50,6 +50,18 @@ def test_publish_note_image_validation_records_selected_album_source(monkeypatch
     class FakeDriver:
         pass
 
+    class FakeConfig:
+        login_username = "user"
+        login_password = "pass"
+
+    class FakeConfig:
+        login_username = "user"
+        login_password = "pass"
+
+    class FakeConfig:
+        login_username = "user"
+        login_password = "pass"
+
     monkeypatch.setenv("VW_ANDROID_MEDIA_DIR", str(media_dir))
     monkeypatch.setenv("VW_APPIUM_ARTIFACT_DIR", str(artifact_dir))
     driver = FakeDriver()
@@ -253,7 +265,7 @@ def test_android_publish_entry_coordinate_targets_pixel_10_plus_button(monkeypat
     assert taps == [("mobile: tap", {"x": 640, "y": 2670})]
 
 
-def test_ios_publish_entry_coordinate_keeps_existing_center_target(monkeypatch):
+def test_ios_publish_entry_coordinate_targets_visible_bottom_center_plus_button(monkeypatch):
     taps = []
 
     class FakeDriver:
@@ -261,7 +273,7 @@ def test_ios_publish_entry_coordinate_keeps_existing_center_target(monkeypatch):
 
         @staticmethod
         def get_window_rect():
-            return {"width": 1179, "height": 2556}
+            return {"width": 402, "height": 874}
 
         @staticmethod
         def execute_script(script, payload):
@@ -270,58 +282,76 @@ def test_ios_publish_entry_coordinate_keeps_existing_center_target(monkeypatch):
     monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: True)
 
     assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
-    assert taps == [("mobile: tap", {"x": 589, "y": 2377})]
+    assert taps == [("mobile: tap", {"x": 201, "y": 751})]
 
 
-def test_open_message_note_publisher_does_not_prepare_login_inside_business_step(monkeypatch):
-    from velowind_appium import session
+def test_open_message_note_publisher_recovers_from_login_page_before_business_step(monkeypatch):
+    page = {"source": "手机号登录 请输入手机号 密码登录 验证并登录"}
+    calls = []
 
     class FakeDriver:
         pass
 
-    def fail_if_login_prepare_is_called(driver, ios_config):
-        raise AssertionError("business step should not prepare login")
+    class FakeConfig:
+        login_username = "user"
+        login_password = "pass"
 
-    monkeypatch.setattr(session, "ensure_logged_in_for_publish_entry", fail_if_login_prepare_is_called)
+    def recover_publish_entry(driver, ios_config):
+        calls.append("recover-login")
+        page["source"] = "发布表单"
+        return True
+
+    monkeypatch.setattr(message_detail, "ensure_logged_in_if_needed", recover_publish_entry)
     monkeypatch.setattr(message_detail, "_prepare_android_publish_entry", lambda driver: None)
-    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "手机号登录 请输入手机号 密码登录 验证并登录")
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: page["source"])
+    monkeypatch.setattr(message_detail, "_publish_sheet_visible", lambda page_source: False)
+    monkeypatch.setattr(message_detail, "_tap_publish_entry_if_present", lambda driver: False)
+    monkeypatch.setattr(message_detail, "_tap_note_type_if_present", lambda driver: False)
+    monkeypatch.setattr(message_detail, "message_note_form_is_visible", lambda page_source: page_source == "发布表单")
 
-    with pytest.raises(AssertionError, match="session is not logged in"):
-        message_detail.open_message_note_publisher(FakeDriver(), ios_config=object(), timeout=1)
+    message_detail.open_message_note_publisher(FakeDriver(), ios_config=FakeConfig(), timeout=1)
+
+    assert calls == ["recover-login"]
 
 
-def test_open_message_note_publisher_fails_when_publish_tap_opens_login_page(monkeypatch):
-    from velowind_appium import session
-
+def test_open_message_note_publisher_recovers_when_publish_tap_opens_login_page(monkeypatch):
     clock = {"now": 0.0}
     page = {"source": "首页 笔记 活动 消息 我的 全国 推荐"}
+    calls = []
 
     class FakeDriver:
         pass
+
+    class FakeConfig:
+        login_username = "user"
+        login_password = "pass"
 
     def tap_publish_entry(driver):
         page["source"] = "手机号登录 请输入手机号 密码登录 验证并登录"
         return True
 
     def wait_for_form(condition, timeout):
-        clock["now"] = 21.0
-        return False
+        return True
 
-    def fail_if_login_prepare_is_called(driver, ios_config):
-        raise AssertionError("business step should not prepare login")
+    def recover_login(driver, ios_config):
+        calls.append("recover-login")
+        page["source"] = "发布表单"
+        return True
 
     monkeypatch.setattr(message_detail.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(session, "ensure_logged_in_for_publish_entry", fail_if_login_prepare_is_called)
+    monkeypatch.setattr(message_detail, "ensure_logged_in_if_needed", recover_login)
     monkeypatch.setattr(message_detail, "_prepare_android_publish_entry", lambda driver: None)
     monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: page["source"])
     monkeypatch.setattr(message_detail, "_publish_sheet_visible", lambda page_source: False)
     monkeypatch.setattr(message_detail, "_tap_publish_entry_if_present", tap_publish_entry)
     monkeypatch.setattr(message_detail, "_tap_note_type_if_present", lambda driver: False)
     monkeypatch.setattr(message_detail, "_wait_until", wait_for_form)
+    monkeypatch.setattr(message_detail, "message_note_form_is_visible", lambda page_source: page_source == "发布表单")
 
-    with pytest.raises(AssertionError, match="session is not logged in"):
-        message_detail.open_message_note_publisher(FakeDriver(), ios_config=object(), timeout=20)
+    message_detail.open_message_note_publisher(FakeDriver(), ios_config=FakeConfig(), timeout=20)
+
+    assert calls == ["recover-login"]
 
 
 def test_find_note_search_input_supports_android_edit_text():
@@ -907,6 +937,31 @@ def test_message_note_publish_success_signal_detects_published_detail_state():
     """
 
     assert message_note_publish_success_signal(page_source) == "已发布"
+
+
+def test_message_note_publish_success_signal_detects_video_upload_progress_on_my_notes():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="我的笔记" label="我的笔记" />
+      <XCUIElementTypeOther name="进行中" label="进行中" />
+    </AppiumAUT>
+    """
+
+    assert (
+        message_note_publish_success_signal(page_source, allow_video_upload_progress=True)
+        == "视频上传中"
+    )
+
+
+def test_wait_for_video_upload_completion_returns_progress_signal_after_grace_period(monkeypatch):
+    sources = iter(["我的笔记 进行中"])
+    sleeps = []
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: next(sources, "我的笔记 进行中"))
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert message_detail.wait_for_video_upload_completion(object(), timeout=3, hold_seconds=2) == "视频上传中"
+    assert sleeps == [2]
 
 
 def test_message_note_publish_error_signal_detects_backend_failure():
@@ -1887,6 +1942,36 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
         ("choose-photo", draft.album, draft.picture_index, False, True, True),
         ("record-source", draft.album, draft.picture_index),
     ]
+
+
+def test_load_message_note_draft_parses_video_media_type(tmp_path):
+    testdata = tmp_path / "publish_notes.yaml"
+    testdata.write_text(
+        """use_cases:\n  - id: publish-note-video\n    note:\n      title: 视频标题\n      body: 视频正文\n      media_type: video\n      album: 视频\n      location: 长白山\n""",
+        encoding="utf-8",
+    )
+
+    draft = load_message_note_draft("publish-note-video", testdata_path=testdata)
+
+    assert draft.media_type == "video"
+    assert draft.album == "视频"
+
+
+def test_upload_note_media_uses_video_picker_without_image_validation(monkeypatch):
+    calls = []
+    draft = MessageNoteDraft(title="标题", body="正文", topics=[], location="", media_type="video", album="0424")
+
+    monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
+    monkeypatch.setattr(message_detail, "_tap_note_video_entry", lambda driver: calls.append("tap-video") or True)
+    monkeypatch.setattr(
+        message_detail.photo_picker,
+        "choose_video_from_library",
+        lambda driver, album_name=None, video_index=1: calls.append(("choose-video", album_name, video_index)) or True,
+    )
+
+    message_detail._upload_note_media(object(), draft)
+
+    assert calls == ["clear", "tap-video", ("choose-video", "0424", 1)]
 
 
 def test_upload_note_image_on_android_retries_remaining_picture_indexes(monkeypatch):

@@ -94,6 +94,299 @@ def choose_photo_from_library(
         return choose_local_photo(driver, **choose_kwargs)
 
 
+def choose_video_from_library(
+    driver: WebDriver,
+    *,
+    album_name: str | None = None,
+    video_index: int = 1,
+) -> bool:
+    """Choose a one-based video position from the system picker."""
+    picker_visible = photo_library_visible(driver, timeout=2)
+    if not picker_visible:
+        source_chosen = choose_photo_library_source(driver)
+        if not source_chosen:
+            return False
+        picker_visible = photo_library_visible(driver, timeout=5)
+    if not picker_visible:
+        return False
+    dismiss_photo_permission_alerts(driver)
+    if album_name:
+        album_opened = open_photo_album(driver, album_name)
+        if not album_opened:
+            return False
+        capabilities = getattr(driver, "capabilities", {}) or {}
+        if str(capabilities.get("platformName", "")).lower() == "ios" and not _ensure_ios_photo_album_active(
+            driver,
+            album_name,
+        ):
+            return False
+    else:
+        filter_selected = _select_ios_video_filter(driver)
+        _photo_picker_debug(f"video-filter-selected={filter_selected}")
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        candidate_tapped = (
+            _tap_album_ios_video_candidate(driver, video_index=video_index)
+            if album_name
+            else _tap_first_ios_video_candidate(driver, video_index=video_index)
+        )
+    else:
+        candidate_tapped = tap_photo_grid_candidate(driver, max(1, video_index))
+    if not candidate_tapped:
+        _photo_picker_debug(f"video-grid-tap-failed source={_safe_page_source(driver)[:600]}")
+        return False
+    return _confirm_video_picker_selection(driver)
+
+
+def _tap_first_ios_video_candidate(driver: WebDriver, *, video_index: int = 1) -> bool:
+    """Tap a one-based iOS video thumbnail, scrolling when it is offscreen."""
+    remaining_index = max(1, int(video_index))
+    for page_number in range(8):
+        visible_candidates = _visible_ios_video_candidates(driver)
+        if not visible_candidates:
+            if page_number == 0 and _tap_ios_video_grid_coordinate_fallback(driver, remaining_index):
+                return True
+            return False
+        if remaining_index <= len(visible_candidates):
+            _, _, rect, _ = visible_candidates[remaining_index - 1]
+            if not _tap_rect_center(driver, rect):
+                return False
+            return _wait_for_ios_video_preview(driver, timeout=10)
+        remaining_index -= len(visible_candidates)
+        if page_number == 7:
+            break
+        try:
+            swipe_vertical(driver, direction="up")
+        except WebDriverException:
+            return False
+        time.sleep(0.3)
+    _photo_picker_debug(f"video-index-not-visible index={video_index}")
+    return False
+
+
+def _tap_album_ios_video_candidate(driver: WebDriver, *, video_index: int = 1) -> bool:
+    """Tap a visible iOS video thumbnail inside an opened album."""
+    visible_candidates = _visible_ios_video_candidates(driver)
+    if not visible_candidates:
+        return False
+    target_index = min(max(1, int(video_index)), len(visible_candidates)) - 1
+    _, _, rect, _ = visible_candidates[target_index]
+    if not _tap_rect_center(driver, rect):
+        return False
+    return _wait_for_ios_video_preview(driver, timeout=10)
+
+
+def _tap_ios_video_grid_coordinate_fallback(driver: WebDriver, video_index: int) -> bool:
+    """Tap the visible three-column Photos video grid when WDA exposes no cells."""
+    if video_index < 1 or video_index > 12:
+        return False
+    try:
+        size = driver.get_window_size()
+    except (AttributeError, WebDriverException):
+        size = {}
+    width = float(size.get("width", 402) or 402)
+    height = float(size.get("height", 874) or 874)
+    columns = 3
+    visible_rows = 4
+    grid_top = 126.0
+    grid_bottom = height - 18.0
+    cell_width = width / columns
+    cell_height = (grid_bottom - grid_top) / visible_rows
+    zero_based = video_index - 1
+    row, column = divmod(zero_based, columns)
+    rect = {
+        "x": column * cell_width,
+        "y": grid_top + row * cell_height,
+        "width": cell_width,
+        "height": cell_height,
+    }
+    _photo_picker_debug(
+        f"video-grid-coordinate-fallback index={video_index} row={row + 1} column={column + 1} rect={rect}"
+    )
+    if not _tap_rect_center(driver, rect):
+        return False
+    return _wait_for_ios_video_preview(driver, timeout=10)
+
+
+def _visible_ios_video_candidates(driver: WebDriver) -> list[tuple[int, int, dict[str, float], object]]:
+    """Return visible video thumbnails in reading order."""
+    source_candidates = _visible_ios_video_candidates_from_source(driver)
+    if source_candidates:
+        return source_candidates
+
+    candidates = []
+    for xpath in (
+        "//XCUIElementTypeImage",
+        "//XCUIElementTypeCell",
+        "//XCUIElementTypeOther",
+        "//XCUIElementTypeButton",
+    ):
+        try:
+            candidates = driver.find_elements(AppiumBy.XPATH, xpath)
+        except (AttributeError, WebDriverException):
+            candidates = []
+        if candidates:
+            break
+    visible_candidates = []
+    video_candidates = []
+    has_labeled_candidate = False
+    for candidate in candidates:
+        rect = _rect_snapshot(candidate)
+        if rect is None or rect["y"] < 135 or rect["width"] < 80 or rect["height"] < 80:
+            continue
+        labels = []
+        for attribute in ("label", "name"):
+            try:
+                value = candidate.get_attribute(attribute)
+            except (AttributeError, WebDriverException):
+                value = None
+            if value:
+                labels.append(str(value).lower())
+        item = (int(rect["y"]), int(rect["x"]), rect, candidate)
+        visible_candidates.append(item)
+        if labels:
+            has_labeled_candidate = True
+            if any("视频" in label or "video" in label for label in labels):
+                video_candidates.append(item)
+    if has_labeled_candidate:
+        visible_candidates = video_candidates
+    visible_candidates.sort(key=lambda item: (item[0], item[1]))
+    return visible_candidates
+
+
+def _visible_ios_video_candidates_from_source(
+    driver: WebDriver,
+) -> list[tuple[int, int, dict[str, float], object]]:
+    """Read picker thumbnails from XML when devicectl WDA hides Image nodes."""
+    source = _safe_page_source(driver)
+    if not source:
+        return []
+    try:
+        root = ElementTree.fromstring(source)
+    except (ElementTree.ParseError, TypeError, ValueError):
+        return []
+
+    visible_candidates = []
+    labeled_video_candidates = []
+    for element in root.iter():
+        element_type = element.attrib.get("type", "")
+        if element_type not in {
+            "XCUIElementTypeImage",
+            "XCUIElementTypeOther",
+            "XCUIElementTypeCell",
+            "XCUIElementTypeButton",
+        }:
+            continue
+        visible_state = element.attrib.get("visible", "true").lower()
+        accessible_state = element.attrib.get("accessible", "false").lower()
+        if visible_state != "true" and accessible_state != "true":
+            continue
+        rect = _rect_snapshot_from_attributes(element.attrib)
+        if rect is None or not _looks_like_ios_video_thumbnail(element.attrib, rect):
+            continue
+        labels = [
+            str(element.attrib.get(attribute, "")).lower()
+            for attribute in ("label", "name", "value", "traits")
+            if element.attrib.get(attribute)
+        ]
+        item = (int(rect["y"]), int(rect["x"]), rect, element)
+        visible_candidates.append(item)
+        if any("视频" in label or "video" in label for label in labels):
+            labeled_video_candidates.append(item)
+
+    if labeled_video_candidates:
+        visible_candidates = labeled_video_candidates
+    visible_candidates.sort(key=lambda item: (item[0], item[1]))
+    return visible_candidates
+
+
+def _looks_like_ios_video_thumbnail(attributes: dict[str, str], rect: dict[str, float]) -> bool:
+    if rect["y"] < 135 or rect["y"] >= 820 or rect["width"] < 80 or rect["height"] < 80:
+        return False
+    searchable = " ".join(
+        str(attributes.get(attribute, ""))
+        for attribute in ("name", "label", "value", "traits")
+    ).lower()
+    if "pxggridlayout-info" in searchable or "视频" in searchable or "video" in searchable:
+        return True
+    # Do not count unlabeled containers: their bounds can look like thumbnails
+    # and shift the requested one-based video index.
+    return False
+
+
+def _rect_snapshot_from_attributes(attributes: dict[str, str]) -> dict[str, float] | None:
+    try:
+        rect = {
+            "x": float(attributes.get("x", 0) or 0),
+            "y": float(attributes.get("y", 0) or 0),
+            "width": float(attributes.get("width", 0) or 0),
+            "height": float(attributes.get("height", 0) or 0),
+        }
+    except (TypeError, ValueError):
+        return None
+    if rect["width"] <= 0 or rect["height"] <= 0:
+        return None
+    return rect
+
+
+def _confirm_video_picker_selection(driver: WebDriver) -> bool:
+    if not _visible_text_present(driver, "预览视频"):
+        if not _wait_for_ios_video_preview(driver, timeout=10):
+            _photo_picker_debug("video-preview-not-visible; refusing to tap confirm")
+            return False
+    _wait_until(lambda: _video_preview_confirmation_ready(driver), timeout=10)
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        try:
+            driver.execute_script("mobile: tap", {"x": 298, "y": 806})
+            _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30)
+            return True
+        except WebDriverException:
+            pass
+    for text in ["确认", "Confirm", "完成", "Done"]:
+        if _tap_text_or_contains(driver, text):
+            _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30)
+            return True
+    return confirm_system_photo_picker_selection(driver)
+
+
+def _video_preview_confirmation_ready(driver: WebDriver) -> bool:
+    """Return as soon as the preview and its confirm action are both ready."""
+    if not _visible_text_present(driver, "预览视频"):
+        return False
+    return any(_visible_text_present(driver, text) for text in ["确认", "Confirm", "完成", "Done"])
+
+
+def _wait_for_ios_video_preview(driver: WebDriver, *, timeout: int) -> bool:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        if _visible_text_present(driver, "预览视频"):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _select_ios_video_filter(driver: WebDriver) -> bool:
+    """Use the picker's top video mode without opening the collections view."""
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        # The lower "视频" album card belongs to collections and is never tapped.
+        if _tap_ios_text_from_source(driver, "视频"):
+            time.sleep(0.8)
+            return True
+        try:
+            driver.execute_script("mobile: tap", {"x": 169, "y": 110})
+            time.sleep(0.8)
+            return True
+        except WebDriverException:
+            pass
+    for text in ["视频", "Videos"]:
+        if _tap_ios_text_from_source(driver, text):
+            time.sleep(0.8)
+            return True
+    return False
+
+
 def dismiss_photo_permission_alerts(driver: WebDriver) -> None:
     page_source = _safe_page_source(driver)
     alert_texts = ["Allow all", "允许访问所有照片", "允许", "Allow", "好"]
@@ -135,6 +428,7 @@ def photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
                 "最近项目",
                 "照片图库",
                 "所有照片",
+                "精选集",
                 "选择项目",
                 "选择照片",
                 "Select photos",
@@ -334,7 +628,14 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
         return False
     for _ in range(4):
         with _photo_picker_profile("open-photo-album-tap-target"):
-            tapped_album = _tap_ios_named_element_from_source(driver, album_name) or _tap_named_element_center(driver, album_name)
+            if not is_android and str(album_name).isdigit():
+                tapped_album = _tap_ios_named_button(driver, album_name)
+                if not tapped_album:
+                    tapped_album = _tap_ios_named_element_from_source(driver, album_name) or _tap_named_element_center(driver, album_name)
+                if not tapped_album:
+                    tapped_album = _tap_texts_by_predicate(driver, [album_name])
+            else:
+                tapped_album = _tap_ios_named_element_from_source(driver, album_name) or _tap_named_element_center(driver, album_name)
         if tapped_album:
             with _photo_picker_profile("open-photo-album-wait-target-title"):
                 target_opened = _wait_until(lambda: photo_album_title(driver) == album_name, timeout=2)
@@ -901,6 +1202,30 @@ def _tap_named_element_center(driver: WebDriver, text: str) -> bool:
                 return True
         except (NoSuchElementException, WebDriverException):
             continue
+    return False
+
+
+def _tap_ios_named_button(driver: WebDriver, text: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    xpaths = [
+        f'//XCUIElementTypeButton[@visible="true" and (@name="{escaped}" or @label="{escaped}" or @value="{escaped}")]',
+        f'//XCUIElementTypeButton[@visible="true" and (contains(@name, "{escaped}") or contains(@label, "{escaped}") or contains(@value, "{escaped}"))]',
+    ]
+    for xpath in xpaths:
+        try:
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+        try:
+            element.click()
+            return True
+        except WebDriverException:
+            pass
+        if _tap_element_center(driver, element):
+            return True
     return False
 
 

@@ -204,6 +204,7 @@ def test_open_photo_album_taps_ios_target_album_from_source_before_xpath(monkeyp
             taps.append((script, payload))
 
     monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(photo_picker, "_tap_texts_by_predicate", lambda driver, texts: False)
     monkeypatch.setattr(photo_picker, "_tap_ios_text_from_source", lambda driver, text: text == "精选集")
     monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: True)
     monkeypatch.setattr(
@@ -211,10 +212,147 @@ def test_open_photo_album_taps_ios_target_album_from_source_before_xpath(monkeyp
         "_tap_named_element_center",
         lambda driver, text: (_ for _ in ()).throw(AssertionError("target album should use XML rect before XPath")),
     )
+
     monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
 
     assert photo_picker.open_photo_album(FakeDriver(), "图片") is True
     assert taps == [("mobile: tap", {"x": 71.0, "y": 390.0})]
+
+
+def test_open_photo_album_uses_source_before_predicate_for_numeric_ios_album_name(monkeypatch):
+    events = []
+    titles = iter([None, None, "0424", "0424"])
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(photo_picker, "_tap_texts_by_predicate", lambda driver, texts: events.append(("predicate", texts)) or True)
+    monkeypatch.setattr(photo_picker, "_tap_ios_text_from_source", lambda driver, text: events.append(("source", text)) or text == "精选集")
+    monkeypatch.setattr(photo_picker, "_tap_ios_named_element_from_source", lambda driver, text: events.append(("source-album", text)) or text == "0424")
+    monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("center", text)) or False)
+    monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: events.append(("tap-text", text)) or text == "精选集")
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert photo_picker.open_photo_album(FakeDriver(), "0424") is True
+    assert events == [("source", "精选集"), ("source-album", "0424")]
+
+
+def test_open_photo_album_prefers_exact_ios_button_for_numeric_album_name(monkeypatch):
+    events = []
+    titles = iter([None, "0424", "0424"])
+
+    class FakeElement:
+        def click(self):
+            events.append("button-click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            if by == photo_picker.AppiumBy.XPATH and "XCUIElementTypeButton" in value and "0424" in value:
+                return FakeElement()
+            raise photo_picker.NoSuchElementException()
+
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: next(titles))
+    monkeypatch.setattr(
+        photo_picker,
+        "_tap_ios_text_from_source",
+        lambda driver, text: events.append(("source", text)) or text == "精选集",
+    )
+    monkeypatch.setattr(photo_picker, "_tap_named_element_center", lambda driver, text: events.append(("center", text)) or False)
+    monkeypatch.setattr(photo_picker, "_tap_texts_by_predicate", lambda driver, texts: events.append(("predicate", texts)) or False)
+    monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: False)
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+
+    assert photo_picker.open_photo_album(FakeDriver(), "0424") is True
+    assert events == [("source", "精选集"), "button-click"]
+
+
+def test_choose_video_from_library_selects_first_video_without_collections(monkeypatch):
+    calls = []
+    monkeypatch.setattr(photo_picker, "choose_photo_library_source", lambda driver: calls.append("source") or True)
+    monkeypatch.setattr(photo_picker, "dismiss_photo_permission_alerts", lambda driver: calls.append("dismiss"))
+    monkeypatch.setattr(photo_picker, "photo_library_visible", lambda driver, timeout=5: calls.append("visible") or True)
+    monkeypatch.setattr(photo_picker, "_select_ios_video_filter", lambda driver: calls.append("video-filter") or True)
+    monkeypatch.setattr(photo_picker, "tap_photo_grid_candidate", lambda driver, index: calls.append(("video", index)) or True)
+    monkeypatch.setattr(photo_picker, "_confirm_video_picker_selection", lambda driver: calls.append("confirm") or True)
+
+    assert photo_picker.choose_video_from_library(object()) is True
+    assert calls == ["visible", "dismiss", "video-filter", ("video", 1), "confirm"]
+
+
+def test_choose_video_from_library_opens_album_before_selecting_video(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(photo_picker, "choose_photo_library_source", lambda driver: calls.append("source") or True)
+    monkeypatch.setattr(photo_picker, "dismiss_photo_permission_alerts", lambda driver: calls.append("dismiss"))
+    monkeypatch.setattr(photo_picker, "photo_library_visible", lambda driver, timeout=5: calls.append("visible") or True)
+    monkeypatch.setattr(photo_picker, "open_photo_album", lambda driver, album_name: calls.append(("open-album", album_name)) or True)
+    monkeypatch.setattr(photo_picker, "_ensure_ios_photo_album_active", lambda driver, album_name: calls.append(("ensure-album", album_name)) or True)
+    monkeypatch.setattr(photo_picker, "_tap_album_ios_video_candidate", lambda driver, video_index=1: calls.append(("video", video_index)) or True)
+    monkeypatch.setattr(photo_picker, "_confirm_video_picker_selection", lambda driver: calls.append("confirm") or True)
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    assert photo_picker.choose_video_from_library(FakeDriver(), album_name="0424", video_index=10) is True
+    assert calls == ["visible", "dismiss", ("open-album", "0424"), ("ensure-album", "0424"), ("video", 10), "confirm"]
+
+
+def test_tap_first_ios_video_candidate_uses_single_image_query(monkeypatch):
+    calls = []
+
+    class FakeElement:
+        rect = {"x": 12, "y": 160, "width": 190, "height": 190}
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_elements(self, by, value):
+            calls.append((by, value))
+            return [FakeElement()]
+
+        def execute_script(self, script, payload):
+            calls.append((script, payload))
+
+    monkeypatch.setattr(photo_picker, "_wait_for_ios_video_preview", lambda driver, timeout: True)
+
+    assert photo_picker._tap_first_ios_video_candidate(FakeDriver()) is True
+    assert len([item for item in calls if item[0] == photo_picker.AppiumBy.XPATH]) == 1
+
+
+def test_confirm_video_picker_confirms_immediately_when_preview_action_is_ready(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: text in {"预览视频", "确认"})
+
+    assert photo_picker._confirm_video_picker_selection(FakeDriver()) is True
+    assert events == [("mobile: tap", {"x": 298, "y": 806})]
+
+
+def test_confirm_video_picker_does_not_tap_when_preview_is_not_visible(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            events.append((script, payload))
+
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: False)
+
+    assert photo_picker._confirm_video_picker_selection(FakeDriver()) is False
+    assert events == []
 
 
 def test_tap_ios_text_from_source_uses_visible_rect():
