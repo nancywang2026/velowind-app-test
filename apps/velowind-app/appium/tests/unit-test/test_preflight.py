@@ -66,7 +66,7 @@ def test_appium_port_env_check_rejects_mixed_listener_configuration(monkeypatch)
     )
 
 
-def test_real_device_transport_preflight_recommends_configured_appium_port(tmp_path, monkeypatch, capsys):
+def test_real_device_transport_preflight_allows_legacy_device_discovery(tmp_path, monkeypatch, capsys):
     config = _config(tmp_path)
     config.server_url = "http://127.0.0.1:4725"
     config.target = "device"
@@ -74,8 +74,8 @@ def test_real_device_transport_preflight_recommends_configured_appium_port(tmp_p
     monkeypatch.delenv("APPIUM_XCUITEST_PREFER_DEVICECTL", raising=False)
     monkeypatch.setattr(preflight, "_listening_appium_process_has_env", lambda *args, **kwargs: False)
 
-    assert preflight._run_real_device_transport_preflight(config) == 1
+    assert preflight._run_real_device_transport_preflight(config) == 0
 
     output = capsys.readouterr().out
-    assert "--port 4725" in output
-    assert "--port 4723" not in output
+    assert "legacy connected-device discovery" in output
+    assert "4725" in output

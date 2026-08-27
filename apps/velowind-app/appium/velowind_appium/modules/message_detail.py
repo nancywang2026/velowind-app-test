@@ -37,6 +37,10 @@ from velowind_appium.image_validation import (
     find_largest_visible_image_bounds,
     find_note_detail_image_bounds,
 )
+from velowind_appium.video_validation import (
+    compare_video_to_frames,
+    find_note_detail_video_bounds,
+)
 from velowind_appium.reporting import allure, attach_file_if_present
 import velowind_appium.modules.photo_picker as photo_picker
 from velowind_appium.modules.note_card_picker import tap_first_note_card
@@ -384,6 +388,7 @@ def publish_message_note(
     *,
     ios_config: IosAppiumConfig | None = None,
     timeout: int = 60,
+    video_source_path: Path | None = None,
 ) -> str:
     with _note_profile("open-publisher"):
         open_message_note_publisher(driver, ios_config=ios_config, timeout=timeout)
@@ -394,13 +399,28 @@ def publish_message_note(
             driver,
             timeout=timeout,
             allow_video_upload_progress=draft.media_type == "video",
+            published_title=draft.title,
         )
     if draft.media_type == "video" and success_signal == "视频上传中":
         with _note_profile("hold-video-upload-progress"):
             success_signal = wait_for_video_upload_completion(driver, timeout=timeout)
     if draft.media_type == "image":
         with _note_profile("validate-published-image"):
-            _validate_published_note_image_matches_uploaded_preview(driver, timeout=min(timeout, 20))
+            _validate_published_note_image_matches_uploaded_preview(
+                driver,
+                timeout=min(timeout, 20),
+                title=draft.title,
+            )
+    elif draft.media_type == "video" and (
+        video_source_path is not None or getattr(driver, "_publish_note_source_video_path", None)
+    ):
+        with _note_profile("validate-published-video"):
+            _validate_published_note_video_matches_source(
+                driver,
+                source_path=video_source_path,
+                title=draft.title,
+                timeout=min(timeout, 30),
+            )
     return success_signal
 
 
@@ -601,6 +621,7 @@ def submit_message_note(
     timeout: int = 30,
     *,
     allow_video_upload_progress: bool = False,
+    published_title: str | None = None,
 ) -> str:
     _hide_keyboard(driver)
     if not _tap_note_submit(driver):
@@ -613,12 +634,22 @@ def submit_message_note(
         page_source = _safe_page_source(driver)
         last_source = page_source
         if allow_video_upload_progress:
-            success_signal = message_note_publish_success_signal(
-                page_source,
-                allow_video_upload_progress=True,
-            )
+            if published_title is None:
+                success_signal = message_note_publish_success_signal(
+                    page_source,
+                    allow_video_upload_progress=True,
+                )
+            else:
+                success_signal = message_note_publish_success_signal(
+                    page_source,
+                    allow_video_upload_progress=True,
+                    published_title=published_title,
+                )
         else:
-            success_signal = message_note_publish_success_signal(page_source)
+            if published_title is None:
+                success_signal = message_note_publish_success_signal(page_source)
+            else:
+                success_signal = message_note_publish_success_signal(page_source, published_title=published_title)
         if success_signal:
             return success_signal
         error_signal = message_note_publish_error_signal(page_source)
@@ -661,6 +692,7 @@ def message_note_publish_success_signal(
     page_source: str,
     *,
     allow_video_upload_progress: bool = False,
+    published_title: str | None = None,
 ) -> str | None:
     texts = _extract_strings(page_source)
     for token in NOTE_SUCCESS_TEXTS:
@@ -672,6 +704,16 @@ def message_note_publish_success_signal(
     if allow_video_upload_progress and "我的笔记" in page_source:
         if any(token in page_source for token in VIDEO_UPLOAD_PROGRESS_TEXTS):
             return "视频上传中"
+    if (
+        published_title
+        and "我的笔记" in page_source
+        and any(
+            _published_note_title_matches(text, published_title)
+            for text in _extract_visible_message_texts(page_source) or texts
+        )
+        and not message_note_form_is_visible(page_source)
+    ):
+        return "我的笔记"
     if "审核" in page_source and "成功" in page_source:
         return "审核成功提示"
     return None
@@ -2033,13 +2075,23 @@ def _ensure_note_source_image_recorded(driver: WebDriver) -> None:
         raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
 
 
-def _validate_published_note_image_matches_uploaded_preview(driver: WebDriver, *, timeout: int = 20) -> None:
+def _validate_published_note_image_matches_uploaded_preview(
+    driver: WebDriver,
+    *,
+    timeout: int = 20,
+    title: str | None = None,
+) -> None:
     source_path = getattr(driver, "_publish_note_album_source_image_path", None)
     if source_path is None:
         raise AssertionError("Selected album image source was not recorded before publishing")
     source_path = Path(source_path)
     if not source_path.exists():
         raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
+    if not message_detail_is_visible(driver):
+        if title:
+            _open_published_note_detail_from_my_notes(driver, title, timeout=timeout)
+        elif not _wait_until(lambda: message_detail_is_visible(driver), timeout=timeout):
+            raise AssertionError("Published note detail did not become visible for pixel validation")
     if not _wait_until(lambda: find_note_detail_image_bounds(_safe_page_source(driver)) is not None, timeout=timeout):
         raise AssertionError("Unable to locate the published note detail image for pixel validation")
 
@@ -2056,6 +2108,219 @@ def _validate_published_note_image_matches_uploaded_preview(driver: WebDriver, *
         attachments = _save_publish_note_image_validation_artifacts(source_path, detail_path, result)
         setattr(driver, "_publish_note_image_validation_artifacts", attachments)
         raise AssertionError(f"Published note image does not match the selected album image: {result}")
+
+
+def _validate_published_note_video_matches_source(
+    driver: WebDriver,
+    *,
+    source_path: Path | None,
+    title: str | None = None,
+    timeout: int = 30,
+) -> None:
+    selected_source = Path(source_path or getattr(driver, "_publish_note_source_video_path", "")).expanduser()
+    if not selected_source.is_file():
+        raise AssertionError(f"Selected video source is missing before content validation: {selected_source}")
+    if not message_detail_is_visible(driver):
+        if not title:
+            raise AssertionError("Published video detail did not become visible for content validation")
+        _open_published_note_detail_from_my_notes(driver, title, timeout=timeout)
+
+    end_at = time.monotonic() + timeout
+    bounds = None
+    while time.monotonic() < end_at:
+        bounds = find_note_detail_video_bounds(_safe_page_source(driver))
+        if bounds is not None:
+            break
+        time.sleep(0.3)
+    if bounds is None:
+        raise AssertionError("Unable to locate the published note video for content validation")
+
+    actual_frames, frame_paths = _capture_published_note_video_frames(driver, bounds)
+    try:
+        result = compare_video_to_frames(
+            selected_source,
+            actual_frames,
+            sample_count=len(actual_frames),
+        )
+    except Exception as error:
+        raise AssertionError(f"Unable to compare the published video with its source: {error}") from error
+    summary_path = _publish_note_video_validation_summary_path()
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(
+        "\n".join(
+            [
+                f"source_path={selected_source}",
+                f"sampled_frame_paths={','.join(str(path) for path in frame_paths)}",
+                f"comparison={result}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for index, frame_path in enumerate(frame_paths, start=1):
+        attach_file_if_present(frame_path, name=f"publish-note-video-validation-frame-{index}.png")
+    attach_file_if_present(summary_path, name="publish-note-video-validation.txt", attachment_type=allure.attachment_type.TEXT)
+    if not result.is_valid:
+        raise AssertionError(f"Published note video does not match the source video: {result}")
+
+
+def _capture_published_note_video_frames(
+    driver: WebDriver,
+    bounds,
+    *,
+    sample_count: int | None = None,
+    seconds: float | None = None,
+) -> tuple[list[Image.Image], list[Path]]:
+    """Sample the player with screenshots so validation does not need Appium ffmpeg."""
+    artifact_dir = _publish_note_artifact_dir()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    if sample_count is None:
+        try:
+            sample_count = max(2, min(12, int(os.environ.get("VW_VIDEO_VALIDATION_SAMPLE_COUNT", "8"))))
+        except ValueError:
+            sample_count = 8
+    if seconds is None:
+        try:
+            seconds = max(1.0, min(20.0, float(os.environ.get("VW_VIDEO_VALIDATION_RECORD_SECONDS", "8"))))
+        except ValueError:
+            seconds = 8.0
+    sample_count = max(1, int(sample_count))
+    interval = float(seconds) / max(1, sample_count - 1)
+    frames: list[Image.Image] = []
+    frame_paths: list[Path] = []
+    try:
+        window = driver.get_window_size()
+        window_size = (int(window["width"]), int(window["height"]))
+        for index in range(sample_count):
+            if index:
+                time.sleep(interval)
+            screenshot_png = driver.get_screenshot_as_png()
+            frame = crop_image_from_screenshot(
+                screenshot_png,
+                bounds,
+                window_size=window_size,
+            )
+            frame_path = artifact_dir / f"publish-note-video-validation-{int(time.time())}-{index + 1}.png"
+            frame.save(frame_path)
+            frames.append(frame)
+            frame_paths.append(frame_path)
+    except (AttributeError, KeyError, TypeError, WebDriverException) as error:
+        raise AssertionError("Unable to capture the published note video on the device") from error
+    if not frames:
+        raise AssertionError("Appium returned no screenshots for the published video")
+    return frames, frame_paths
+
+
+def _publish_note_video_validation_summary_path() -> Path:
+    return _publish_note_artifact_dir() / f"publish-note-video-validation-{int(time.time())}.txt"
+
+
+def _open_published_note_detail_from_my_notes(driver: WebDriver, title: str, *, timeout: int = 20) -> None:
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if message_detail_is_visible(driver):
+            return
+        if _tap_published_note_title(driver, title, page_source=page_source):
+            if _wait_until(lambda: message_detail_is_visible(driver), timeout=5):
+                return
+        if not _my_notes_list_visible(page_source):
+            if tap_text_if_present(driver, "我的笔记", timeout=1):
+                continue
+            if tap_text_if_present(driver, "我的", timeout=1):
+                continue
+        if not _scroll_my_notes_list(driver):
+            break
+        time.sleep(0.3)
+    raise AssertionError(f"Unable to open published note detail from My Notes for title: {title}")
+
+
+def _my_notes_list_visible(page_source: str) -> bool:
+    return "我的笔记" in page_source and any(token in page_source for token in ["发布", "草稿箱", "我的发布"])
+
+
+def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str | None = None) -> bool:
+    page_source = page_source or _safe_page_source(driver)
+    if not page_source:
+        return False
+    escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    for xpath in [
+        f'//*[contains(@text, "{escaped_title}") or contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
+        f'//*[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
+    ]:
+        try:
+            driver.find_element(AppiumBy.XPATH, xpath).click()
+        except (NoSuchElementException, WebDriverException):
+            continue
+        if _wait_until(lambda: message_detail_is_visible(driver), timeout=1.5):
+            return True
+    title_rect = _visible_ios_published_note_title_rect(page_source, title)
+    if title_rect is not None and _tap_rect_center(driver, title_rect):
+        return True
+    return tap_text_if_present(driver, title, timeout=1)
+
+
+def _visible_ios_published_note_title_rect(page_source: str, title: str) -> dict[str, float] | None:
+    if "<XCUIElementType" not in page_source or not title:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+
+    candidates: list[tuple[int, int, int, dict[str, float]]] = []
+    for element in root.iter():
+        attributes = element.attrib
+        if attributes.get("visible", "true").lower() == "false":
+            continue
+        if attributes.get("enabled", "true").lower() == "false":
+            continue
+        text = _source_element_text(attributes)
+        if not _published_note_title_matches(text, title):
+            continue
+        rect = _source_element_rect(attributes)
+        if rect is None:
+            continue
+        left, top, right, bottom = rect
+        tag_name = element.tag.rsplit("}", 1)[-1]
+        type_rank = 0 if tag_name == "XCUIElementTypeStaticText" else 1
+        exact_rank = 0 if text == title else 1
+        candidates.append(
+            (
+                exact_rank,
+                type_rank,
+                top,
+                {
+                    "x": float(left),
+                    "y": float(top),
+                    "width": float(right - left),
+                    "height": float(bottom - top),
+                },
+            )
+        )
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: item[:3])[3]
+
+
+def _published_note_title_matches(candidate: str, title: str) -> bool:
+    normalized_candidate = " ".join((candidate or "").split()).strip()
+    normalized_title = " ".join((title or "").split()).strip()
+    if not normalized_candidate or not normalized_title:
+        return False
+    if normalized_candidate == normalized_title:
+        return True
+    if not normalized_title.startswith(normalized_candidate):
+        return False
+    minimum_prefix_length = max(10, (len(normalized_title) * 3 + 4) // 5)
+    return len(normalized_candidate) >= minimum_prefix_length
+
+
+def _scroll_my_notes_list(driver: WebDriver) -> bool:
+    try:
+        swipe_vertical(driver, direction="up")
+        return True
+    except (WebDriverException, AttributeError):
+        return False
 
 
 def _open_published_note_image_viewer(driver: WebDriver, bounds, *, timeout: int):
@@ -2241,7 +2506,7 @@ def _tap_note_photo_library_sheet_option(driver: WebDriver) -> bool:
             "mobile: tap",
             {
                 "x": size["width"] * 0.5,
-                "y": size["height"] * 0.90,
+                "y": size["height"] * 0.93,
             },
         )
         return True
@@ -2476,7 +2741,9 @@ def _text_input_current_value(element) -> str:
 
 
 def _tap_note_image_plus(driver: WebDriver) -> bool:
-    if _tap_note_image_plus_by_coordinate(driver):
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    if not is_ios and _tap_note_image_plus_by_coordinate(driver):
         return True
     for accessibility_id in [
         "note-image-add",
@@ -2484,10 +2751,14 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
         "post-image-add",
         "publish-image-add",
     ]:
-        if tap_if_present(driver, accessibility_id, timeout=1):
+        if tap_if_present(driver, accessibility_id, timeout=1) and (
+            not is_ios or _wait_for_note_photo_picker_opened(driver)
+        ):
             return True
     for text in ["添加图片", "上传图片", "+", "＋"]:
-        if tap_text_if_present(driver, text, timeout=1):
+        if tap_text_if_present(driver, text, timeout=1) and (
+            not is_ios or _wait_for_note_photo_picker_opened(driver)
+        ):
             return True
     for xpath in [
         '//*[@name="+" or @label="+" or @value="+"]',
@@ -2498,9 +2769,14 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
     ]:
         try:
             driver.find_element(AppiumBy.XPATH, xpath).click()
-            return True
+            if not is_ios or _wait_for_note_photo_picker_opened(driver):
+                return True
         except (NoSuchElementException, WebDriverException):
             continue
+    if is_ios:
+        if _tap_ios_note_image_plus_from_source(driver):
+            return True
+        return _tap_note_image_plus_by_coordinate(driver)
     try:
         driver.execute_script("mobile: tap", {"x": 60, "y": 206})
         return True
@@ -2549,10 +2825,131 @@ def _tap_note_image_plus_by_coordinate(driver: WebDriver) -> bool:
         return False
 
     try:
-        driver.execute_script("mobile: tap", {"x": 60, "y": 206})
-        return True
-    except WebDriverException:
+        rect = driver.get_window_rect()
+        points = [
+            (60, 170),
+            (int(rect["width"] * 0.15), int(rect["height"] * 0.19)),
+            (int(rect["width"] * 0.15), int(rect["height"] * 0.20)),
+            (int(rect["width"] * 0.13), int(rect["height"] * 0.18)),
+        ]
+    except (AttributeError, KeyError, TypeError):
+        points = [(60, 170), (66, 190), (56, 180)]
+
+    for x, y in points:
+        try:
+            driver.execute_script("mobile: tap", {"x": x, "y": y})
+        except WebDriverException:
+            continue
+        if _wait_for_note_photo_picker_opened(driver):
+            return True
+    return False
+
+
+def _tap_ios_note_image_plus_from_source(driver: WebDriver) -> bool:
+    source = _safe_page_source(driver)
+    if not source:
         return False
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return False
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        if element.tag not in {
+            "XCUIElementTypeOther",
+            "XCUIElementTypeImage",
+            "XCUIElementTypeButton",
+        }:
+            continue
+        if element.attrib.get("visible", "true").lower() == "false":
+            continue
+        try:
+            x = int(float(element.attrib.get("x", "0")))
+            y = int(float(element.attrib.get("y", "0")))
+            width = int(float(element.attrib.get("width", "0")))
+            height = int(float(element.attrib.get("height", "0")))
+        except (TypeError, ValueError):
+            continue
+        if y < 90 or y > 340 or width < 70 or height < 70:
+            continue
+        ratio = width / height if height else 0
+        if not 0.65 <= ratio <= 1.5:
+            continue
+        searchable = " ".join(
+            str(element.attrib.get(attribute, ""))
+            for attribute in ("name", "label", "value", "type")
+        ).lower()
+        if not any(token in searchable for token in ("image", "图片", "上传", "添加", "+", "＋")):
+            continue
+        candidates.append((y, x, width, height))
+
+    for y, x, width, height in sorted(set(candidates)):
+        try:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": x + width // 2, "y": y + height // 4},
+            )
+        except WebDriverException:
+            continue
+        if _wait_for_note_photo_picker_opened(driver):
+            return True
+
+    tiny_icon_candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        if element.tag not in {
+            "XCUIElementTypeOther",
+            "XCUIElementTypeImage",
+            "XCUIElementTypeButton",
+        }:
+            continue
+        if element.attrib.get("visible", "true").lower() == "false":
+            continue
+        try:
+            x = int(float(element.attrib.get("x", "0")))
+            y = int(float(element.attrib.get("y", "0")))
+            width = int(float(element.attrib.get("width", "0")))
+            height = int(float(element.attrib.get("height", "0")))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= x <= 120 and 120 <= y <= 260 and 16 <= width <= 40 and 16 <= height <= 40):
+            continue
+        tiny_icon_candidates.append((y, x, width, height))
+
+    for y, x, width, height in sorted(set(tiny_icon_candidates)):
+        try:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": x + width // 2, "y": y + height // 2},
+            )
+        except WebDriverException:
+            continue
+        if _wait_for_note_photo_picker_opened(driver):
+            return True
+    return False
+
+
+def _wait_for_note_photo_picker_opened(driver: WebDriver, timeout: int = 2) -> bool:
+    return _wait_until(lambda: _note_photo_picker_opened(driver), timeout=timeout)
+
+
+def _note_photo_picker_opened(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    return any(
+        marker in page_source
+        for marker in [
+            "从手机相册选择",
+            "手机相册",
+            "从相册选择",
+            "照片图库",
+            "最近项目",
+            "所有照片",
+            "选择项目",
+            "选择最多9张照片。",
+            "PUPickerContainer",
+            "photosView_content_scroll_view",
+        ]
+    )
 
 
 def _choose_photo_library_source(driver: WebDriver) -> bool:

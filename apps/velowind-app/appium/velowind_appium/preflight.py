@@ -110,21 +110,19 @@ def _run_real_device_transport_preflight(config) -> int:
     if not prefer_devicectl:
         appium_port = server_port or 4723
         print(
-            "iOS real-device transport preflight: APPIUM_XCUITEST_PREFER_DEVICECTL=1 is required "
-            "for reliable device discovery with the current Appium/XCUITest stack."
+            "iOS real-device transport preflight: APPIUM_XCUITEST_PREFER_DEVICECTL=1 is not set; "
+            "the driver will fall back to legacy connected-device discovery if the tunnel registry is empty."
         )
         print(
-            "Start Appium with: APPIUM_XCUITEST_PREFER_DEVICECTL=1 appium server "
-            f"--address 127.0.0.1 --port {appium_port} --use-drivers=xcuitest --log-timestamp"
+            "Appium server: "
+            f"http://127.0.0.1:{appium_port}"
         )
-        return 1
+        return 0
 
     if major_ios_version is not None and major_ios_version >= 18 and not _remote_xpc_registry_is_reachable():
         print("iOS real-device transport preflight: RemoteXPC tunnel registry is not reachable.")
-        print("Run this once in a normal Terminal and enter the macOS password when prompted:")
-        print("sudo appium driver run xcuitest tunnel-creation")
-        print("Keep that tunnel process running while executing iOS real-device Appium tests.")
-        return 1
+        print("The driver will fall back to legacy connected-device discovery for this session.")
+        return 0
 
     return 0
 

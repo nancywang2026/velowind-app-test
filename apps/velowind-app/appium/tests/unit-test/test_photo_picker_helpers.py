@@ -54,6 +54,33 @@ def test_choose_photo_from_library_retries_sheet_option_before_selecting_album(m
     ]
 
 
+def test_choose_photo_from_library_fallback_retries_without_album_name(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(photo_picker, "choose_photo_library_source", lambda driver: calls.append("choose-source") or True)
+    monkeypatch.setattr(photo_picker, "dismiss_photo_permission_alerts", lambda driver: calls.append("dismiss-alerts"))
+    monkeypatch.setattr(photo_picker, "photo_library_visible", lambda driver, timeout=5: calls.append(("visible", timeout)) or True)
+    monkeypatch.setattr(
+        photo_picker,
+        "choose_local_photo",
+        lambda driver, album_name=None, picture_index=1, select_all_from_album=True: calls.append(
+            ("choose-photo", album_name, picture_index, select_all_from_album)
+        )
+        or (album_name is None),
+    )
+    monkeypatch.setattr(photo_picker, "_choose_first_option", lambda driver, preferred_texts: calls.append(("fallback-option", tuple(preferred_texts))) or True)
+
+    assert photo_picker.choose_photo_from_library(object(), album_name="图片") is True
+    assert calls == [
+        "choose-source",
+        "dismiss-alerts",
+        ("visible", 5),
+        ("choose-photo", "图片", 1, True),
+        ("fallback-option", ("最近项目", "照片图库", "照片", "所有照片")),
+        ("choose-photo", None, 1, True),
+    ]
+
+
 def test_photo_library_sheet_fallback_does_not_tap_xiaomi_quicksearch(monkeypatch):
     class FakeDriver:
         capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}
@@ -63,6 +90,20 @@ def test_photo_library_sheet_fallback_does_not_tap_xiaomi_quicksearch(monkeypatc
             raise AssertionError("quicksearch search bar must not be tapped")
 
     assert photo_picker._tap_photo_library_sheet_option(FakeDriver()) is False
+
+
+def test_tap_photo_library_sheet_option_uses_row_center(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        def get_window_size(self):
+            return {"width": 440, "height": 956}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert photo_picker._tap_photo_library_sheet_option(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 220.0, "y": 889.08})]
 
 
 def test_tap_named_element_center_supports_android_content_desc():
@@ -404,6 +445,39 @@ def test_switch_photo_picker_to_collections_uses_ios_source_fast_path(monkeypatc
     assert taps == [("mobile: tap", {"x": 128, "y": 836})]
 
 
+def test_switch_photo_picker_to_collections_uses_short_wait(monkeypatch):
+    waits = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(photo_picker, "_tap_ios_text_from_source", lambda driver, text: True)
+    monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: False)
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: "精选集")
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: False)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: waits.append(timeout) or predicate())
+
+    assert photo_picker.switch_photo_picker_to_collections(FakeDriver(), current_title="照片") is True
+    assert waits == [1]
+
+
+def test_return_photo_picker_to_collections_uses_short_wait(monkeypatch):
+    waits = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(photo_picker, "_photo_picker_collections_visible", lambda driver: False)
+    monkeypatch.setattr(photo_picker, "_tap_photo_picker_back", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "photo_album_title", lambda driver: "照片")
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: waits.append(timeout) or True)
+
+    assert photo_picker._return_photo_picker_to_collections(FakeDriver(), current_title="照片") is True
+    assert waits == [1]
+
+
 def test_photo_library_visible_does_not_accept_generic_photo_text(monkeypatch):
     monkeypatch.setattr(photo_picker.time, "monotonic", iter([0, 1]).__next__)
     monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
@@ -457,6 +531,21 @@ def test_find_photo_grid_candidates_supports_miui_gallery_picker():
 
         def find_elements(self, by, value):
             if value == '//android.widget.ImageView[@resource-id="com.miui.gallery:id/micro_thumb"]':
+                return [candidate]
+            return []
+
+    assert photo_picker.find_photo_grid_candidates(FakeDriver()) == [candidate]
+
+
+def test_find_photo_grid_candidates_supports_ios_cells():
+    class FakeElement:
+        rect = {"x": 18, "y": 148, "width": 72, "height": 72}
+
+    candidate = FakeElement()
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            if value == "//XCUIElementTypeCell":
                 return [candidate]
             return []
 

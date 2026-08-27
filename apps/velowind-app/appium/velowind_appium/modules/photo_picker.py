@@ -91,7 +91,10 @@ def choose_photo_from_library(
     if not fallback_opened:
         return False
     with _photo_picker_profile("choose-local-photo-fallback"):
-        return choose_local_photo(driver, **choose_kwargs)
+        fallback_choose_kwargs = dict(choose_kwargs)
+        if album_name is not None:
+            fallback_choose_kwargs["album_name"] = None
+        return choose_local_photo(driver, **fallback_choose_kwargs)
 
 
 def choose_video_from_library(
@@ -761,6 +764,7 @@ def find_photo_grid_candidates(driver: WebDriver) -> list:
     for xpath in [
         '//android.widget.ImageView[@clickable="true" and contains(@content-desc, "Photo")]',
         *miui_xpaths,
+        "//XCUIElementTypeCell",
         "//XCUIElementTypeImage[@name='PXGGridLayout-Info']",
         "//XCUIElementTypeImage[contains(@label, 'Screenshot')]",
         "//XCUIElementTypeImage",
@@ -775,7 +779,7 @@ def find_photo_grid_candidates(driver: WebDriver) -> list:
             y = float(rect.get("y", 0) or 0)
             width = float(rect.get("width", 0) or 0)
             height = float(rect.get("height", 0) or 0)
-            if width < 80 or height < 80:
+            if width < 48 or height < 48:
                 continue
             if y < 135:
                 continue
@@ -818,7 +822,7 @@ def switch_photo_picker_to_collections(driver: WebDriver, *, current_title: str 
             lambda: _photo_picker_collections_visible(driver)
             or photo_album_title(driver) == "精选集"
             or _visible_text_present(driver, "精选集"),
-            timeout=2,
+            timeout=1,
         )
 
 
@@ -861,7 +865,7 @@ def _return_photo_picker_to_collections(driver: WebDriver, *, current_title: str
             return False
         if _wait_until(
             lambda: _photo_picker_collections_visible(driver) or photo_album_title(driver) != current_title,
-            timeout=2,
+            timeout=1,
         ):
             _photo_picker_debug(f"back navigation left album {current_title}; now={photo_album_title(driver)}")
             return True
@@ -1052,7 +1056,7 @@ def _tap_photo_library_sheet_option(driver: WebDriver) -> bool:
             "mobile: tap",
             {
                 "x": size["width"] * 0.5,
-                "y": size["height"] * 0.90,
+                "y": size["height"] * 0.93,
             },
         )
         return True
