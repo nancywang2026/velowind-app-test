@@ -1,8 +1,91 @@
 from pathlib import Path
 
 from velowind_appium import modules
+from tests.message import xiaodai_video_upload
 import velowind_appium.modules.message_detail as message_detail
 import velowind_appium.modules.photo_picker as photo_picker
+
+
+def _write_xiaodai_case(testdata: Path, source_video: str) -> None:
+    testdata.write_text(
+        f"""
+use_cases:
+  - id: xiaodai-0424
+    note:
+      source_video: {source_video}
+""",
+        encoding="utf-8",
+    )
+
+
+def test_xiaodai_source_video_path_uses_first_video_in_source_directory(tmp_path: Path, monkeypatch):
+    data_root = tmp_path / "videos"
+    source_dir = data_root / "小黛0424"
+    source_dir.mkdir(parents=True)
+    (source_dir / "02-second.mp4").write_bytes(b"second")
+    (source_dir / "01-first.mov").write_bytes(b"first")
+    (source_dir / "文案.png").write_bytes(b"image")
+    testdata = tmp_path / "xiaodai.yaml"
+    _write_xiaodai_case(testdata, "小黛0424")
+
+    monkeypatch.setattr(xiaodai_video_upload, "TESTDATA_PATH", testdata)
+    monkeypatch.setenv("VW_XIAODAI_DATA_ROOT", str(data_root))
+
+    assert xiaodai_video_upload.xiaodai_source_video_path("xiaodai-0424") == source_dir / "01-first.mov"
+
+
+def test_xiaodai_source_video_path_keeps_supporting_explicit_file_path(tmp_path: Path, monkeypatch):
+    data_root = tmp_path / "videos"
+    source_dir = data_root / "小黛0424"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "视频.mp4"
+    source_file.write_bytes(b"video")
+    testdata = tmp_path / "xiaodai.yaml"
+    _write_xiaodai_case(testdata, "小黛0424/视频.mp4")
+
+    monkeypatch.setattr(xiaodai_video_upload, "TESTDATA_PATH", testdata)
+    monkeypatch.setenv("VW_XIAODAI_DATA_ROOT", str(data_root))
+
+    assert xiaodai_video_upload.xiaodai_source_video_path("xiaodai-0424") == source_file
+
+
+def test_xiaodai_source_video_path_accepts_album_prefixed_directory_name(tmp_path: Path, monkeypatch):
+    data_root = tmp_path / "videos"
+    source_dir = data_root / "0424"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "视频.mp4"
+    source_file.write_bytes(b"video")
+    testdata = tmp_path / "xiaodai.yaml"
+    _write_xiaodai_case(testdata, "小黛0424")
+
+    monkeypatch.setattr(xiaodai_video_upload, "TESTDATA_PATH", testdata)
+    monkeypatch.setenv("VW_XIAODAI_DATA_ROOT", str(data_root))
+
+    assert xiaodai_video_upload.xiaodai_source_video_path("xiaodai-0424") == source_file
+
+
+def test_xiaodai_source_video_path_reports_missing_or_empty_source_directory(tmp_path: Path, monkeypatch):
+    data_root = tmp_path / "videos"
+    (data_root / "空目录").mkdir(parents=True)
+    testdata = tmp_path / "xiaodai.yaml"
+    monkeypatch.setattr(xiaodai_video_upload, "TESTDATA_PATH", testdata)
+    monkeypatch.setenv("VW_XIAODAI_DATA_ROOT", str(data_root))
+
+    _write_xiaodai_case(testdata, "不存在")
+    try:
+        xiaodai_video_upload.xiaodai_source_video_path("xiaodai-0424")
+    except AssertionError as exc:
+        assert "source video directory does not exist" in str(exc)
+    else:
+        raise AssertionError("missing source directory should fail")
+
+    _write_xiaodai_case(testdata, "空目录")
+    try:
+        xiaodai_video_upload.xiaodai_source_video_path("xiaodai-0424")
+    except AssertionError as exc:
+        assert "contains no supported video files" in str(exc)
+    else:
+        raise AssertionError("empty source directory should fail")
 
 
 def test_load_message_note_draft_reads_xiaodai_video_index(tmp_path: Path):

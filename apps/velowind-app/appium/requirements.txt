@@ -3,4 +3,5 @@ allure-pytest==2.15.2
 PyYAML==6.0.3
 pytest==8.4.2
 Pillow==11.3.0
+imageio-ffmpeg==0.6.0
 setuptools<81

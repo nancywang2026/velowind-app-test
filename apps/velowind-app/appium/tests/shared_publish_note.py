@@ -10,7 +10,7 @@ from velowind_appium.session import ensure_logged_in_for_publish_entry
 
 
 TESTDATA_PATH = Path(__file__).resolve().parent / "message" / "testdata" / "publish_notes.yaml"
-SUCCESS_TOKENS = ["成功", "审核", "待审核", "已发布", "视频上传中", "视频上传完成", "detail-page"]
+SUCCESS_TOKENS = ["成功", "审核", "待审核", "已发布", "我的笔记", "视频上传中", "视频上传完成", "detail-page"]
 
 
 def publish_note_use_case_ids() -> list[str]:

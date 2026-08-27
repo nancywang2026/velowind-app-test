@@ -3,17 +3,19 @@ dataset:
   root: /Users/test/Nancy/Testing/testingdata/小黛/视频
   video_order: iPhone 视频相册从上到下，最新导入的视频为第 1 个
 use_cases:
-  - id: xiaodai-0410
-    description: 小黛 0410 视频上传
+  - id: xiaodai-0424
+    description: 小黛 0424 视频上传
     note:
-      title: Velowind｜踩上踏板，即刻出发
+      title: Velowind｜解锁轻松骑行状态 🚲
       body: |-
-        不是所有出发都需要计划很久
-        节奏一直在你脚下
+        跳出紧绷的生活步调
+        在风中调整呼吸
+        享受骑行的舒缓时刻 🫧
       media_type: video
       video_index: 1
-      source_video: 0410/视频_0410.mp4
-      caption_image: 0410/文案.docx
+      album: 小黛0424
+      source_video: 小黛0424
+      caption_image: 0424/文案.png
       topics:
         - "#寻风集velowind"
         - "#寻风集户外专用保障车"
@@ -22,27 +24,6 @@ use_cases:
         - "#运动生活方式"
       location: ""
       allow_comments: true
-#  - id: xiaodai-0424
-#    description: 小黛 0424 视频上传
-#    note:
-#      title: Velowind｜解锁轻松骑行状态 🚲
-#      body: |-
-#        跳出紧绷的生活步调
-#        在风中调整呼吸
-#        享受骑行的舒缓时刻 🫧
-#      media_type: video
-#      video_index: 1
-#      album: 小黛0424
-#      source_video: 0424/视频.mp4
-#      caption_image: 0424/文案.png
-#      topics:
-#        - "#寻风集velowind"
-#        - "#寻风集户外专用保障车"
-#        - "#户外"
-#        - "#骑友圈"
-#        - "#运动生活方式"
-#      location: ""
-#      allow_comments: true
 #  - id: xiaodai-0430
 #    description: 小黛 0430 视频上传
 #    note:
@@ -57,7 +38,7 @@ use_cases:
 #      media_type: video
 #      video_index: 1
 #      album: 小黛0430
-#      source_video: 0430/视频.mp4
+#      source_video: 小黛0430
 #      caption_image: 0430/文案.png
 #      topics:
 #        - "#骑友圈"
@@ -83,8 +64,8 @@ use_cases:
 #        从展位打卡到现场互动，大家边逛边聊，骑行的热爱在这里不断汇聚与延续。感谢每一位到场的伙伴，让这场活动更加有温度，同时下一次的活动已经在筹备当中～
 #      media_type: video
 #      video_index: 1
-#      album: 小黛0511
-#      source_video: 0511/视频.mp4
+#      album: 小黛0430
+#      source_video: 小黛0430
 #      caption_image: 0511/文案.png
 #      topics:
 #        - "#活动回顾"
@@ -105,7 +86,7 @@ use_cases:
 #      media_type: video
 #      video_index: 1
 #      album: 小黛0526
-#      source_video: 0526/视频.mp4
+#      source_video: 小黛0526
 #      caption_image: 0526/文案.png
 #      topics:
 #        - "#寻风集velowind"
@@ -128,7 +109,7 @@ use_cases:
 #      media_type: video
 #      album: 小黛0603
 #      video_index: 1
-#      source_video: 0603/视频.mp4
+#      source_video: 小黛0603
 #      caption_image: 0603/文案.png
 #      topics:
 #        - "#寻风集户外专用保障车"
@@ -148,7 +129,7 @@ use_cases:
 #      media_type: video
 #      album: 小黛0611
 #      video_index: 1
-#      source_video: 0611/视频.mp4
+#      source_video: 小黛0611
 #      caption_image: 0611/文案.png
 #      topics:
 #        - "#寻风集户外专用保障车"
@@ -172,7 +153,7 @@ use_cases:
 #      media_type: video
 #      album: 小黛0626
 #      video_index: 1
-#      source_video: 0626/6月24日.mp4
+#      source_video: 小黛0626
 #      caption_image: 0626/文案.png
 #      topics:
 #        - "#寻风集户外专用保障车"
@@ -200,7 +181,7 @@ use_cases:
 #      media_type: video
 #      video_index: 1
 #      album: 小黛0701
-#      source_video: 0701/视频.mp4
+#      source_video: 小黛0701
 #      caption_image: 0701/文案.jpg
 #      topics:
 #        - "#寻风集户外专用保障车"
@@ -227,7 +208,7 @@ use_cases:
 #      media_type: video
 #      video_index: 1
 #      album: 小黛0822
-#      source_video: 0822/寻风集车辆展示.mp4
+#      source_video: 小黛0822
 #      caption_image: 0822/文案.png
 #      topics:
 #        - "#寻风集velowind"

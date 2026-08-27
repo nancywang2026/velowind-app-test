@@ -1,8 +1,10 @@
 from velowind_appium.modules import message_detail
 from velowind_appium import reporting
 from pathlib import Path
+from io import BytesIO
 import pytest
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+from PIL import Image
 
 from velowind_appium.modules.message_detail import (
     MessageNoteDraft,
@@ -14,6 +16,37 @@ from velowind_appium.modules.message_detail import (
     message_note_publish_success_signal,
     parse_detail_snapshot,
 )
+
+
+def test_publish_message_note_validates_video_only_when_media_type_is_video(monkeypatch, tmp_path: Path):
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"video")
+    calls = []
+
+    monkeypatch.setattr(message_detail, "open_message_note_publisher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail, "fill_message_note_form", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail, "submit_message_note", lambda *args, **kwargs: "视频上传中")
+    monkeypatch.setattr(message_detail, "wait_for_video_upload_completion", lambda *args, **kwargs: "视频上传完成")
+    monkeypatch.setattr(
+        message_detail,
+        "_validate_published_note_video_matches_source",
+        lambda driver, source_path, **kwargs: calls.append(Path(source_path)),
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_validate_published_note_image_matches_uploaded_preview",
+        lambda *args, **kwargs: calls.append("image"),
+    )
+
+    video_draft = MessageNoteDraft(title="视频", body="正文", topics=[], location="", media_type="video")
+    image_draft = MessageNoteDraft(title="图片", body="正文", topics=[], location="", media_type="image")
+    video_without_source_draft = MessageNoteDraft(title="无源视频", body="正文", topics=[], location="", media_type="video")
+
+    message_detail.publish_message_note(object(), video_draft, video_source_path=source_video)
+    message_detail.publish_message_note(object(), image_draft)
+    message_detail.publish_message_note(object(), video_without_source_draft)
+
+    assert calls == [source_video, "image"]
 
 
 def test_android_note_search_coordinate_targets_visible_header_icon(monkeypatch):
@@ -226,6 +259,50 @@ def test_publish_note_image_validation_opens_my_notes_detail_by_title_before_cap
     assert events == [("open-my-notes", "测试标题", 20), ("capture", "detail-bounds")]
 
 
+def test_tap_published_note_title_uses_visible_ios_title_rect_when_xpath_is_unavailable(monkeypatch):
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="我的笔记 笔记 收藏 点赞" visible="true" x="0" y="0" width="402" height="874">
+        <XCUIElementTypeStaticText
+          name="测试 - 长白山真的有种让人瞬间安静下来"
+          label="测试 - 长白山真的有种让人瞬间安静下来"
+          visible="true"
+          enabled="true"
+          accessible="true"
+          x="13"
+          y="670"
+          width="376"
+          height="61"
+        />
+      </XCUIElementTypeOther>
+    </AppiumAUT>
+    """
+    taps = []
+
+    class FakeElement:
+        def click(self):
+            raise message_detail.NoSuchElementException()
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, *_args, **_kwargs):
+            raise message_detail.NoSuchElementException()
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "tap_text_if_present", lambda *args, **kwargs: False)
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: False)
+
+    assert message_detail._tap_published_note_title(
+        FakeDriver(),
+        "测试 - 长白山真的有种让人瞬间安静下来的魔力",
+        page_source=page_source,
+    ) is True
+    assert taps == [("mobile: tap", {"x": 201.0, "y": 700.5})]
+
+
 def test_ios_note_search_entry_coordinate_defers_visibility_wait(monkeypatch):
     calls = []
 
@@ -282,6 +359,39 @@ def test_android_publish_entry_coordinate_targets_bottom_center_plus_button(monk
 
     assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 720, "y": 2393})]
+
+
+def test_capture_published_note_video_frames_uses_screenshots_without_appium_recording(monkeypatch):
+    screenshot = BytesIO()
+    Image.new("RGB", (402, 874), "red").save(screenshot, format="PNG")
+    calls = []
+
+    class FakeDriver:
+        def start_recording_screen(self, **_kwargs):
+            raise AssertionError("system ffmpeg recording must not be used")
+
+        def get_screenshot_as_png(self):
+            calls.append("screenshot")
+            return screenshot.getvalue()
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            calls.append((script, payload))
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda _seconds: None)
+    frames, paths = message_detail._capture_published_note_video_frames(
+        FakeDriver(),
+        type("Bounds", (), {"x": 0, "y": 122, "width": 402, "height": 536})(),
+        sample_count=2,
+        seconds=0,
+    )
+
+    assert len(frames) == 2
+    assert len(paths) == 2
+    assert calls.count("screenshot") == 2
+    assert not any(isinstance(call, tuple) and call[0] == "mobile: tap" for call in calls)
 
 
 def test_android_publish_entry_coordinate_targets_pixel_10_plus_button(monkeypatch):
@@ -989,6 +1099,60 @@ def test_message_note_publish_success_signal_detects_video_upload_progress_on_my
     assert (
         message_note_publish_success_signal(page_source, allow_video_upload_progress=True)
         == "视频上传中"
+    )
+
+
+def test_message_note_publish_success_signal_detects_published_title_on_my_notes_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="我的笔记" />
+      <XCUIElementTypeStaticText name="测试 - 长白山真的有种让人瞬间安静下来的魔力" />
+      <XCUIElementTypeStaticText name="进行中" />
+    </AppiumAUT>
+    """
+
+    assert (
+        message_detail.message_note_publish_success_signal(
+            page_source,
+            published_title="测试 - 长白山真的有种让人瞬间安静下来的魔力",
+        )
+        == "我的笔记"
+    )
+
+
+def test_message_note_publish_success_signal_accepts_truncated_published_title_prefix_on_my_notes_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="我的笔记" />
+      <XCUIElementTypeStaticText name="测试 - 长白山真的有种让人瞬间安静下来" />
+      <XCUIElementTypeStaticText name="进行中" />
+    </AppiumAUT>
+    """
+
+    assert (
+        message_detail.message_note_publish_success_signal(
+            page_source,
+            published_title="测试 - 长白山真的有种让人瞬间安静下来的魔力",
+        )
+        == "我的笔记"
+    )
+
+
+def test_message_note_publish_success_signal_rejects_short_published_title_prefix_on_my_notes_page():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText name="我的笔记" />
+      <XCUIElementTypeStaticText name="测试 - 长白山" />
+      <XCUIElementTypeStaticText name="进行中" />
+    </AppiumAUT>
+    """
+
+    assert (
+        message_detail.message_note_publish_success_signal(
+            page_source,
+            published_title="测试 - 长白山真的有种让人瞬间安静下来的魔力",
+        )
+        is None
     )
 
 
@@ -1983,6 +2147,20 @@ def test_upload_note_image_uses_shared_photo_picker(monkeypatch):
     ]
 
 
+def test_tap_note_photo_library_sheet_option_uses_row_center(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        def get_window_size(self):
+            return {"width": 440, "height": 956}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_note_photo_library_sheet_option(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 220.0, "y": 889.08})]
+
+
 def test_load_message_note_draft_parses_video_media_type(tmp_path):
     testdata = tmp_path / "publish_notes.yaml"
     testdata.write_text(
@@ -2122,7 +2300,11 @@ def test_ios_note_image_plus_coordinate_fallback_requires_picker_transition(monk
     monkeypatch.setattr(message_detail, "_wait_for_note_photo_picker_opened", lambda driver, timeout=2: False)
 
     assert message_detail._tap_note_image_plus_by_coordinate(FakeDriver()) is False
-    assert taps == [("mobile: tap", {"x": 60, "y": 170})]
+    assert taps == [
+        ("mobile: tap", {"x": 60, "y": 170}),
+        ("mobile: tap", {"x": 66, "y": 190}),
+        ("mobile: tap", {"x": 56, "y": 180}),
+    ]
 
 
 def test_fill_input_near_label_supports_android_edit_text_hint(monkeypatch):
