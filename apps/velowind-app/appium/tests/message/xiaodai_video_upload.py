@@ -13,7 +13,7 @@ from velowind_appium.modules import publish_message_note
 
 TESTDATA_PATH = Path(__file__).resolve().parent / "testdata" / "xiaodai_video_notes.yaml"
 DEFAULT_DATA_ROOT = Path("/Users/test/Nancy/Testing/testingdata/小黛/视频")
-SUCCESS_TOKENS = ["成功", "审核", "待审核", "已发布", "视频上传中", "视频上传完成", "detail-page"]
+SUCCESS_TOKENS = ["成功", "审核", "待审核", "已发布", "我的笔记", "视频上传中", "视频上传完成", "detail-page"]
 SUPPORTED_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
 
 
