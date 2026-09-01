@@ -26,6 +26,23 @@ def test_find_note_detail_video_bounds_prefers_accessible_player_region():
     assert (bounds.x, bounds.y, bounds.width, bounds.height) == (0, 120, 402, 402)
 
 
+def test_find_note_detail_video_bounds_ignores_note_container_larger_than_player():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther name="post-detail-page" visible="true" x="0" y="0" width="402" height="874" />
+      <XCUIElementTypeOther name="post-detail-scroll-view" label="视频笔记正文 评论" visible="true" x="0" y="122" width="402" height="1140" />
+      <XCUIElementTypeOther name="post-detail-video-surface" visible="true" x="0" y="122" width="402" height="665" />
+      <XCUIElementTypeOther name="post-detail-aliyun-video-player-container" visible="true" x="0" y="122" width="402" height="665" />
+      <XCUIElementTypeOther name="post-detail-aliyun-video-player" visible="true" x="0" y="122" width="402" height="665" />
+    </AppiumAUT>
+    """
+
+    bounds = find_note_detail_video_bounds(page_source)
+
+    assert bounds is not None
+    assert (bounds.x, bounds.y, bounds.width, bounds.height) == (0, 122, 402, 665)
+
+
 def test_compare_video_frames_accepts_same_content_with_different_frame_sizes():
     source = [Image.new("RGB", (4, 4), "red"), Image.new("RGB", (4, 4), "blue")]
     actual = [Image.new("RGB", (8, 8), "red"), Image.new("RGB", (8, 8), "blue")]

@@ -29,7 +29,7 @@ def find_note_detail_video_bounds(page_source: str) -> VideoBounds | None:
         root = ElementTree.fromstring(page_source)
     except ElementTree.ParseError:
         return None
-    candidates: list[VideoBounds] = []
+    candidates: list[tuple[int, VideoBounds]] = []
     for element in root.iter():
         attributes = element.attrib
         if attributes.get("visible") == "false" or attributes.get("displayed") == "false":
@@ -43,10 +43,30 @@ def find_note_detail_video_bounds(page_source: str) -> VideoBounds | None:
         bounds = _element_bounds(attributes)
         if bounds is None or bounds.width < 120 or bounds.height < 120:
             continue
-        candidates.append(bounds)
+        # iOS exposes the player inside accessible ancestor containers whose
+        # name/label contains the whole note text (and therefore the word
+        # "video"). Prefer the explicit player/surface node over those
+        # ancestors; otherwise screenshot cropping includes the note body and
+        # produces a false frame mismatch.
+        priority = 0
+        if any(token in searchable for token in [
+            "post-detail-video-surface",
+            "video-surface",
+            "video-player",
+            "avplayer",
+            "surfaceview",
+        ]):
+            priority = 2
+        elif any(token in searchable for token in ["player", "video"]):
+            priority = 1
+        candidates.append((priority, bounds))
     if not candidates:
         return None
-    return max(candidates, key=lambda item: item.width * item.height)
+    best_priority = max(priority for priority, _ in candidates)
+    return max(
+        (bounds for priority, bounds in candidates if priority == best_priority),
+        key=lambda item: item.width * item.height,
+    )
 
 
 def _element_bounds(attributes: dict[str, str]) -> VideoBounds | None:

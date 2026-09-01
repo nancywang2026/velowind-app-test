@@ -22,11 +22,21 @@ def publish_note_use_case_ids() -> list[str]:
 
 
 def publish_video_note_use_case_ids() -> list[str]:
-    return [
-        use_case_id
-        for use_case_id in list_message_note_use_case_ids(testdata_path=TESTDATA_PATH)
-        if load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH).media_type == "video"
-    ]
+    use_case_ids: list[str] = []
+    for use_case_id in list_message_note_use_case_ids(testdata_path=TESTDATA_PATH):
+        draft = load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH)
+        if draft.media_type == "video" and draft.media_source != "camera":
+            use_case_ids.append(use_case_id)
+    return use_case_ids
+
+
+def publish_record_video_note_use_case_ids() -> list[str]:
+    use_case_ids: list[str] = []
+    for use_case_id in list_message_note_use_case_ids(testdata_path=TESTDATA_PATH):
+        draft = load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH)
+        if draft.media_type == "video" and draft.media_source == "camera":
+            use_case_ids.append(use_case_id)
+    return use_case_ids
 
 
 def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, verification_label: str, assertion_label: str) -> None:
@@ -48,7 +58,8 @@ def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, ver
                 f"4. 已填写话题: {' '.join(draft.topics)}",
                 f"5. 已标记地点: {draft.location}",
                 f"6. 已设置允许评论: {'是' if draft.allow_comments else '否'}",
-                f"7. 已提交并拿到成功信号: {success_signal}",
+                *([f"7. 现场录制视频并读取预览时长: {getattr(app_driver, '_camera_video_actual_seconds', '未知')} 秒"] if draft.media_source == "camera" else []),
+                f"{8 if draft.media_source == 'camera' else 7}. 已提交并拿到成功信号: {success_signal}",
             ]
         ),
     )

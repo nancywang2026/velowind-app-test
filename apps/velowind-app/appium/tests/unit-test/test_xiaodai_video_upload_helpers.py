@@ -135,6 +135,36 @@ def test_upload_note_media_passes_draft_video_index_to_picker(monkeypatch):
     assert calls == ["clear", "tap-video", ("choose-video", None, 7)]
 
 
+def test_upload_note_media_uses_camera_branch_for_recorded_video(monkeypatch):
+    draft = modules.MessageNoteDraft(
+        title="标题",
+        body="正文",
+        topics=[],
+        location="",
+        media_type="video",
+        media_source="camera",
+        video_index=7,
+    )
+    calls = []
+
+    monkeypatch.setattr(message_detail, "_clear_existing_note_images", lambda driver: calls.append("clear"))
+    monkeypatch.setattr(message_detail, "_tap_note_video_entry", lambda driver: calls.append("tap-video") or True)
+    monkeypatch.setattr(
+        message_detail.photo_picker,
+        "choose_video_from_camera",
+        lambda driver, record_seconds=3: calls.append(("record-video", record_seconds)) or True,
+    )
+    monkeypatch.setattr(
+        message_detail.photo_picker,
+        "choose_video_from_library",
+        lambda *args, **kwargs: calls.append("choose-library") or True,
+    )
+
+    message_detail._upload_note_media(object(), draft)
+
+    assert calls == ["clear", "tap-video", ("record-video", 3)]
+
+
 def test_ios_video_picker_uses_one_based_video_index(monkeypatch):
     taps = []
 

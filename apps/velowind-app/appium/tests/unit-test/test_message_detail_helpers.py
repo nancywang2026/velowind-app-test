@@ -74,6 +74,27 @@ def test_publish_message_note_forwards_observed_video_progress_signal(monkeypatc
     assert observed_signals == ["视频上传中"]
 
 
+def test_load_message_note_draft_reads_video_media_source(tmp_path: Path):
+    testdata = tmp_path / "publish_notes.yaml"
+    testdata.write_text(
+        """
+use_cases:
+  - id: publish-note-video-camera
+    note:
+      title: 标题
+      body: 正文
+      media_type: video
+      media_source: camera
+""",
+        encoding="utf-8",
+    )
+
+    draft = message_detail.load_message_note_draft("publish-note-video-camera", testdata_path=testdata)
+
+    assert draft.media_type == "video"
+    assert draft.media_source == "camera"
+
+
 def test_android_note_search_coordinate_targets_visible_header_icon(monkeypatch):
     taps = []
 

@@ -81,6 +81,104 @@ def test_choose_photo_from_library_fallback_retries_without_album_name(monkeypat
     ]
 
 
+def test_choose_video_from_camera_prefers_the_camera_source_option(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(photo_picker, "dismiss_photo_permission_alerts", lambda driver: calls.append("dismiss-alerts"))
+    monkeypatch.setattr(
+        photo_picker,
+        "tap_text_if_present",
+        lambda driver, text, timeout=2: calls.append(("source-option", text, timeout)) or text == "拍摄视频",
+    )
+    monkeypatch.setattr(
+        photo_picker,
+        "_record_video_from_camera",
+        lambda driver, record_seconds=3: calls.append(("record-video", record_seconds)) or True,
+    )
+
+    assert photo_picker.choose_video_from_camera(object(), record_seconds=4) is True
+    assert calls == [
+        "dismiss-alerts",
+        ("source-option", "拍摄视频", 2),
+        ("record-video", 4),
+    ]
+
+
+def test_confirm_camera_video_selection_clicks_ios_preview_confirm(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(photo_picker, "_camera_video_preview_visible", lambda driver: True)
+    monkeypatch.setattr(
+        photo_picker,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: calls.append((text, timeout)) or text == "确认",
+    )
+
+    assert photo_picker._confirm_camera_video_selection(object()) is True
+    assert calls == [("确认", 1)]
+
+
+def test_camera_video_duration_reads_seconds_from_preview():
+    assert photo_picker._camera_video_duration_seconds("预览视频 0:30 | 720 x 1280 | MOV") == 30
+    assert photo_picker._camera_video_duration_seconds("预览视频 0:29 | 720 x 1280 | MOV") == 29
+    assert photo_picker._camera_video_duration_seconds("预览视频 31 秒 | 720 x 1280 | MOV") == 31
+    assert photo_picker._camera_video_duration_seconds("预览视频 | 720 x 1280 | MOV") is None
+
+
+def test_record_video_from_camera_waits_configured_duration_then_reads_preview(monkeypatch):
+    events = []
+    driver = type("FakeDriver", (), {})()
+
+    monkeypatch.setattr(photo_picker, "_camera_video_controls_visible", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: True)
+    monkeypatch.setattr(photo_picker, "_camera_video_duration_seconds", lambda page_source: 30)
+    monkeypatch.setattr(photo_picker, "_tap_camera_record_control", lambda driver, start: events.append(("tap", start)) or True)
+    monkeypatch.setattr(
+        photo_picker,
+        "_wait_for_camera_recording_duration",
+        lambda driver, seconds, **kwargs: events.append(("wait", seconds, kwargs)) or True,
+    )
+    monkeypatch.setattr(photo_picker, "_confirm_camera_video_selection", lambda driver: events.append("confirm") or True)
+
+    assert photo_picker._record_video_from_camera(driver, record_seconds=30) is True
+    assert driver._camera_video_actual_seconds == 30
+    assert events[0] == ("tap", True)
+    assert events[1][:2] == ("wait", 30)
+    assert isinstance(events[1][2]["started_at"], float)
+    assert events[2:] == [("tap", False), "confirm"]
+
+
+def test_camera_recording_timer_reaches_target_duration(monkeypatch):
+    clock = [100.0]
+    sleeps = []
+
+    monkeypatch.setattr(photo_picker, "_safe_page_source", lambda driver: (_ for _ in ()).throw(AssertionError("page source should not be polled while recording")))
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(photo_picker.time, "sleep", fake_sleep)
+    monkeypatch.setattr(photo_picker.time, "monotonic", lambda: clock[0])
+
+    assert photo_picker._wait_for_camera_recording_duration(object(), 30, started_at=100.0) is True
+    assert sleeps == [30.0]
+def test_camera_record_control_uses_record_button_center_for_start_and_stop(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(photo_picker, "tap_text_if_present", lambda driver, text, timeout=1: False)
+
+    assert photo_picker._tap_camera_record_control(FakeDriver(), start=False) is True
+    assert taps == [("mobile: tap", {"x": 201.0, "y": 716.68})]
+
+
 def test_photo_library_sheet_fallback_does_not_tap_xiaomi_quicksearch(monkeypatch):
     class FakeDriver:
         capabilities = {"platformName": "Android", "appium:udid": "YHK7EERSGAPZX87X", "appium:deviceName": "25060RK16C"}

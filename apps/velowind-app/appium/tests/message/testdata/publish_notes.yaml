@@ -26,6 +26,20 @@ use_cases:
         - "#视频记录"
       location: 长白山
       allow_comments: true
+  - id: publish-note-video-camera
+    description: 直接拍摄视频笔记 - 长白山
+    note:
+      title: 测试 - 长白山现场拍摄视频记录
+      body: 直接拍摄一段视频来记录长白山的风和云，和相册里的素材走不同入口。
+      media_type: video
+      media_source: camera
+      camera_record_seconds: 5
+      topics:
+        - "#长白山"
+        - "#旅行日记"
+        - "#视频记录"
+      location: 长白山
+      allow_comments: true
 #  - id: publish-note-changbaishan-no-location
 #    description: 发布笔记 - 长白山（不选地点）
 #    note:
