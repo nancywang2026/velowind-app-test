@@ -1,4 +1,16 @@
 tests:
+  # 发布笔记 - 图片
+  - file: message/test_ios_publish_note.py
+    methods:
+      - test_user_can_publish_note_for_review
+  # 发布笔记 - 视频
+  - file: message/test_ios_xiaodai_publish_video.py
+    methods:
+      - test_user_can_publish_xiaodai_video_note_for_review
+  # 发布笔记 - 直接拍摄视频
+  - file: message/test_ios_publish_video_record_note.py
+    methods:
+      - test_user_can_publish_video_record_note_for_review
    # 基础功能巡检
   - file: smoke/test_ios_feature_walkthrough.py
     methods:
@@ -8,10 +20,6 @@ tests:
   - file: activity/test_manage_activity_session.py
     methods:
       - test_user_can_add_activity_session_from_my_approved_activity
-  # 发布笔记
-  - file: message/test_ios_publish_note.py
-    methods:
-      - test_user_can_publish_note_for_review
   # 浏览笔记详情
   - file: message/test_ios_message_browse.py
     methods:

@@ -305,6 +305,36 @@ def test_publish_note_image_validation_opens_my_notes_detail_by_title_before_cap
     assert events == [("open-my-notes", "测试标题", 20), ("capture", "detail-bounds")]
 
 
+def test_my_notes_list_visible_accepts_android_notes_tabs():
+    assert message_detail._my_notes_list_visible("我的笔记 笔记 收藏 点赞") is True
+
+
+def test_android_published_note_title_accepts_truncated_prefix(monkeypatch):
+    taps = []
+
+    class FakeElement:
+        rect = {"x": 62, "y": 1489, "width": 552, "height": 130}
+
+        def get_attribute(self, name):
+            return "测试 - 长白山真的有种让人瞬间安静下来" if name == "text" else None
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            return [FakeElement()]
+
+    monkeypatch.setattr(
+        message_detail,
+        "_adb_input_tap",
+        lambda driver, x, y: taps.append((x, y)) or True,
+    )
+
+    assert message_detail._tap_android_published_note_title_prefix(
+        FakeDriver(),
+        "测试 - 长白山真的有种让人瞬间安静下来的魔力",
+    ) is True
+    assert taps == [(338, 1554)]
+
+
 def test_tap_published_note_title_uses_visible_ios_title_rect_when_xpath_is_unavailable(monkeypatch):
     page_source = """
     <AppiumAUT>
@@ -2392,6 +2422,67 @@ def test_android_note_image_plus_uses_updated_top_image_slot_from_source(monkeyp
 
     assert message_detail._tap_note_image_plus(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 62, "y": 156})]
+
+
+def test_android_note_image_plus_uses_updated_vertical_media_card_from_source(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        page_source = """
+        <hierarchy>
+          <android.widget.ImageView resource-id="image" visible="true"
+            x="0" y="354" width="250" height="827" />
+        </hierarchy>
+        """
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+        def find_elements(self, by, value):
+            raise AssertionError("coordinate fallback should not run when source hit is available")
+
+    monkeypatch.setattr(message_detail, "_wait_for_note_photo_picker_opened", lambda driver, timeout=2: True)
+
+    assert message_detail._tap_note_image_plus(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 125, "y": 436})]
+
+
+def test_android_note_image_plus_uses_vertical_media_card_coordinate_fallback(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_elements(self, by, value):
+            return []
+
+        def get_window_size(self):
+            return {"width": 1280, "height": 2772}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    monkeypatch.setattr(message_detail, "_wait_for_note_photo_picker_opened", lambda driver, timeout=2: True)
+
+    assert message_detail._tap_note_image_plus_by_coordinate(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 125.44, "y": 435.204})]
+
+
+def test_android_note_video_entry_uses_vertical_media_card_lower_half():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def get_window_size(self):
+            return {"width": 1280, "height": 2772}
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_note_video_entry(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 125.44, "y": 587.664})]
 
 
 def test_ios_note_image_plus_uses_updated_top_image_slot_from_source(monkeypatch):

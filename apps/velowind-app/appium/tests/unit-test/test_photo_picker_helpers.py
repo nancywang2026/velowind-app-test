@@ -441,6 +441,31 @@ def test_choose_video_from_library_opens_album_before_selecting_video(monkeypatc
     assert calls == ["visible", "dismiss", ("open-album", "0424"), ("ensure-album", "0424"), ("video", 10), "confirm"]
 
 
+def test_android_choose_video_uses_current_picker_grid_without_ios_album(monkeypatch):
+    calls = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(photo_picker, "photo_library_visible", lambda driver, timeout=2: True)
+    monkeypatch.setattr(photo_picker, "dismiss_photo_permission_alerts", lambda driver: calls.append("dismiss"))
+    monkeypatch.setattr(photo_picker, "_is_android_photo_picker", lambda driver: True)
+    monkeypatch.setattr(
+        photo_picker,
+        "_tap_android_photo_picker_video_candidate",
+        lambda driver, video_index=1: calls.append(("video", video_index)) or True,
+    )
+    monkeypatch.setattr(photo_picker, "_confirm_video_picker_selection", lambda driver: calls.append("confirm") or True)
+    monkeypatch.setattr(
+        photo_picker,
+        "open_photo_album",
+        lambda driver, album_name: (_ for _ in ()).throw(AssertionError("Android must not open the iOS album")),
+    )
+
+    assert photo_picker.choose_video_from_library(FakeDriver(), album_name="0424", video_index=1) is True
+    assert calls == ["dismiss", ("video", 1), "confirm"]
+
+
 def test_tap_first_ios_video_candidate_uses_single_image_query(monkeypatch):
     calls = []
 
@@ -595,6 +620,22 @@ def test_photo_library_visible_accepts_android_google_photos_picker(monkeypatch)
 
     class FakeDriver:
         page_source = "Select photos Device folders 云南洱海 1 item"
+
+        def find_element(self, by, value):
+            raise photo_picker.NoSuchElementException()
+
+    assert photo_picker.photo_library_visible(FakeDriver(), timeout=1) is True
+
+
+def test_photo_library_visible_accepts_android_system_photo_picker(monkeypatch):
+    monkeypatch.setattr(photo_picker.time, "monotonic", iter([0, 0, 2]).__next__)
+    monkeypatch.setattr(photo_picker.time, "sleep", lambda seconds: None)
+
+    class FakeDriver:
+        page_source = (
+            '<node package="com.android.photopicker" content-desc="全部" selected="true" />'
+            '<node package="com.android.photopicker" content-desc="影集" selected="false" />'
+        )
 
         def find_element(self, by, value):
             raise photo_picker.NoSuchElementException()
