@@ -49,6 +49,52 @@ def test_publish_message_note_validates_video_only_when_media_type_is_video(monk
     assert calls == [source_video, "image"]
 
 
+def test_publish_message_note_forwards_observed_video_progress_signal(monkeypatch, tmp_path: Path):
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"video")
+    observed_signals = []
+
+    monkeypatch.setattr(message_detail, "open_message_note_publisher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail, "fill_message_note_form", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail, "submit_message_note", lambda *args, **kwargs: "视频上传中")
+    monkeypatch.setattr(
+        message_detail,
+        "wait_for_video_upload_completion",
+        lambda *args, **kwargs: observed_signals.append(kwargs.get("observed_signal")) or "视频上传中",
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_validate_published_note_video_matches_source",
+        lambda *args, **kwargs: None,
+    )
+
+    draft = MessageNoteDraft(title="视频", body="正文", topics=[], location="", media_type="video")
+
+    assert message_detail.publish_message_note(object(), draft, video_source_path=source_video) == "视频上传中"
+    assert observed_signals == ["视频上传中"]
+
+
+def test_load_message_note_draft_reads_video_media_source(tmp_path: Path):
+    testdata = tmp_path / "publish_notes.yaml"
+    testdata.write_text(
+        """
+use_cases:
+  - id: publish-note-video-camera
+    note:
+      title: 标题
+      body: 正文
+      media_type: video
+      media_source: camera
+""",
+        encoding="utf-8",
+    )
+
+    draft = message_detail.load_message_note_draft("publish-note-video-camera", testdata_path=testdata)
+
+    assert draft.media_type == "video"
+    assert draft.media_source == "camera"
+
+
 def test_android_note_search_coordinate_targets_visible_header_icon(monkeypatch):
     taps = []
 
@@ -392,6 +438,50 @@ def test_capture_published_note_video_frames_uses_screenshots_without_appium_rec
     assert len(paths) == 2
     assert calls.count("screenshot") == 2
     assert not any(isinstance(call, tuple) and call[0] == "mobile: tap" for call in calls)
+
+
+def test_validate_published_note_video_waits_for_loading_to_clear_before_sampling(monkeypatch, tmp_path):
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"video")
+    frame_path = tmp_path / "frame.png"
+    Image.new("RGB", (10, 10), "red").save(frame_path)
+    current = {"loading": False}
+    page_states = iter(["loading", "ready", "ready"])
+
+    def page_source_for_state(state: str) -> str:
+        loading_nodes = """
+            <XCUIElementTypeOther name="post-detail-video-loading" label="正在缓冲视频..."
+                x="0" y="162" width="402" height="40" visible="true" />
+            <XCUIElementTypeStaticText name="正在缓冲视频..." label="正在缓冲视频..." />
+        """ if state == "loading" else ""
+        return f"""
+        <AppiumAUT>
+          <XCUIElementTypeOther name="post-detail-page" label="写留言 评论">
+            <XCUIElementTypeOther name="post-detail-video-surface"
+              x="0" y="122" width="402" height="665" visible="true" />
+            {loading_nodes}
+          </XCUIElementTypeOther>
+        </AppiumAUT>
+        """
+
+    def fake_page_source(_driver):
+        state = next(page_states, "ready")
+        current["loading"] = state == "loading"
+        return page_source_for_state(state)
+
+    def fake_capture(_driver, _bounds):
+        assert not current["loading"], "video frames should be sampled after buffering clears"
+        return [Image.new("RGB", (10, 10), "red")], [frame_path]
+
+    monkeypatch.setattr(message_detail, "message_detail_is_visible", lambda _driver: True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", fake_page_source)
+    monkeypatch.setattr(message_detail, "_capture_published_note_video_frames", fake_capture)
+    monkeypatch.setattr(message_detail, "compare_video_to_frames", lambda *args, **kwargs: type("Result", (), {"is_valid": True})())
+    monkeypatch.setattr(message_detail, "_publish_note_video_validation_summary_path", lambda: tmp_path / "summary.txt")
+    monkeypatch.setattr(message_detail, "attach_file_if_present", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda _seconds: None)
+
+    message_detail._validate_published_note_video_matches_source(object(), source_path=source_video, timeout=2)
 
 
 def test_android_publish_entry_coordinate_targets_pixel_10_plus_button(monkeypatch):
@@ -1164,6 +1254,24 @@ def test_wait_for_video_upload_completion_returns_progress_signal_after_grace_pe
     monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     assert message_detail.wait_for_video_upload_completion(object(), timeout=3, hold_seconds=2) == "视频上传中"
+    assert sleeps == [2]
+
+
+def test_wait_for_video_upload_completion_uses_observed_signal_without_repolling(monkeypatch):
+    sleeps = []
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: pytest.fail("should not repoll page source"))
+    monkeypatch.setattr(message_detail.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert (
+        message_detail.wait_for_video_upload_completion(
+            object(),
+            timeout=3,
+            hold_seconds=2,
+            observed_signal="视频上传中",
+        )
+        == "视频上传中"
+    )
     assert sleeps == [2]
 
 
@@ -2260,6 +2368,30 @@ def test_android_note_image_plus_taps_first_image_slot_center():
 
     assert message_detail._tap_note_image_plus(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 155.0, "y": 444.0})]
+
+
+def test_android_note_image_plus_uses_updated_top_image_slot_from_source(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        page_source = """
+        <hierarchy>
+          <android.widget.FrameLayout resource-id="image" visible="true"
+            x="14" y="132" width="96" height="96" />
+        </hierarchy>
+        """
+
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+        def find_elements(self, by, value):
+            raise AssertionError("coordinate fallback should not run when source hit is available")
+
+    monkeypatch.setattr(message_detail, "_wait_for_note_photo_picker_opened", lambda driver, timeout=2: True)
+
+    assert message_detail._tap_note_image_plus(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 62, "y": 156})]
 
 
 def test_ios_note_image_plus_uses_updated_top_image_slot_from_source(monkeypatch):

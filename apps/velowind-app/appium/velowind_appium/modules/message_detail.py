@@ -152,6 +152,7 @@ NOTE_FORM_READY_TEXTS = [
 ]
 NOTE_SUCCESS_TEXTS = ["发布成功", "提交成功", "审核中", "待审核", "提交审核成功", "已发布"]
 VIDEO_UPLOAD_PROGRESS_TEXTS = ["进行中", "上传中", "上传进度"]
+PUBLISHED_NOTE_VIDEO_LOADING_TEXTS = ["正在缓冲视频...", "post-detail-video-loading"]
 NOTE_SUCCESS_IDS = [
     "note-publish-success",
     "message-publish-success",
@@ -271,6 +272,8 @@ class MessageNoteDraft:
     picture_indexes: tuple[int, ...] = ()
     allow_comments: bool = True
     media_type: str = "image"
+    media_source: str = "library"
+    camera_record_seconds: float | None = None
     video_index: int = 1
     source_video: str = ""
     caption_image: str = ""
@@ -343,10 +346,22 @@ def _build_note_draft_from_case(use_case: dict) -> MessageNoteDraft:
         picture_indexes=picture_indexes,
         allow_comments=bool(allow_comments),
         media_type=str(note.get("media_type", "image")).strip().lower() or "image",
+        media_source=str(note.get("media_source", "library")).strip().lower() or "library",
+        camera_record_seconds=_optional_float(note.get("camera_record_seconds")),
         video_index=video_index,
         source_video=str(note.get("source_video", "")).strip(),
         caption_image=str(note.get("caption_image", "")).strip(),
     )
+
+
+def _optional_float(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _normalize_picture_indexes(raw_value) -> tuple[int, ...]:
@@ -403,7 +418,11 @@ def publish_message_note(
         )
     if draft.media_type == "video" and success_signal == "视频上传中":
         with _note_profile("hold-video-upload-progress"):
-            success_signal = wait_for_video_upload_completion(driver, timeout=timeout)
+            success_signal = wait_for_video_upload_completion(
+                driver,
+                timeout=timeout,
+                observed_signal=success_signal,
+            )
     if draft.media_type == "image":
         with _note_profile("validate-published-image"):
             _validate_published_note_image_matches_uploaded_preview(
@@ -429,6 +448,7 @@ def wait_for_video_upload_completion(
     timeout: int = 90,
     *,
     hold_seconds: float | None = None,
+    observed_signal: str | None = None,
 ) -> str:
     """Treat the visible post-submit upload progress as the success signal.
 
@@ -443,6 +463,9 @@ def wait_for_video_upload_completion(
             hold_seconds = max(0.0, float(os.environ.get("VW_VIDEO_UPLOAD_HOLD_SECONDS", "5")))
         except (TypeError, ValueError):
             hold_seconds = 5.0
+    if observed_signal == "视频上传中":
+        time.sleep(hold_seconds)
+        return observed_signal
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
@@ -1024,7 +1047,19 @@ def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
 
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
-    if str(capabilities.get("platformName", "")).lower() == "ios":
+    platform = str(capabilities.get("platformName", "")).lower()
+    if platform == "android":
+        # The Android bottom navigation exposes stable ids in the normal home
+        # state. Try those immediately before the coordinate and broad text
+        # fallbacks; the latter can spend up to a second per candidate.
+        page_source = _safe_page_source(driver)
+        for accessibility_id in PUBLISH_ENTRY_IDS:
+            if accessibility_id in page_source and _tap_accessibility_id_now(driver, accessibility_id):
+                return True
+        if _tap_publish_entry_by_coordinate(driver, y_ratios=(0.948,)):
+            return True
+
+    if platform == "ios":
         if tap_first(
             driver,
             PUBLISH_ENTRY_CANDIDATES,
@@ -1181,14 +1216,18 @@ def _tap_android_header_close(driver: WebDriver) -> bool:
         return False
 
 
-def _tap_publish_entry_by_coordinate(driver: WebDriver) -> bool:
+def _tap_publish_entry_by_coordinate(
+    driver: WebDriver,
+    *,
+    y_ratios: tuple[float, ...] = (0.935, 0.948, 0.958, 0.968),
+) -> bool:
     try:
         rect = driver.get_window_rect()
         capabilities = getattr(driver, "capabilities", {}) or {}
         platform = str(capabilities.get("platformName", "")).lower()
         x = int(rect["width"] * 0.5)
         if platform == "android":
-            for y_ratio in (0.935, 0.948, 0.958, 0.968):
+            for y_ratio in y_ratios:
                 driver.execute_script("mobile: tap", {"x": x, "y": int(rect["height"] * y_ratio)})
                 if _wait_until(
                     lambda: _publish_entry_opened(_safe_page_source(driver)),
@@ -2010,15 +2049,22 @@ def _upload_note_media(driver: WebDriver, draft: MessageNoteDraft) -> None:
         _clear_existing_note_images(driver)
         if not _tap_note_video_entry(driver):
             raise AssertionError("Unable to find the note video upload button")
-        if not photo_picker.choose_video_from_library(
-            driver,
-            album_name=draft.album,
-            video_index=draft.video_index,
-        ):
-            raise AssertionError(
-                "Video library opened but no selectable video was found. "
-                "Seed at least one video into Photos on the device."
-            )
+        if draft.media_source == "camera":
+            if not photo_picker.choose_video_from_camera(
+                driver,
+                record_seconds=draft.camera_record_seconds,
+            ):
+                raise AssertionError("Video camera opened but recording could not be completed.")
+        else:
+            if not photo_picker.choose_video_from_library(
+                driver,
+                album_name=draft.album,
+                video_index=draft.video_index,
+            ):
+                raise AssertionError(
+                    "Video library opened but no selectable video was found. "
+                    "Seed at least one video into Photos on the device."
+                )
         return
     if draft.media_type != "image":
         raise AssertionError(f"Unsupported note media type: {draft.media_type}")
@@ -2135,6 +2181,7 @@ def _validate_published_note_video_matches_source(
     if bounds is None:
         raise AssertionError("Unable to locate the published note video for content validation")
 
+    _wait_for_published_note_video_ready(driver, timeout=timeout)
     actual_frames, frame_paths = _capture_published_note_video_frames(driver, bounds)
     try:
         result = compare_video_to_frames(
@@ -2161,6 +2208,25 @@ def _validate_published_note_video_matches_source(
     attach_file_if_present(summary_path, name="publish-note-video-validation.txt", attachment_type=allure.attachment_type.TEXT)
     if not result.is_valid:
         raise AssertionError(f"Published note video does not match the source video: {result}")
+
+
+def _wait_for_published_note_video_ready(driver: WebDriver, timeout: int = 30) -> None:
+    end_at = time.monotonic() + timeout
+    ready_polls = 0
+    while time.monotonic() < end_at:
+        page_source = _safe_page_source(driver)
+        if _published_note_video_loading_visible(page_source):
+            ready_polls = 0
+        else:
+            ready_polls += 1
+            if ready_polls >= 2:
+                return
+        time.sleep(0.3)
+    raise AssertionError("Published note video stayed in a loading state too long")
+
+
+def _published_note_video_loading_visible(page_source: str) -> bool:
+    return any(token in page_source for token in PUBLISHED_NOTE_VIDEO_LOADING_TEXTS)
 
 
 def _capture_published_note_video_frames(
@@ -2244,6 +2310,7 @@ def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str
         return False
     escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
     for xpath in [
+        f'//XCUIElementTypeStaticText[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}") or contains(@text, "{escaped_title}")]',
         f'//*[contains(@text, "{escaped_title}") or contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
         f'//*[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
     ]:
@@ -2308,6 +2375,10 @@ def _published_note_title_matches(candidate: str, title: str) -> bool:
     if not normalized_candidate or not normalized_title:
         return False
     if normalized_candidate == normalized_title:
+        return True
+    # iOS may expose repeated title text from nested SwiftUI accessibility
+    # nodes (for example, the same title three times in one StaticText).
+    if normalized_title in normalized_candidate:
         return True
     if not normalized_title.startswith(normalized_candidate):
         return False
@@ -2743,6 +2814,8 @@ def _text_input_current_value(element) -> str:
 def _tap_note_image_plus(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    if not is_ios and _tap_android_note_image_plus_from_source(driver):
+        return True
     if not is_ios and _tap_note_image_plus_by_coordinate(driver):
         return True
     for accessibility_id in [
@@ -2838,6 +2911,60 @@ def _tap_note_image_plus_by_coordinate(driver: WebDriver) -> bool:
     for x, y in points:
         try:
             driver.execute_script("mobile: tap", {"x": x, "y": y})
+        except WebDriverException:
+            continue
+        if _wait_for_note_photo_picker_opened(driver):
+            return True
+    return False
+
+
+def _tap_android_note_image_plus_from_source(driver: WebDriver) -> bool:
+    source = _safe_page_source(driver)
+    if not source:
+        return False
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return False
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for element in root.iter():
+        if element.tag not in {
+            "android.view.ViewGroup",
+            "android.widget.ImageView",
+            "android.widget.FrameLayout",
+            "android.widget.LinearLayout",
+        }:
+            continue
+        attrs = element.attrib
+        if attrs.get("visible", "true").lower() == "false":
+            continue
+        try:
+            x = int(float(attrs.get("x", "0")))
+            y = int(float(attrs.get("y", "0")))
+            width = int(float(attrs.get("width", "0")))
+            height = int(float(attrs.get("height", "0")))
+        except (TypeError, ValueError):
+            continue
+        if x > 120 or y < 110 or y > 340 or width < 70 or height < 70:
+            continue
+        ratio = width / height if height else 0
+        if not 0.65 <= ratio <= 1.5:
+            continue
+        searchable = " ".join(
+            str(attrs.get(attribute, ""))
+            for attribute in ("resource-id", "content-desc", "text", "name", "label", "value", "type")
+        ).lower()
+        if not any(token in searchable for token in ("image", "图片", "上传", "添加", "+", "＋")):
+            continue
+        candidates.append((y, x, width, height))
+
+    for y, x, width, height in sorted(set(candidates)):
+        try:
+            driver.execute_script(
+                "mobile: tap",
+                {"x": x + width // 2, "y": y + height // 4},
+            )
         except WebDriverException:
             continue
         if _wait_for_note_photo_picker_opened(driver):

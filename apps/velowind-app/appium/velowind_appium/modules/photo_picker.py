@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 from typing import Callable
@@ -28,6 +29,7 @@ ANDROID_CROPPER_VISIBLE_PATTERNS = [
     'text="确认裁剪"',
     'text="裁剪图片"',
 ]
+CAMERA_VIDEO_DURATION_PATTERN = re.compile(r"(?<!\d)(?:(\d+):(\d{2})|(\d+)\s*秒)")
 
 
 def choose_photo_from_library(
@@ -141,6 +143,22 @@ def choose_video_from_library(
     return _confirm_video_picker_selection(driver)
 
 
+def choose_video_from_camera(
+    driver: WebDriver,
+    *,
+    record_seconds: float | None = None,
+) -> bool:
+    """Choose the camera-first video source and record a short clip."""
+    dismiss_photo_permission_alerts(driver)
+    source_selected = any(
+        tap_text_if_present(driver, text, timeout=2)
+        for text in ["拍摄视频", "拍摄", "相机", "录制视频"]
+    )
+    if not source_selected:
+        return False
+    return _record_video_from_camera(driver, record_seconds=record_seconds)
+
+
 def _tap_first_ios_video_candidate(driver: WebDriver, *, video_index: int = 1) -> bool:
     """Tap a one-based iOS video thumbnail, scrolling when it is offscreen."""
     remaining_index = max(1, int(video_index))
@@ -164,6 +182,94 @@ def _tap_first_ios_video_candidate(driver: WebDriver, *, video_index: int = 1) -
             return False
         time.sleep(0.3)
     _photo_picker_debug(f"video-index-not-visible index={video_index}")
+    return False
+
+
+def _record_video_from_camera(driver: WebDriver, *, record_seconds: float | None = None) -> bool:
+    if not _wait_until(lambda: _camera_video_controls_visible(driver), timeout=5):
+        return False
+    if not _tap_camera_record_control(driver, start=True):
+        return False
+    # Start the duration clock after the native camera accepted the tap. WDA
+    # can spend a few seconds waiting for the camera animation to settle; if
+    # that time is included, the preview is displayed as 29 seconds and is
+    # incorrectly rejected as a failed recording.
+    if record_seconds is not None and not _wait_for_camera_recording_duration(
+        driver,
+        record_seconds,
+        started_at=time.monotonic(),
+    ):
+        return False
+    if not _tap_camera_record_control(driver, start=False):
+        return False
+    if not _wait_until(lambda: _camera_video_preview_visible(driver), timeout=10):
+        return False
+    actual_seconds = _camera_video_duration_seconds(_safe_page_source(driver))
+    if actual_seconds is None or actual_seconds <= 0:
+        return False
+    setattr(driver, "_camera_video_actual_seconds", actual_seconds)
+    return _confirm_camera_video_selection(driver)
+
+
+def _camera_video_controls_visible(driver: WebDriver) -> bool:
+    page_source = _safe_page_source(driver)
+    return any(
+        token in page_source
+        for token in ["拍摄", "录制", "使用视频", "完成", "相机", "Camera", "Record", "视频"]
+    )
+
+
+def _tap_camera_record_control(driver: WebDriver, *, start: bool) -> bool:
+    texts = ["拍摄", "录制", "开始录制", "Record", "Start"] if start else ["停止", "结束", "Done", "完成"]
+    for text in texts:
+        if tap_text_if_present(driver, text, timeout=1):
+            return True
+    try:
+        return _tap_by_ratio(driver, x_ratio=0.5, y_ratio=0.82)
+    except WebDriverException:
+        return False
+
+
+def _wait_for_camera_recording_duration(
+    driver: WebDriver,
+    record_seconds: float,
+    *,
+    started_at: float | None = None,
+) -> bool:
+    del driver
+    try:
+        target_seconds = max(0.0, float(record_seconds))
+    except (TypeError, ValueError):
+        return False
+    recording_started_at = time.monotonic() if started_at is None else started_at
+    deadline = recording_started_at + target_seconds
+    remaining_seconds = deadline - time.monotonic()
+    if remaining_seconds > 0:
+        time.sleep(remaining_seconds)
+    return True
+
+
+def _camera_video_preview_visible(driver: WebDriver) -> bool:
+    return "预览视频" in _safe_page_source(driver)
+
+
+def _camera_video_duration_seconds(page_source: str) -> int | None:
+    for minutes, seconds, whole_seconds in CAMERA_VIDEO_DURATION_PATTERN.findall(page_source):
+        duration_seconds = int(whole_seconds) if whole_seconds else int(minutes) * 60 + int(seconds)
+        # The native preview label floors fractional seconds at the instant
+        # the stop tap is handled, so a real 30-second recording can show as
+        # 29 seconds on the first accessibility snapshot.
+        if duration_seconds > 0:
+            return duration_seconds
+    return None
+
+
+def _confirm_camera_video_selection(driver: WebDriver) -> bool:
+    if not _camera_video_preview_visible(driver):
+        return False
+    for text in ["确认", "使用视频", "完成", "确定", "Done"]:
+        if tap_text_if_present(driver, text, timeout=1):
+            return True
     return False
 
 
