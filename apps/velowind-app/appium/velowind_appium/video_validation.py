@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 import os
 from pathlib import Path
@@ -93,6 +93,15 @@ def _element_bounds(attributes: dict[str, str]) -> VideoBounds | None:
 
 
 @dataclass(frozen=True)
+class VideoFrameComparison:
+    actual_frame_index: int
+    matched_source_frame_index: int
+    similarity: float
+    is_valid: bool
+    matched_source_frame: Image.Image = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
 class VideoComparisonResult:
     is_valid: bool
     source_duration: float
@@ -103,6 +112,15 @@ class VideoComparisonResult:
     frame_similarity: float
     sampled_frame_count: int
     reason: str
+    frame_comparisons: tuple[VideoFrameComparison, ...] = field(default=(), repr=False)
+
+    @property
+    def mismatched_actual_frame_indexes(self) -> tuple[int, ...]:
+        return tuple(
+            comparison.actual_frame_index
+            for comparison in self.frame_comparisons
+            if not comparison.is_valid
+        )
 
 
 def compare_video_frames(
@@ -126,7 +144,22 @@ def compare_video_frames(
             reason="no-video-frames",
         )
 
-    scores = [max(_frame_similarity(source_frame, actual_frame) for source_frame in source) for actual_frame in actual]
+    frame_comparisons: list[VideoFrameComparison] = []
+    scores: list[float] = []
+    for actual_index, actual_frame in enumerate(actual, start=1):
+        similarities = [_frame_similarity(source_frame, actual_frame) for source_frame in source]
+        matched_source_offset = max(range(len(similarities)), key=similarities.__getitem__)
+        similarity = similarities[matched_source_offset]
+        scores.append(similarity)
+        frame_comparisons.append(
+            VideoFrameComparison(
+                actual_frame_index=actual_index,
+                matched_source_frame_index=matched_source_offset + 1,
+                similarity=round(similarity, 6),
+                is_valid=similarity >= min_frame_similarity,
+                matched_source_frame=source[matched_source_offset],
+            )
+        )
     frame_similarity = sum(scores) / len(scores)
     is_valid = frame_similarity >= min_frame_similarity
     return VideoComparisonResult(
@@ -139,6 +172,7 @@ def compare_video_frames(
         frame_similarity=round(frame_similarity, 6),
         sampled_frame_count=len(scores),
         reason="ok" if is_valid else "frame-similarity-too-low",
+        frame_comparisons=tuple(frame_comparisons),
     )
 
 
@@ -183,6 +217,7 @@ def compare_videos_for_publish(
         frame_similarity=frame_result.frame_similarity,
         sampled_frame_count=frame_result.sampled_frame_count,
         reason=reason,
+        frame_comparisons=frame_result.frame_comparisons,
     )
 
 
@@ -215,6 +250,7 @@ def compare_video_to_frames(
         frame_similarity=frame_result.frame_similarity,
         sampled_frame_count=frame_result.sampled_frame_count,
         reason=frame_result.reason,
+        frame_comparisons=frame_result.frame_comparisons,
     )
 
 
@@ -252,6 +288,7 @@ def compare_recording_to_source(
         frame_similarity=frame_result.frame_similarity,
         sampled_frame_count=frame_result.sampled_frame_count,
         reason=frame_result.reason,
+        frame_comparisons=frame_result.frame_comparisons,
     )
 
 

@@ -15,6 +15,7 @@ class CleanupConfig:
     activity_matchers: list[str]
     session_matchers: list[str]
     comment_matchers: list[str]
+    delete_published_note_after_success: bool = False
 
 
 def load_cleanup_config() -> CleanupConfig:
@@ -28,6 +29,10 @@ def load_cleanup_config() -> CleanupConfig:
         activity_matchers=_yaml_string_list(cleanup.get("activity_matchers")),
         session_matchers=_yaml_string_list(cleanup.get("session_matchers")),
         comment_matchers=_yaml_string_list(cleanup.get("comment_matchers")),
+        delete_published_note_after_success=_yaml_bool(
+            cleanup.get("delete_published_note_after_success"),
+            default=False,
+        ),
     )
 
 
@@ -49,3 +54,11 @@ def _yaml_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _yaml_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}

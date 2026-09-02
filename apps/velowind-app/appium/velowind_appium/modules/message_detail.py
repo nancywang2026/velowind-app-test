@@ -1112,12 +1112,16 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
     if platform == "android":
-        # The Android bottom navigation exposes stable ids in the normal home
-        # state. Try those immediately before the coordinate and broad text
-        # fallbacks; the latter can spend up to a second per candidate.
+        # The Android bottom navigation exposes the publish plus button through
+        # resource-id. Prefer that stable semantic locator over coordinates.
         page_source = _safe_page_source(driver)
-        for accessibility_id in PUBLISH_ENTRY_IDS:
-            if accessibility_id in page_source and _tap_accessibility_id_now(driver, accessibility_id):
+        for resource_id in PUBLISH_ENTRY_IDS:
+            if resource_id not in page_source:
+                continue
+            if _tap_publish_trigger_and_verify(
+                driver,
+                lambda resource_id=resource_id: _tap_resource_id_now(driver, resource_id),
+            ):
                 return True
         if _tap_publish_entry_by_coordinate(driver, y_ratios=(0.948,)):
             return True
@@ -1927,6 +1931,14 @@ def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
         return False
 
 
+def _tap_resource_id_now(driver: WebDriver, resource_id: str) -> bool:
+    try:
+        driver.find_element(AppiumBy.ID, resource_id).click()
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
+
+
 def _tap_xpath_now(driver: WebDriver, xpath: str) -> bool:
     try:
         driver.find_element(AppiumBy.XPATH, xpath).click()
@@ -2250,7 +2262,11 @@ def _validate_published_note_video_matches_source(
         result = compare_video_to_frames(
             selected_source,
             actual_frames,
-            sample_count=len(actual_frames),
+            # Device screenshots are intentionally limited to four, but the
+            # source video needs a denser timeline so an arbitrary playback
+            # moment is compared with the same scene instead of the nearest
+            # one of only four unrelated source moments.
+            sample_count=_video_validation_source_sample_count(),
         )
     except Exception as error:
         raise AssertionError(f"Unable to compare the published video with its source: {error}") from error
@@ -2262,15 +2278,109 @@ def _validate_published_note_video_matches_source(
                 f"source_path={selected_source}",
                 f"sampled_frame_paths={','.join(str(path) for path in frame_paths)}",
                 f"comparison={result}",
+                *_publish_note_video_frame_summary_lines(result, frame_paths),
             ]
         ),
         encoding="utf-8",
     )
+    mismatch_artifacts = (
+        _save_publish_note_video_mismatch_artifacts(actual_frames, result)
+        if not result.is_valid
+        else {}
+    )
+    comparisons_by_index = {
+        comparison.actual_frame_index: comparison
+        for comparison in getattr(result, "frame_comparisons", ())
+    }
     for index, frame_path in enumerate(frame_paths, start=1):
-        attach_file_if_present(frame_path, name=f"publish-note-video-validation-frame-{index}.png")
+        comparison = comparisons_by_index.get(index)
+        if comparison is None:
+            attachment_name = f"publish-note-video-validation-actual-frame-{index:02d}.png"
+        else:
+            status = _publish_note_video_frame_status(result, comparison)
+            attachment_name = (
+                f"{status}-actual-frame-{index:02d}-"
+                f"similarity-{comparison.similarity:.6f}.png"
+            )
+        attach_file_if_present(
+            frame_path,
+            name=attachment_name,
+            attachment_type=allure.attachment_type.PNG,
+        )
+        for artifact_path, artifact_name in mismatch_artifacts.get(index, ()):
+            attach_file_if_present(
+                artifact_path,
+                name=artifact_name,
+                attachment_type=allure.attachment_type.PNG,
+            )
     attach_file_if_present(summary_path, name="publish-note-video-validation.txt", attachment_type=allure.attachment_type.TEXT)
     if not result.is_valid:
-        raise AssertionError(f"Published note video does not match the source video: {result}")
+        mismatch_summary = ", ".join(
+            f"frame-{comparison.actual_frame_index:02d}(similarity={comparison.similarity:.6f})"
+            for comparison in getattr(result, "frame_comparisons", ())
+            if not comparison.is_valid
+        ) or "none identified by per-frame similarity"
+        raise AssertionError(
+            "Published note video does not match the source video; "
+            f"mismatched screenshots: {mismatch_summary}; comparison={result}"
+        )
+
+
+def _publish_note_video_frame_summary_lines(result, frame_paths: list[Path]) -> list[str]:
+    paths_by_index = {index: path for index, path in enumerate(frame_paths, start=1)}
+    lines: list[str] = []
+    for comparison in getattr(result, "frame_comparisons", ()):
+        status = _publish_note_video_frame_status(result, comparison)
+        lines.append(
+            f"actual_frame_{comparison.actual_frame_index:02d}="
+            f"status={status},"
+            f"similarity={comparison.similarity:.6f},"
+            f"matched_source_frame={comparison.matched_source_frame_index:02d},"
+            f"path={paths_by_index.get(comparison.actual_frame_index, '')}"
+        )
+    return lines
+
+
+def _publish_note_video_frame_status(result, comparison) -> str:
+    if comparison.is_valid:
+        return "MATCH"
+    if result.is_valid:
+        return "LOW-SIMILARITY"
+    return "MISMATCH"
+
+
+def _save_publish_note_video_mismatch_artifacts(
+    actual_frames: list[Image.Image],
+    result,
+) -> dict[int, tuple[tuple[Path, str], ...]]:
+    artifact_dir = _publish_note_artifact_dir()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"publish-note-video-validation-{int(time.time())}"
+    artifacts: dict[int, tuple[tuple[Path, str], ...]] = {}
+    for comparison in getattr(result, "frame_comparisons", ()):
+        if comparison.is_valid:
+            continue
+        actual_offset = comparison.actual_frame_index - 1
+        if actual_offset < 0 or actual_offset >= len(actual_frames):
+            continue
+        actual_frame = actual_frames[actual_offset].convert("RGB")
+        source_frame = comparison.matched_source_frame.convert("RGB")
+        prefix = (
+            f"MISMATCH-frame-{comparison.actual_frame_index:02d}-"
+            f"similarity-{comparison.similarity:.6f}"
+        )
+        source_path = artifact_dir / f"{base_name}-{prefix}-source.png"
+        diff_path = artifact_dir / f"{base_name}-{prefix}-diff.png"
+        source_frame.save(source_path)
+        ImageChops.difference(source_frame.resize(actual_frame.size), actual_frame).save(diff_path)
+        artifacts[comparison.actual_frame_index] = (
+            (
+                source_path,
+                f"{prefix}-matched-source-frame-{comparison.matched_source_frame_index:02d}.png",
+            ),
+            (diff_path, f"{prefix}-diff.png"),
+        )
+    return artifacts
 
 
 def _wait_for_published_note_video_ready(driver: WebDriver, timeout: int = 30) -> None:
@@ -2292,6 +2402,16 @@ def _published_note_video_loading_visible(page_source: str) -> bool:
     return any(token in page_source for token in PUBLISHED_NOTE_VIDEO_LOADING_TEXTS)
 
 
+def _video_validation_source_sample_count() -> int:
+    try:
+        return max(
+            4,
+            min(120, int(os.environ.get("VW_VIDEO_VALIDATION_SOURCE_SAMPLE_COUNT", "24"))),
+        )
+    except ValueError:
+        return 24
+
+
 def _capture_published_note_video_frames(
     driver: WebDriver,
     bounds,
@@ -2304,9 +2424,9 @@ def _capture_published_note_video_frames(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     if sample_count is None:
         try:
-            sample_count = max(2, min(12, int(os.environ.get("VW_VIDEO_VALIDATION_SAMPLE_COUNT", "8"))))
+            sample_count = max(2, min(12, int(os.environ.get("VW_VIDEO_VALIDATION_SAMPLE_COUNT", "4"))))
         except ValueError:
-            sample_count = 8
+            sample_count = 4
     if seconds is None:
         try:
             seconds = max(1.0, min(20.0, float(os.environ.get("VW_VIDEO_VALIDATION_RECORD_SECONDS", "8"))))
@@ -2314,6 +2434,13 @@ def _capture_published_note_video_frames(
             seconds = 8.0
     sample_count = max(1, int(sample_count))
     interval = float(seconds) / max(1, sample_count - 1)
+    try:
+        frame_ready_attempts = max(
+            1,
+            min(30, int(os.environ.get("VW_VIDEO_VALIDATION_FRAME_READY_ATTEMPTS", "10"))),
+        )
+    except ValueError:
+        frame_ready_attempts = 10
     frames: list[Image.Image] = []
     frame_paths: list[Path] = []
     try:
@@ -2322,11 +2449,12 @@ def _capture_published_note_video_frames(
         for index in range(sample_count):
             if index:
                 time.sleep(interval)
-            screenshot_png = driver.get_screenshot_as_png()
-            frame = crop_image_from_screenshot(
-                screenshot_png,
+            frame = _capture_loaded_published_note_video_frame(
+                driver,
                 bounds,
                 window_size=window_size,
+                frame_index=index + 1,
+                max_attempts=frame_ready_attempts,
             )
             frame_path = artifact_dir / f"publish-note-video-validation-{int(time.time())}-{index + 1}.png"
             frame.save(frame_path)
@@ -2337,6 +2465,43 @@ def _capture_published_note_video_frames(
     if not frames:
         raise AssertionError("Appium returned no screenshots for the published video")
     return frames, frame_paths
+
+
+def _capture_loaded_published_note_video_frame(
+    driver: WebDriver,
+    bounds,
+    *,
+    window_size: tuple[int, int],
+    frame_index: int,
+    max_attempts: int,
+) -> Image.Image:
+    for _attempt in range(max_attempts):
+        if _published_note_video_loading_visible(_safe_page_source(driver)):
+            time.sleep(0.3)
+            continue
+        screenshot_png = driver.get_screenshot_as_png()
+        frame = crop_image_from_screenshot(
+            screenshot_png,
+            bounds,
+            window_size=window_size,
+        )
+        loading_after_capture = _published_note_video_loading_visible(_safe_page_source(driver))
+        if not loading_after_capture and _published_note_video_frame_has_rendered_content(frame):
+            return frame
+        time.sleep(0.3)
+    raise AssertionError(
+        f"Published note video screenshot {frame_index} was still loading or blank "
+        f"after {max_attempts} attempts"
+    )
+
+
+def _published_note_video_frame_has_rendered_content(frame: Image.Image) -> bool:
+    grayscale = frame.convert("L")
+    pixel_count = grayscale.width * grayscale.height
+    if pixel_count <= 0:
+        return False
+    near_black_pixel_count = sum(grayscale.histogram()[:12])
+    return near_black_pixel_count / pixel_count < 0.98
 
 
 def _publish_note_video_validation_summary_path() -> Path:

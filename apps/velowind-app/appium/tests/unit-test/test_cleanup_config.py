@@ -12,6 +12,7 @@ def test_load_cleanup_config_reads_matcher_arrays(tmp_path, monkeypatch):
     config_file.write_text(
         """
 cleanup:
+  delete_published_note_after_success: true
   note_matchers:
     - "测试 -"
     - "自动化回归"
@@ -33,6 +34,7 @@ cleanup:
         activity_matchers=["测试 -"],
         session_matchers=["自动化场次"],
         comment_matchers=["自动化评论"],
+        delete_published_note_after_success=True,
     )
 
 
@@ -45,6 +47,7 @@ def test_load_cleanup_config_uses_safe_defaults(monkeypatch):
     assert config.activity_matchers == []
     assert config.session_matchers == []
     assert config.comment_matchers == []
+    assert config.delete_published_note_after_success is False
 
 
 def test_load_cleanup_config_ignores_blank_and_non_string_values(tmp_path, monkeypatch):
@@ -71,3 +74,13 @@ def test_matches_test_data_matches_any_configured_substring():
     assert matches_test_data("普通用户笔记", ["测试 -", "自动化"]) is False
     assert matches_test_data("", ["测试 -"]) is False
 
+
+def test_load_cleanup_config_accepts_string_boolean(tmp_path, monkeypatch):
+    config_file = tmp_path / "cleanup.yaml"
+    config_file.write_text(
+        "cleanup:\n  delete_published_note_after_success: 'yes'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VW_APPIUM_CLEANUP_CONFIG_FILE", str(config_file))
+
+    assert load_cleanup_config().delete_published_note_after_success is True

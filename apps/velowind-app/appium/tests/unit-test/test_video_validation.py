@@ -63,6 +63,22 @@ def test_compare_video_frames_rejects_different_video_content():
     assert result.is_valid is False
     assert result.frame_similarity < 0.9
     assert result.reason == "frame-similarity-too-low"
+    assert result.mismatched_actual_frame_indexes == (1, 2)
+    assert [comparison.actual_frame_index for comparison in result.frame_comparisons] == [1, 2]
+    assert [comparison.matched_source_frame_index for comparison in result.frame_comparisons] == [1, 1]
+    assert all(comparison.is_valid is False for comparison in result.frame_comparisons)
+
+
+def test_compare_video_frames_identifies_only_the_mismatched_screenshot():
+    source = [Image.new("RGB", (4, 4), "red"), Image.new("RGB", (4, 4), "blue")]
+    actual = [Image.new("RGB", (8, 8), "red"), Image.new("RGB", (8, 8), "black")]
+
+    result = compare_video_frames(source, actual)
+
+    assert result.mismatched_actual_frame_indexes == (2,)
+    assert result.frame_comparisons[0].is_valid is True
+    assert result.frame_comparisons[1].is_valid is False
+    assert result.frame_comparisons[1].matched_source_frame.size == (4, 4)
 
 
 def test_compare_videos_for_publish_uses_video_specific_comparison(monkeypatch, tmp_path: Path):

@@ -54,6 +54,11 @@ SUCCESS_IDS = [
     "publish-success-page",
     "activity-publish-success",
 ]
+RETRYABLE_SUBMIT_FAILURE_TEXTS = [
+    "本次提交未完成",
+    "张图片已完成",
+    "Request failed with status code 502",
+]
 TITLE_LABEL_KEYWORDS = ["活动名称", "标题", "名称"]
 DESCRIPTION_LABEL_KEYWORDS = ["活动描述", "活动详情", "详情", "描述", "介绍"]
 SELECT_FIELD_KEYWORDS = {
@@ -256,6 +261,8 @@ def submit_activity_for_review(driver: WebDriver, expected_title: str | None = N
 
     end_at = time.monotonic() + timeout
     last_source = ""
+    retry_failure = ""
+    retry_deadline: float | None = None
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
         last_source = page_source
@@ -267,10 +274,24 @@ def submit_activity_for_review(driver: WebDriver, expected_title: str | None = N
         if success_signal:
             return success_signal
 
+        current_failure = activity_publish_retryable_failure(page_source)
+        if current_failure and not retry_failure:
+            retry_failure = current_failure
+            if not _tap_submit(driver):
+                raise AssertionError(f"Activity publish failed and retry could not be started: {current_failure}")
+            retry_deadline = min(end_at, time.monotonic() + 30)
+            time.sleep(1)
+            continue
+        if current_failure and retry_deadline is not None and time.monotonic() >= retry_deadline:
+            raise AssertionError(f"Activity publish failed after one retry: {current_failure}")
+
         if tap_text_if_present(driver, "确定", timeout=1) or tap_text_if_present(driver, "知道了", timeout=1):
             time.sleep(0.5)
         time.sleep(0.2)
 
+    if retry_failure:
+        final_failure = activity_publish_retryable_failure(last_source) or retry_failure
+        raise AssertionError(f"Activity publish failed after one retry: {final_failure}")
     raise AssertionError(f"Activity publish did not expose a success signal after submit: {last_source[:500]}")
 
 
@@ -291,6 +312,13 @@ def activity_publish_success_signal(page_source: str, expected_title: str | None
         return "我的活动列表"
     if "审核" in page_source and "成功" in page_source:
         return "审核成功提示"
+    return None
+
+
+def activity_publish_retryable_failure(page_source: str) -> str | None:
+    for token in RETRYABLE_SUBMIT_FAILURE_TEXTS:
+        if token in page_source:
+            return token
     return None
 
 
@@ -942,11 +970,40 @@ def _activity_region_selected(page_source: str, province: str, city: str) -> boo
     if not page_source:
         return False
     normalized_source = html.unescape(page_source)
-    if "选择地区" in normalized_source or "搜索省份或城市" in normalized_source:
+    if _region_drawer_is_visible_from_source(normalized_source):
         return False
-    return any(text in normalized_source for text in _province_option_texts(province)) and any(
-        text in normalized_source for text in _city_option_texts(city)
+    stripped = normalized_source.lstrip()
+    if not stripped.startswith("<"):
+        return any(text in normalized_source for text in _province_option_texts(province)) and any(
+            text in normalized_source for text in _city_option_texts(city)
+        )
+
+    try:
+        root = ET.fromstring(normalized_source)
+    except ET.ParseError:
+        return False
+
+    return _region_value_selected(root, _province_option_texts(province)) and _region_value_selected(
+        root,
+        _city_option_texts(city),
     )
+
+
+def _region_value_selected(root: ET.Element, candidates: list[str]) -> bool:
+    for element in root.iter():
+        exact_values = _element_attribute_texts(element)
+        if not any(candidate in exact_values for candidate in candidates):
+            continue
+        if _element_visible_in_page_source(element):
+            return True
+        tag_name = element.tag.rsplit("}", 1)[-1]
+        if tag_name in {"XCUIElementTypeTextField", "XCUIElementTypeTextView", "android.widget.EditText"}:
+            current_value = html.unescape(
+                element.attrib.get("value") or element.attrib.get("text") or ""
+            ).strip()
+            if current_value in candidates:
+                return True
+    return False
 
 
 def _tap_region_option(driver: WebDriver, texts: list[str], timeout: int = 2) -> bool:
@@ -1099,11 +1156,47 @@ def _required_field_markers_resolved(driver: WebDriver) -> bool:
 
 
 def _find_unresolved_placeholders(page_source: str) -> list[str]:
+    stripped = page_source.lstrip()
+    if stripped.startswith("<"):
+        try:
+            root = ET.fromstring(page_source)
+        except ET.ParseError:
+            pass
+        else:
+            placeholders: list[str] = []
+            seen: set[str] = set()
+            for element in root.iter():
+                if not _element_visible_in_page_source(element) or len(element) > 0:
+                    continue
+                for text in _element_attribute_texts(element):
+                    if text in seen or not PLACEHOLDER_PATTERN.fullmatch(text):
+                        continue
+                    seen.add(text)
+                    placeholders.append(text)
+            return placeholders
     return [
         text
         for text in _extract_strings(page_source)
-        if PLACEHOLDER_PATTERN.match(text)
+        if PLACEHOLDER_PATTERN.fullmatch(text)
     ]
+
+
+def _element_visible_in_page_source(element: ET.Element) -> bool:
+    visibility = element.attrib.get("visible")
+    displayed = element.attrib.get("displayed")
+    return visibility != "false" and displayed != "false"
+
+
+def _element_attribute_texts(element: ET.Element) -> list[str]:
+    texts: list[str] = []
+    seen: set[str] = set()
+    for attribute in ("text", "name", "label", "value", "hint", "placeholderValue"):
+        text = html.unescape(element.attrib.get(attribute, "")).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    return texts
 
 
 def _fill_input_near_label(

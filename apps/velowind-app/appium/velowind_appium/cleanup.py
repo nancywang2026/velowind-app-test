@@ -44,6 +44,22 @@ def cleanup_notes(driver: WebDriver, config: CleanupConfig, app_config, *, dry_r
         safe_back(driver)
 
 
+def cleanup_published_note(driver: WebDriver, title: str, app_config) -> CleanupReport:
+    ensure_logged_in_on_home(driver, app_config)
+    _open_me_entry(driver, "我的笔记")
+    try:
+        return cleanup_matching_visible_items(
+            driver,
+            item_type="note",
+            matchers=[title],
+            action_texts=NOTE_ACTION_TEXTS,
+            dry_run=False,
+            exact_match=True,
+        )
+    finally:
+        safe_back(driver)
+
+
 def cleanup_activities(driver: WebDriver, config: CleanupConfig, app_config, *, dry_run: bool = False) -> CleanupReport:
     ensure_logged_in_on_home(driver, app_config)
     open_my_activity_publish_list(driver)
@@ -86,6 +102,7 @@ def cleanup_matching_visible_items(
     dry_run: bool,
     required_texts: Optional[list[str]] = None,
     required_page_texts: Optional[list[str]] = None,
+    exact_match: bool = False,
     max_rounds: int = 20,
 ) -> CleanupReport:
     deleted: list[str] = []
@@ -97,7 +114,9 @@ def cleanup_matching_visible_items(
         page_has_required_texts = not required_page_texts or all(text in page_source for text in required_page_texts)
         candidates = [
             text for text in find_matching_visible_texts(page_source, matchers, required_texts=required_texts)
-            if text not in seen and page_has_required_texts
+            if text not in seen
+            and page_has_required_texts
+            and (not exact_match or text in matchers)
         ]
         if candidates:
             for candidate in candidates:

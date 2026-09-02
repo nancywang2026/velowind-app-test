@@ -2,6 +2,7 @@ from velowind_appium.cleanup import (
     CleanupReport,
     cleanup_activities,
     cleanup_notes,
+    cleanup_published_note,
     cleanup_sessions,
     cleanup_matching_visible_items,
     confirm_destructive_action,
@@ -222,6 +223,58 @@ def test_cleanup_notes_leaves_my_notes_page_after_dry_run(monkeypatch):
 
     assert report == CleanupReport("note", [], ["测试 - 长白山"])
     assert events == ["ensure-home", ("open", "我的笔记"), ("cleanup", True), "back"]
+
+
+def test_cleanup_published_note_uses_exact_title_and_leaves_my_notes_page(monkeypatch):
+    events = []
+    monkeypatch.setattr("velowind_appium.cleanup.ensure_logged_in_on_home", lambda *args: events.append("ensure-home"))
+    monkeypatch.setattr("velowind_appium.cleanup._open_me_entry", lambda driver, text: events.append(("open", text)))
+    monkeypatch.setattr(
+        "velowind_appium.cleanup.cleanup_matching_visible_items",
+        lambda *args, **kwargs: events.append(
+            ("cleanup", kwargs["matchers"], kwargs["exact_match"])
+        )
+        or CleanupReport("note", ["测试 - 长白山"], []),
+    )
+    monkeypatch.setattr("velowind_appium.cleanup.safe_back", lambda driver: events.append("back"))
+
+    report = cleanup_published_note(object(), "测试 - 长白山", object())
+
+    assert report == CleanupReport("note", ["测试 - 长白山"], [])
+    assert events == [
+        "ensure-home",
+        ("open", "我的笔记"),
+        ("cleanup", ["测试 - 长白山"], True),
+        "back",
+    ]
+
+
+def test_cleanup_matching_visible_items_exact_match_skips_similar_title(monkeypatch):
+    page_source = """
+    <App>
+      <Text text="测试 - 长白山旧笔记" />
+      <Text text="测试 - 长白山" />
+    </App>
+    """
+    events = []
+    monkeypatch.setattr("velowind_appium.cleanup._safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._delete_candidate",
+        lambda driver, candidate, action_texts: events.append(candidate) or True,
+    )
+    monkeypatch.setattr("velowind_appium.cleanup._scroll_page", lambda driver: False)
+
+    report = cleanup_matching_visible_items(
+        object(),
+        item_type="note",
+        matchers=["测试 - 长白山"],
+        action_texts=["删除"],
+        dry_run=False,
+        exact_match=True,
+    )
+
+    assert report.deleted == ["测试 - 长白山"]
+    assert events == ["测试 - 长白山"]
 
 
 def test_cleanup_activities_leaves_my_activity_page_after_dry_run(monkeypatch):

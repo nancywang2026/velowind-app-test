@@ -160,6 +160,27 @@ def test_activity_publish_success_signal_accepts_my_activity_page_with_expected_
     assert activity_publish_success_signal(page_source, expected_title="张家界大环线2天1晚") == "我的活动列表"
 
 
+def test_submit_activity_for_review_retries_explicit_upload_failure_once(monkeypatch):
+    pages = iter(
+        [
+            "发布活动 Request failed with status code 502 本次提交未完成 0/1 张图片已完成",
+            "发布活动 正在重新提交",
+            "提交成功 审核中",
+        ]
+    )
+    submit_taps = []
+    monotonic_values = iter([0, 1, 2, 3, 4, 5, 6, 7])
+
+    monkeypatch.setattr(activity, "_tap_submit", lambda driver: submit_taps.append("submit") or True)
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(pages))
+    monkeypatch.setattr(activity, "tap_text_if_present", lambda driver, text, timeout=1: False)
+    monkeypatch.setattr(activity.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(activity.time, "sleep", lambda seconds: None)
+
+    assert activity.submit_activity_for_review(object(), timeout=30) == "提交成功"
+    assert submit_taps == ["submit", "submit"]
+
+
 def test_advanced_field_visible_ignores_background_activity_feed_text():
     page_source = """
     <AppiumAUT>
@@ -941,6 +962,60 @@ def test_activity_region_selected_rejects_open_search_drawer():
     page_source = "选择地区 搜索省份或城市 搜索结果 张家界 湖南省 · 张家界市"
 
     assert activity._activity_region_selected(page_source, "湖南", "张家界市") is False
+
+
+def test_activity_region_selected_ignores_matching_background_feed_text():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther visible="false" name="张家界大环线 湖南省·张家界市" />
+      <XCUIElementTypeStaticText visible="true" name="所属省份" />
+      <XCUIElementTypeStaticText visible="true" name="选择所属省份" />
+      <XCUIElementTypeStaticText visible="true" name="城市名称" />
+      <XCUIElementTypeTextField visible="true" value="例如：杭州" />
+    </AppiumAUT>
+    """
+
+    assert activity._activity_region_selected(page_source, "湖南", "张家界市") is False
+
+
+def test_activity_region_selected_accepts_visible_form_values():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="所属省份" />
+      <XCUIElementTypeStaticText visible="true" name="湖南省" />
+      <XCUIElementTypeStaticText visible="true" name="城市名称" />
+      <XCUIElementTypeStaticText visible="true" name="张家界市" />
+    </AppiumAUT>
+    """
+
+    assert activity._activity_region_selected(page_source, "湖南", "张家界市") is True
+
+
+def test_activity_region_selected_accepts_ios_city_field_reported_invisible_by_wda():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeStaticText visible="true" name="所属省份" />
+      <XCUIElementTypeStaticText visible="true" name="湖南省" />
+      <XCUIElementTypeStaticText visible="true" name="城市名称" />
+      <XCUIElementTypeTextField visible="false" value="张家界" placeholderValue="例如：杭州" />
+    </AppiumAUT>
+    """
+
+    assert activity._activity_region_selected(page_source, "湖南", "张家界市") is True
+
+
+def test_find_unresolved_placeholders_ignores_invisible_and_aggregate_ios_text():
+    page_source = """
+    <AppiumAUT>
+      <XCUIElementTypeOther visible="true" name="选择地区 搜索省份或城市 热门城市">
+        <XCUIElementTypeStaticText visible="true" name="选择地区" />
+        <XCUIElementTypeTextField visible="true" value="搜索省份或城市" />
+      </XCUIElementTypeOther>
+      <XCUIElementTypeStaticText visible="false" name="选择所属省份" />
+    </AppiumAUT>
+    """
+
+    assert activity._find_unresolved_placeholders(page_source) == ["选择地区"]
 
 
 def test_select_activity_region_prefers_city_search_result(monkeypatch):

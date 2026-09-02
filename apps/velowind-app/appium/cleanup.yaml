@@ -1,4 +1,6 @@
 cleanup:
+  delete_published_note_after_success: true
+
   note_matchers:
     - "测试 -"
     - "自动化回归"

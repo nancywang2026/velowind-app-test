@@ -5,6 +5,7 @@ from io import BytesIO
 import pytest
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 from PIL import Image
+from velowind_appium.video_validation import VideoComparisonResult, VideoFrameComparison
 
 from velowind_appium.modules.message_detail import (
     MessageNoteDraft,
@@ -437,6 +438,40 @@ def test_android_publish_entry_coordinate_targets_bottom_center_plus_button(monk
     assert taps == [("mobile: tap", {"x": 720, "y": 2393})]
 
 
+def test_android_publish_entry_prefers_resource_id_over_coordinate(monkeypatch):
+    events = []
+    page = {"source": '<android.view.ViewGroup resource-id="bottom-nav-publish" />'}
+
+    class FakeElement:
+        @staticmethod
+        def click():
+            events.append("click-resource-id")
+            page["source"] = "选择发布类型 发布笔记"
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def find_element(by, value):
+            events.append((by, value))
+            if by == message_detail.AppiumBy.ID and value == "bottom-nav-publish":
+                return FakeElement()
+            raise message_detail.NoSuchElementException()
+
+        @staticmethod
+        def execute_script(*_args, **_kwargs):
+            raise AssertionError("coordinate fallback must not run when the resource id is available")
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda _driver: page["source"])
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: condition())
+
+    assert message_detail._tap_publish_entry_if_present(FakeDriver()) is True
+    assert events == [
+        (message_detail.AppiumBy.ID, "bottom-nav-publish"),
+        "click-resource-id",
+    ]
+
+
 def test_capture_published_note_video_frames_uses_screenshots_without_appium_recording(monkeypatch):
     screenshot = BytesIO()
     Image.new("RGB", (402, 874), "red").save(screenshot, format="PNG")
@@ -470,6 +505,92 @@ def test_capture_published_note_video_frames_uses_screenshots_without_appium_rec
     assert not any(isinstance(call, tuple) and call[0] == "mobile: tap" for call in calls)
 
 
+def test_capture_published_note_video_frames_defaults_to_four_samples(monkeypatch, tmp_path):
+    screenshot = BytesIO()
+    Image.new("RGB", (100, 100), "red").save(screenshot, format="PNG")
+    calls = []
+
+    class FakeDriver:
+        @staticmethod
+        def get_window_size():
+            return {"width": 100, "height": 100}
+
+        @staticmethod
+        def get_screenshot_as_png():
+            calls.append("screenshot")
+            return screenshot.getvalue()
+
+    monkeypatch.delenv("VW_VIDEO_VALIDATION_SAMPLE_COUNT", raising=False)
+    monkeypatch.setattr(message_detail, "_publish_note_artifact_dir", lambda: tmp_path)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda _seconds: None)
+
+    frames, paths = message_detail._capture_published_note_video_frames(
+        FakeDriver(),
+        type("Bounds", (), {"x": 0, "y": 0, "width": 100, "height": 100})(),
+        seconds=0,
+    )
+
+    assert len(frames) == 4
+    assert len(paths) == 4
+    assert calls == ["screenshot"] * 4
+
+
+def test_capture_published_note_video_frames_retries_until_frame_is_loaded(monkeypatch, tmp_path):
+    screenshots = []
+    for color in ["black", "red"]:
+        screenshot = BytesIO()
+        Image.new("RGB", (100, 100), color).save(screenshot, format="PNG")
+        screenshots.append(screenshot.getvalue())
+    calls = []
+
+    class FakeDriver:
+        page_source = '<AppiumAUT><XCUIElementTypeOther name="post-detail-video-surface" /></AppiumAUT>'
+
+        @staticmethod
+        def get_window_size():
+            return {"width": 100, "height": 100}
+
+        @staticmethod
+        def get_screenshot_as_png():
+            calls.append("screenshot")
+            return screenshots.pop(0)
+
+    monkeypatch.setattr(message_detail, "_publish_note_artifact_dir", lambda: tmp_path)
+    monkeypatch.setattr(message_detail.time, "sleep", lambda _seconds: None)
+
+    frames, paths = message_detail._capture_published_note_video_frames(
+        FakeDriver(),
+        type("Bounds", (), {"x": 0, "y": 0, "width": 100, "height": 100})(),
+        sample_count=1,
+        seconds=0,
+    )
+
+    assert calls == ["screenshot", "screenshot"]
+    assert len(frames) == 1
+    assert frames[0].getpixel((50, 50)) == (255, 0, 0)
+    assert len(paths) == 1
+
+
+def test_capture_published_note_video_frame_fails_when_loading_never_clears(monkeypatch):
+    class FakeDriver:
+        page_source = '<XCUIElementTypeOther name="post-detail-video-loading" label="正在缓冲视频..." />'
+
+        @staticmethod
+        def get_screenshot_as_png():
+            raise AssertionError("a screenshot must not be accepted while the loading indicator is visible")
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(AssertionError, match="screenshot 3 was still loading or blank after 2 attempts"):
+        message_detail._capture_loaded_published_note_video_frame(
+            FakeDriver(),
+            object(),
+            window_size=(100, 100),
+            frame_index=3,
+            max_attempts=2,
+        )
+
+
 def test_validate_published_note_video_waits_for_loading_to_clear_before_sampling(monkeypatch, tmp_path):
     source_video = tmp_path / "source.mp4"
     source_video.write_bytes(b"video")
@@ -501,17 +622,133 @@ def test_validate_published_note_video_waits_for_loading_to_clear_before_samplin
 
     def fake_capture(_driver, _bounds):
         assert not current["loading"], "video frames should be sampled after buffering clears"
-        return [Image.new("RGB", (10, 10), "red")], [frame_path]
+        return [Image.new("RGB", (10, 10), "red")] * 4, [frame_path] * 4
+
+    comparison_calls = []
+
+    def fake_compare(*args, **kwargs):
+        comparison_calls.append((args, kwargs))
+        return type("Result", (), {"is_valid": True})()
 
     monkeypatch.setattr(message_detail, "message_detail_is_visible", lambda _driver: True)
     monkeypatch.setattr(message_detail, "_safe_page_source", fake_page_source)
     monkeypatch.setattr(message_detail, "_capture_published_note_video_frames", fake_capture)
-    monkeypatch.setattr(message_detail, "compare_video_to_frames", lambda *args, **kwargs: type("Result", (), {"is_valid": True})())
+    monkeypatch.setattr(message_detail, "compare_video_to_frames", fake_compare)
     monkeypatch.setattr(message_detail, "_publish_note_video_validation_summary_path", lambda: tmp_path / "summary.txt")
     monkeypatch.setattr(message_detail, "attach_file_if_present", lambda *args, **kwargs: None)
     monkeypatch.setattr(message_detail.time, "sleep", lambda _seconds: None)
 
     message_detail._validate_published_note_video_matches_source(object(), source_path=source_video, timeout=2)
+
+    assert len(comparison_calls) == 1
+    assert comparison_calls[0][1]["sample_count"] == 24
+
+
+def test_video_validation_source_sampling_is_independent_from_device_screenshot_count(monkeypatch):
+    monkeypatch.setenv("VW_VIDEO_VALIDATION_SAMPLE_COUNT", "4")
+    monkeypatch.setenv("VW_VIDEO_VALIDATION_SOURCE_SAMPLE_COUNT", "32")
+
+    assert message_detail._video_validation_source_sample_count() == 32
+
+
+def test_passing_video_does_not_label_a_low_similarity_frame_as_mismatch():
+    result = type("Result", (), {"is_valid": True})()
+    comparison = type("FrameComparison", (), {"is_valid": False})()
+
+    assert message_detail._publish_note_video_frame_status(result, comparison) == "LOW-SIMILARITY"
+
+
+def test_video_mismatch_artifacts_identify_the_actual_frame_and_matching_source(monkeypatch, tmp_path):
+    actual_frames = [Image.new("RGB", (10, 10), "red"), Image.new("RGB", (10, 10), "black")]
+    source_frame = Image.new("RGB", (8, 8), "blue")
+    comparison = type(
+        "FrameComparison",
+        (),
+        {
+            "actual_frame_index": 2,
+            "matched_source_frame_index": 4,
+            "similarity": 0.123456,
+            "is_valid": False,
+            "matched_source_frame": source_frame,
+        },
+    )()
+    result = type("Result", (), {"frame_comparisons": (comparison,)})()
+
+    monkeypatch.setattr(message_detail, "_publish_note_artifact_dir", lambda: tmp_path)
+    monkeypatch.setattr(message_detail.time, "time", lambda: 123)
+
+    artifacts = message_detail._save_publish_note_video_mismatch_artifacts(actual_frames, result)
+
+    assert list(artifacts) == [2]
+    assert [name for _, name in artifacts[2]] == [
+        "MISMATCH-frame-02-similarity-0.123456-matched-source-frame-04.png",
+        "MISMATCH-frame-02-similarity-0.123456-diff.png",
+    ]
+    assert all(path.is_file() for path, _ in artifacts[2])
+
+
+def test_video_validation_failure_labels_mismatched_screenshot_in_allure(monkeypatch, tmp_path):
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"video")
+    frame_paths = [tmp_path / "actual-1.png", tmp_path / "actual-2.png"]
+    actual_frames = [Image.new("RGB", (10, 10), "red"), Image.new("RGB", (10, 10), "black")]
+    for frame, frame_path in zip(actual_frames, frame_paths):
+        frame.save(frame_path)
+    frame_comparisons = (
+        VideoFrameComparison(1, 1, 1.0, True, Image.new("RGB", (8, 8), "red")),
+        VideoFrameComparison(2, 4, 0.123456, False, Image.new("RGB", (8, 8), "blue")),
+    )
+    result = VideoComparisonResult(
+        is_valid=False,
+        source_duration=2.0,
+        actual_duration=2.0,
+        duration_delta=0.0,
+        source_size=(8, 8),
+        actual_size=(10, 10),
+        frame_similarity=0.561728,
+        sampled_frame_count=2,
+        reason="frame-similarity-too-low",
+        frame_comparisons=frame_comparisons,
+    )
+    attached = []
+
+    monkeypatch.setattr(message_detail, "message_detail_is_visible", lambda _driver: True)
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda _driver: "detail")
+    monkeypatch.setattr(message_detail, "find_note_detail_video_bounds", lambda _source: object())
+    monkeypatch.setattr(message_detail, "_wait_for_published_note_video_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        message_detail,
+        "_capture_published_note_video_frames",
+        lambda *_args, **_kwargs: (actual_frames, frame_paths),
+    )
+    monkeypatch.setattr(message_detail, "compare_video_to_frames", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(message_detail, "_publish_note_artifact_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        message_detail,
+        "_publish_note_video_validation_summary_path",
+        lambda: tmp_path / "summary.txt",
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "attach_file_if_present",
+        lambda path, *, name=None, attachment_type=None: attached.append(name),
+    )
+    monkeypatch.setattr(message_detail.time, "time", lambda: 123)
+
+    with pytest.raises(AssertionError, match=r"mismatched screenshots: frame-02\(similarity=0\.123456\)"):
+        message_detail._validate_published_note_video_matches_source(
+            object(),
+            source_path=source_video,
+            timeout=1,
+        )
+
+    assert attached == [
+        "MATCH-actual-frame-01-similarity-1.000000.png",
+        "MISMATCH-actual-frame-02-similarity-0.123456.png",
+        "MISMATCH-frame-02-similarity-0.123456-matched-source-frame-04.png",
+        "MISMATCH-frame-02-similarity-0.123456-diff.png",
+        "publish-note-video-validation.txt",
+    ]
 
 
 def test_android_publish_entry_coordinate_targets_pixel_10_plus_button(monkeypatch):
