@@ -62,3 +62,26 @@ def test_run_publish_note_case_keeps_note_when_cleanup_is_disabled(monkeypatch):
         "prepare-home-session",
         "publish-note-for-review-publish-note-changbaishan",
     ]
+
+
+def test_cleanup_does_not_override_success_when_pending_note_is_not_deletable(monkeypatch):
+    attachments = []
+    monkeypatch.setattr(
+        shared_publish_note,
+        "cleanup_published_note",
+        lambda *args: CleanupReport("note", [], []),
+    )
+    monkeypatch.setattr(
+        shared_publish_note,
+        "attach_text",
+        lambda name, value: attachments.append((name, value)),
+    )
+
+    shared_publish_note._cleanup_published_note_after_success(object(), object(), "测试 - 长白山")
+
+    assert attachments == [
+        (
+            "message-note-cleanup-result",
+            "Published note is not visible in the deletable My Notes list yet; title='测试 - 长白山'",
+        )
+    ]

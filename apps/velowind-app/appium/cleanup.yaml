@@ -1,5 +1,8 @@
 cleanup:
-  delete_published_note_after_success: true
+  # Submitted notes stay pending review and are not immediately available in
+  # the deletable My Notes list. Run the dedicated cleanup command after they
+  # become visible instead of adding a guaranteed no-op to every publish case.
+  delete_published_note_after_success: false
 
   note_matchers:
     - "测试 -"

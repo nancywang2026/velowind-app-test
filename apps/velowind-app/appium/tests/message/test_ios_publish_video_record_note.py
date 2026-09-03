@@ -4,6 +4,7 @@ from tests.shared_publish_note import publish_record_video_note_use_case_ids, ru
 
 
 @pytest.mark.full
+@pytest.mark.skip_home_session
 @pytest.mark.parametrize("use_case_id", publish_record_video_note_use_case_ids())
 def test_user_can_publish_video_record_note_for_review(driver, ios_config, step, use_case_id):
     run_publish_note_case(

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import html
+import json
 import re
 import time
 from typing import Optional
@@ -48,13 +49,11 @@ def cleanup_published_note(driver: WebDriver, title: str, app_config) -> Cleanup
     ensure_logged_in_on_home(driver, app_config)
     _open_me_entry(driver, "我的笔记")
     try:
-        return cleanup_matching_visible_items(
+        return cleanup_exact_visible_item(
             driver,
             item_type="note",
-            matchers=[title],
+            title=title,
             action_texts=NOTE_ACTION_TEXTS,
-            dry_run=False,
-            exact_match=True,
         )
     finally:
         safe_back(driver)
@@ -132,6 +131,8 @@ def cleanup_matching_visible_items(
                 break
             if not dry_run:
                 continue
+        if _cleanup_page_reached_end(page_source):
+            break
         if not _scroll_page(driver):
             break
         next_page_source = _safe_page_source(driver)
@@ -139,6 +140,53 @@ def cleanup_matching_visible_items(
             break
 
     return CleanupReport(item_type=item_type, deleted=deleted, skipped=skipped)
+
+
+def cleanup_exact_visible_item(
+    driver: WebDriver,
+    *,
+    item_type: str,
+    title: str,
+    action_texts: list[str],
+) -> CleanupReport:
+    """Delete a just-created item only when its exact title is visible at the list top."""
+    if not _tap_exact_visible_title(driver, title):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[])
+    time.sleep(0.5)
+    if not tap_first_available_text(driver, ["更多", "...", "…"]):
+        _tap_ios_top_right_more(driver)
+    if not tap_first_available_text(driver, action_texts):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    if not confirm_destructive_action(driver):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    return CleanupReport(item_type=item_type, deleted=[title], skipped=[])
+
+
+def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    platform = str(capabilities.get("platformName", "")).lower()
+    if platform == "android":
+        quoted = json.dumps(title, ensure_ascii=False)
+        locator = (AppiumBy.ANDROID_UIAUTOMATOR, f"new UiSelector().text({quoted})")
+    else:
+        escaped = title.replace("\\", "\\\\").replace('"', '\\"')
+        locator = (
+            AppiumBy.IOS_PREDICATE,
+            f'name == "{escaped}" OR label == "{escaped}" OR value == "{escaped}"',
+        )
+    try:
+        elements = driver.find_elements(*locator)
+    except (AttributeError, NoSuchElementException, WebDriverException):
+        return False
+    for element in elements:
+        if not _element_is_visible(element):
+            continue
+        return _tap_element_center(driver, element)
+    return False
+
+
+def _cleanup_page_reached_end(page_source: str) -> bool:
+    return any(marker in page_source for marker in ["已经到底了", "没有更多了", "暂无更多"])
 
 
 def find_matching_visible_texts(

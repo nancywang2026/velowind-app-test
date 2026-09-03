@@ -1567,6 +1567,126 @@ def test_ensure_logged_in_for_publish_entry_returns_immediately_when_publish_ent
     assert events == []
 
 
+def test_publish_entry_ready_prefers_ios_resource_id_without_page_source(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            events.append((by, value))
+            return type(
+                "Element",
+                (),
+                {
+                    "is_displayed": lambda self: True,
+                    "is_enabled": lambda self: True,
+                    "get_attribute": lambda self, name: "true" if name == "hittable" else None,
+                },
+            )()
+
+    monkeypatch.setattr(
+        session,
+        "_safe_page_source",
+        lambda driver: (_ for _ in ()).throw(AssertionError("page source fallback should not run")),
+    )
+
+    assert session._publish_entry_ready(FakeDriver()) is True
+    assert events == [(session.AppiumBy.ACCESSIBILITY_ID, "bottom-nav-center-action")]
+
+
+def test_publish_entry_ready_prefers_android_resource_id_without_page_source(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            events.append((by, value))
+            return type(
+                "Element",
+                (),
+                {
+                    "is_displayed": lambda self: True,
+                    "is_enabled": lambda self: True,
+                },
+            )()
+
+    monkeypatch.setattr(
+        session,
+        "_safe_page_source",
+        lambda driver: (_ for _ in ()).throw(AssertionError("page source fallback should not run")),
+    )
+
+    assert session._publish_entry_ready(FakeDriver()) is True
+    assert events == [(session.AppiumBy.ID, "bottom-nav-center-action")]
+
+
+def test_publish_entry_ready_rejects_non_hittable_ios_resource_id():
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+        def is_enabled(self):
+            return True
+
+        def get_attribute(self, name):
+            return "false" if name == "hittable" else None
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = "我的笔记 发布 审核中"
+
+        def find_element(self, by, value):
+            return FakeElement()
+
+    assert session._publish_entry_ready(FakeDriver()) is False
+
+
+def test_publish_entry_ready_falls_back_to_existing_page_source_rule():
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = "首页 笔记 全国 推荐 活动 消息 我的"
+
+        def find_element(self, by, value):
+            raise session.NoSuchElementException()
+
+    assert session._publish_entry_ready(FakeDriver()) is True
+
+
+def test_restart_ios_app_for_publish_entry_waits_for_clickable_resource(monkeypatch):
+    events = []
+    state = {"ready": False}
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def terminate_app(self, bundle_id):
+            events.append(("terminate", bundle_id))
+
+        def activate_app(self, bundle_id):
+            events.append(("activate", bundle_id))
+            state["ready"] = True
+
+    monkeypatch.setattr(session, "_publish_entry_resource_ready", lambda driver: state["ready"])
+    monkeypatch.setattr(session.time, "sleep", lambda seconds: None)
+
+    config = type("Config", (), {"bundle_id": "com.velowind.rider"})()
+    assert session._restart_ios_app_for_publish_entry(FakeDriver(), config) is True
+    assert events == [
+        ("terminate", "com.velowind.rider"),
+        ("activate", "com.velowind.rider"),
+    ]
+
+
+def test_restart_ios_app_for_publish_entry_skips_android():
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    config = type("Config", (), {"bundle_id": "com.velowind.rider"})()
+    assert session._restart_ios_app_for_publish_entry(FakeDriver(), config) is False
+
+
 def test_ensure_logged_in_for_publish_entry_logs_in_and_recovers(monkeypatch):
     events = []
     state = {"page": "login"}

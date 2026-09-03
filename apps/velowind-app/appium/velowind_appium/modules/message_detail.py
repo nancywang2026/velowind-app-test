@@ -76,7 +76,12 @@ TICKET_TOGGLE_IDS = [
     "ticket-toggle",
 ]
 TICKET_TOGGLE_TEXTS = ["查看图票", "图票", "收起图票"]
+PUBLISH_ENTRY_PRIMARY_ID = "bottom-nav-center-action"
+NOTE_IMAGE_ENTRY_PRIMARY_ID = "publish-note-image-entry-button"
+NOTE_VIDEO_ENTRY_PRIMARY_ID = "publish-note-video-entry-button"
+
 PUBLISH_ENTRY_IDS = [
+    PUBLISH_ENTRY_PRIMARY_ID,
     "bottom-nav-publish",
     "bottom-nav-plus",
     "bottom-nav-add",
@@ -86,6 +91,7 @@ PUBLISH_ENTRY_IDS = [
 PUBLISH_ENTRY_TEXTS = ["发布", "创建", "+", "＋"]
 
 PUBLISH_ENTRY_CANDIDATES = [
+    locator_accessibility_id(PUBLISH_ENTRY_PRIMARY_ID),
     locator_accessibility_id("bottom-nav-publish"),
     locator_accessibility_id("bottom-nav-plus"),
     locator_accessibility_id("bottom-nav-add"),
@@ -1111,6 +1117,11 @@ def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
+    if _tap_publish_trigger_and_verify(
+        driver,
+        lambda: _tap_test_id_now(driver, PUBLISH_ENTRY_PRIMARY_ID),
+    ):
+        return True
     if platform == "android":
         # The Android bottom navigation exposes the publish plus button through
         # resource-id. Prefer that stable semantic locator over coordinates.
@@ -1936,6 +1947,17 @@ def _tap_resource_id_now(driver: WebDriver, resource_id: str) -> bool:
         driver.find_element(AppiumBy.ID, resource_id).click()
         return True
     except (NoSuchElementException, WebDriverException):
+        return False
+
+
+def _tap_test_id_now(driver: WebDriver, test_id: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    platform = str(capabilities.get("platformName", "")).lower()
+    locator = AppiumBy.ID if platform == "android" else AppiumBy.ACCESSIBILITY_ID
+    try:
+        driver.find_element(locator, test_id).click()
+        return True
+    except (AttributeError, NoSuchElementException, WebDriverException):
         return False
 
 
@@ -3109,6 +3131,9 @@ def _text_input_current_value(element) -> str:
 def _tap_note_image_plus(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    if _tap_test_id_now(driver, NOTE_IMAGE_ENTRY_PRIMARY_ID):
+        if _wait_for_note_photo_picker_opened(driver):
+            return True
     if not is_ios and _tap_android_note_image_plus_from_source(driver):
         return True
     if not is_ios and _tap_note_image_plus_by_coordinate(driver):
@@ -3154,6 +3179,8 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
 
 def _tap_note_video_entry(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
+    if _tap_test_id_now(driver, NOTE_VIDEO_ENTRY_PRIMARY_ID):
+        return True
     if str(capabilities.get("platformName", "")).lower() == "android":
         try:
             size = driver.get_window_size()

@@ -467,8 +467,40 @@ def test_android_publish_entry_prefers_resource_id_over_coordinate(monkeypatch):
 
     assert message_detail._tap_publish_entry_if_present(FakeDriver()) is True
     assert events == [
+        (message_detail.AppiumBy.ID, "bottom-nav-center-action"),
         (message_detail.AppiumBy.ID, "bottom-nav-publish"),
         "click-resource-id",
+    ]
+
+
+def test_publish_entry_prefers_primary_resource_id_without_fallback(monkeypatch):
+    events = []
+
+    class FakeElement:
+        @staticmethod
+        def click():
+            events.append("click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def find_element(by, value):
+            events.append((by, value))
+            if value == message_detail.PUBLISH_ENTRY_PRIMARY_ID:
+                return FakeElement()
+            raise AssertionError("legacy locators must not run after the primary id succeeds")
+
+        @staticmethod
+        def execute_script(*_args, **_kwargs):
+            raise AssertionError("coordinate fallback must not run after the primary id succeeds")
+
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: True)
+
+    assert message_detail._tap_publish_entry_if_present(FakeDriver()) is True
+    assert events == [
+        (message_detail.AppiumBy.ACCESSIBILITY_ID, "bottom-nav-center-action"),
+        "click",
     ]
 
 
@@ -2637,6 +2669,37 @@ def test_android_note_image_plus_taps_first_image_slot_center():
     assert taps == [("mobile: tap", {"x": 155.0, "y": 444.0})]
 
 
+def test_note_image_entry_prefers_primary_resource_id_without_fallback(monkeypatch):
+    events = []
+
+    class FakeElement:
+        @staticmethod
+        def click():
+            events.append("click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def find_element(by, value):
+            events.append((by, value))
+            if value == message_detail.NOTE_IMAGE_ENTRY_PRIMARY_ID:
+                return FakeElement()
+            raise AssertionError("legacy locators must not run after the primary id succeeds")
+
+        @staticmethod
+        def execute_script(*_args, **_kwargs):
+            raise AssertionError("coordinate fallback must not run after the primary id succeeds")
+
+    monkeypatch.setattr(message_detail, "_wait_for_note_photo_picker_opened", lambda driver, timeout=2: True)
+
+    assert message_detail._tap_note_image_plus(FakeDriver()) is True
+    assert events == [
+        (message_detail.AppiumBy.ACCESSIBILITY_ID, "publish-note-image-entry-button"),
+        "click",
+    ]
+
+
 def test_android_note_image_plus_uses_updated_top_image_slot_from_source(monkeypatch):
     taps = []
 
@@ -2720,6 +2783,35 @@ def test_android_note_video_entry_uses_vertical_media_card_lower_half():
 
     assert message_detail._tap_note_video_entry(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 125.44, "y": 587.664})]
+
+
+def test_note_video_entry_prefers_primary_resource_id_without_fallback():
+    events = []
+
+    class FakeElement:
+        @staticmethod
+        def click():
+            events.append("click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def find_element(by, value):
+            events.append((by, value))
+            if value == message_detail.NOTE_VIDEO_ENTRY_PRIMARY_ID:
+                return FakeElement()
+            raise AssertionError("legacy locators must not run after the primary id succeeds")
+
+        @staticmethod
+        def get_window_size():
+            raise AssertionError("coordinate fallback must not run after the primary id succeeds")
+
+    assert message_detail._tap_note_video_entry(FakeDriver()) is True
+    assert events == [
+        (message_detail.AppiumBy.ID, "publish-note-video-entry-button"),
+        "click",
+    ]
 
 
 def test_ios_note_image_plus_uses_updated_top_image_slot_from_source(monkeypatch):

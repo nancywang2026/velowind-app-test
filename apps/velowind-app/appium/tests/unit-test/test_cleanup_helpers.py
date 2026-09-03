@@ -1,6 +1,7 @@
 from velowind_appium.cleanup import (
     CleanupReport,
     cleanup_activities,
+    cleanup_exact_visible_item,
     cleanup_notes,
     cleanup_published_note,
     cleanup_sessions,
@@ -230,9 +231,9 @@ def test_cleanup_published_note_uses_exact_title_and_leaves_my_notes_page(monkey
     monkeypatch.setattr("velowind_appium.cleanup.ensure_logged_in_on_home", lambda *args: events.append("ensure-home"))
     monkeypatch.setattr("velowind_appium.cleanup._open_me_entry", lambda driver, text: events.append(("open", text)))
     monkeypatch.setattr(
-        "velowind_appium.cleanup.cleanup_matching_visible_items",
+        "velowind_appium.cleanup.cleanup_exact_visible_item",
         lambda *args, **kwargs: events.append(
-            ("cleanup", kwargs["matchers"], kwargs["exact_match"])
+            ("cleanup", kwargs["title"])
         )
         or CleanupReport("note", ["测试 - 长白山"], []),
     )
@@ -244,9 +245,53 @@ def test_cleanup_published_note_uses_exact_title_and_leaves_my_notes_page(monkey
     assert events == [
         "ensure-home",
         ("open", "我的笔记"),
-        ("cleanup", ["测试 - 长白山"], True),
+        ("cleanup", "测试 - 长白山"),
         "back",
     ]
+
+
+def test_cleanup_exact_visible_item_returns_immediately_when_title_is_absent(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._tap_exact_visible_title",
+        lambda driver, title: events.append(title) or False,
+    )
+    monkeypatch.setattr(
+        "velowind_appium.cleanup.tap_first_available_text",
+        lambda *args: (_ for _ in ()).throw(AssertionError("delete actions must not run")),
+    )
+
+    report = cleanup_exact_visible_item(
+        object(),
+        item_type="note",
+        title="测试 - 长白山",
+        action_texts=["删除"],
+    )
+
+    assert report == CleanupReport("note", [], [])
+    assert events == ["测试 - 长白山"]
+
+
+def test_cleanup_matching_visible_items_stops_when_page_is_already_at_end(monkeypatch):
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._safe_page_source",
+        lambda driver: '<App><Text text="已经到底了" /></App>',
+    )
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._scroll_page",
+        lambda driver: (_ for _ in ()).throw(AssertionError("end marker must avoid scrolling")),
+    )
+
+    report = cleanup_matching_visible_items(
+        object(),
+        item_type="note",
+        matchers=["测试 - 长白山"],
+        action_texts=["删除"],
+        dry_run=False,
+        exact_match=True,
+    )
+
+    assert report == CleanupReport("note", [], [])
 
 
 def test_cleanup_matching_visible_items_exact_match_skips_similar_title(monkeypatch):
