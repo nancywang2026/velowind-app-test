@@ -271,12 +271,7 @@ def test_open_photo_album_leaves_ios_multi_select_grid_before_selecting_target(m
     events = []
     titles = iter([
         "选择最多9张照片。",
-        "北京",
-        "北京",
-        None,
-        "长白山",
-        "长白山",
-        "长白山",
+        "精选集",
         "长白山",
     ])
 
@@ -291,7 +286,6 @@ def test_open_photo_album_leaves_ios_multi_select_grid_before_selecting_target(m
 
     assert photo_picker.open_photo_album(object(), "长白山") is True
     assert events == [
-        "back",
         "back",
         ("tap-text", "精选集"),
         ("tap-album", "长白山"),
@@ -325,7 +319,7 @@ def test_open_photo_album_enters_android_google_photos_device_folder(monkeypatch
 
 def test_open_photo_album_taps_ios_target_album_from_source_before_xpath(monkeypatch):
     taps = []
-    titles = iter([None, "图片", "图片"])
+    titles = iter([None, "精选集", "图片"])
 
     class FakeDriver:
         capabilities = {"platformName": "iOS"}
@@ -355,12 +349,14 @@ def test_open_photo_album_taps_ios_target_album_from_source_before_xpath(monkeyp
     monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
 
     assert photo_picker.open_photo_album(FakeDriver(), "图片") is True
-    assert taps == [("mobile: tap", {"x": 71.0, "y": 390.0})]
+    assert taps == [
+        ("mobile: tap", {"x": 71.0, "y": 390.0}),
+    ]
 
 
 def test_open_photo_album_uses_source_before_predicate_for_numeric_ios_album_name(monkeypatch):
     events = []
-    titles = iter([None, None, "0424", "0424"])
+    titles = iter([None, "精选集", "0424"])
 
     class FakeDriver:
         capabilities = {"platformName": "iOS"}
@@ -380,7 +376,7 @@ def test_open_photo_album_uses_source_before_predicate_for_numeric_ios_album_nam
 
 def test_open_photo_album_prefers_exact_ios_button_for_numeric_album_name(monkeypatch):
     events = []
-    titles = iter([None, "0424", "0424"])
+    titles = iter([None, "精选集", "0424"])
 
     class FakeElement:
         def click(self):
@@ -408,6 +404,25 @@ def test_open_photo_album_prefers_exact_ios_button_for_numeric_album_name(monkey
 
     assert photo_picker.open_photo_album(FakeDriver(), "0424") is True
     assert events == [("source", "精选集"), "button-click"]
+
+
+def test_switch_to_ios_collections_does_not_guess_with_screen_coordinates(monkeypatch):
+    coordinate_taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            coordinate_taps.append((script, payload))
+
+    monkeypatch.setattr(photo_picker, "_tap_ios_text_from_source", lambda driver, text: False)
+    monkeypatch.setattr(photo_picker, "_tap_text_or_contains", lambda driver, text: False)
+    monkeypatch.setattr(photo_picker, "_tap_texts_by_predicate", lambda driver, texts: False)
+
+    assert photo_picker.switch_photo_picker_to_collections(
+        FakeDriver(), current_title=None, probe_current_title=False
+    ) is False
+    assert coordinate_taps == []
 
 
 def test_choose_video_from_library_selects_first_video_without_collections(monkeypatch):
@@ -644,18 +659,24 @@ def test_photo_library_visible_accepts_android_system_photo_picker(monkeypatch):
 
 
 def test_find_photo_grid_candidates_supports_android_google_photos():
+    queries = []
+
     class FakeElement:
         rect = {"x": 0, "y": 493, "width": 264, "height": 264}
 
     candidate = FakeElement()
 
     class FakeDriver:
+        capabilities = {"platformName": "Android", "appium:udid": "emulator-5554"}
+
         def find_elements(self, by, value):
+            queries.append(value)
             if value == '//android.widget.ImageView[@clickable="true" and contains(@content-desc, "Photo")]':
                 return [candidate]
             return []
 
     assert photo_picker.find_photo_grid_candidates(FakeDriver()) == [candidate]
+    assert queries == ['//android.widget.ImageView[@clickable="true" and contains(@content-desc, "Photo")]']
 
 
 def test_find_photo_grid_candidates_supports_miui_gallery_picker():
@@ -677,18 +698,48 @@ def test_find_photo_grid_candidates_supports_miui_gallery_picker():
 
 
 def test_find_photo_grid_candidates_supports_ios_cells():
+    queries = []
+
     class FakeElement:
         rect = {"x": 18, "y": 148, "width": 72, "height": 72}
 
     candidate = FakeElement()
 
     class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
         def find_elements(self, by, value):
+            queries.append(value)
             if value == "//XCUIElementTypeCell":
                 return [candidate]
             return []
 
     assert photo_picker.find_photo_grid_candidates(FakeDriver()) == [candidate]
+    assert queries == ["//XCUIElementTypeCell"]
+
+
+def test_find_photo_grid_candidates_uses_ios_image_queries_only_as_fallback():
+    queries = []
+
+    class FakeElement:
+        rect = {"x": 18, "y": 148, "width": 72, "height": 72}
+
+    candidate = FakeElement()
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_elements(self, by, value):
+            queries.append(value)
+            if value == "//XCUIElementTypeImage[@name='PXGGridLayout-Info']":
+                return [candidate]
+            return []
+
+    assert photo_picker.find_photo_grid_candidates(FakeDriver()) == [candidate]
+    assert queries == [
+        "//XCUIElementTypeCell",
+        "//XCUIElementTypeImage[@name='PXGGridLayout-Info']",
+    ]
 
 
 def test_find_photo_grid_selection_badges_supports_miui_gallery_checkboxes():

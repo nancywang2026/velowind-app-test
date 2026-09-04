@@ -344,6 +344,24 @@ def test_dismiss_common_system_alerts_records_step_only_for_matched_alert(monkey
     assert step_calls == ["dismiss-alert-好"]
 
 
+def test_dismiss_common_system_alerts_skips_absent_android_text_locators(monkeypatch):
+    calls = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(session, "_safe_page_source", lambda driver: "post-detail-page 写留言")
+    monkeypatch.setattr(
+        session,
+        "tap_text_if_present",
+        lambda driver, text, timeout=1: calls.append((text, timeout)) or False,
+    )
+
+    session.dismiss_common_system_alerts(FakeDriver())
+
+    assert calls == []
+
+
 def test_ensure_logged_in_on_home_closes_android_cancel_signup_dialog(monkeypatch):
     state = {"page": "确认取消当前报名吗？ 无罚金 再想想 确认取消"}
     events = []
@@ -1575,6 +1593,8 @@ def test_publish_entry_ready_prefers_ios_resource_id_without_page_source(monkeyp
 
         def find_element(self, by, value):
             events.append((by, value))
+            if value == "login-page":
+                raise session.NoSuchElementException()
             return type(
                 "Element",
                 (),
@@ -1592,7 +1612,10 @@ def test_publish_entry_ready_prefers_ios_resource_id_without_page_source(monkeyp
     )
 
     assert session._publish_entry_ready(FakeDriver()) is True
-    assert events == [(session.AppiumBy.ACCESSIBILITY_ID, "bottom-nav-center-action")]
+    assert events == [
+        (session.AppiumBy.ACCESSIBILITY_ID, "bottom-nav-center-action"),
+        (session.AppiumBy.ACCESSIBILITY_ID, "login-page"),
+    ]
 
 
 def test_publish_entry_ready_prefers_android_resource_id_without_page_source(monkeypatch):
@@ -1643,6 +1666,27 @@ def test_publish_entry_ready_rejects_non_hittable_ios_resource_id():
     assert session._publish_entry_ready(FakeDriver()) is False
 
 
+def test_publish_entry_ready_rejects_login_overlay_even_when_bottom_entry_is_hittable():
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+        def is_enabled(self):
+            return True
+
+        def get_attribute(self, name):
+            return "true" if name == "hittable" else None
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = "首页 手机号登录 请输入手机号"
+
+        def find_element(self, by, value):
+            return FakeElement()
+
+    assert session._publish_entry_ready(FakeDriver()) is False
+
+
 def test_publish_entry_ready_falls_back_to_existing_page_source_rule():
     class FakeDriver:
         capabilities = {"platformName": "iOS"}
@@ -1679,12 +1723,165 @@ def test_restart_ios_app_for_publish_entry_waits_for_clickable_resource(monkeypa
     ]
 
 
+def test_open_ios_home_for_publish_entry_taps_home_and_waits_for_publish_entry(monkeypatch):
+    events = []
+    state = {"ready": False}
+
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+        def is_enabled(self):
+            return True
+
+        def get_attribute(self, name):
+            return "true" if name == "hittable" else None
+
+        def click(self):
+            events.append("click-home")
+            state["ready"] = True
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            events.append((by, value))
+            return FakeElement()
+
+    monkeypatch.setattr(session, "_ios_login_page_resource_visible", lambda driver: False)
+    monkeypatch.setattr(session, "_publish_entry_resource_ready", lambda driver: state["ready"])
+
+    assert session._open_ios_home_for_publish_entry(FakeDriver()) is True
+    assert events == [
+        (session.AppiumBy.ACCESSIBILITY_ID, "bottom-nav-home"),
+        "click-home",
+    ]
+
+
+def test_ensure_logged_in_for_publish_entry_prefers_home_tab_before_restart(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(session, "_ios_login_page_resource_visible", lambda driver: False)
+    monkeypatch.setattr(session, "_publish_entry_resource_ready", lambda driver: False)
+    monkeypatch.setattr(
+        session,
+        "_open_ios_home_for_publish_entry",
+        lambda driver: events.append("home") or True,
+    )
+    monkeypatch.setattr(
+        session,
+        "_restart_ios_app_for_publish_entry",
+        lambda driver, config: events.append("restart") or True,
+    )
+
+    assert session.ensure_logged_in_for_publish_entry(FakeDriver(), object()) is False
+    assert events == ["home"]
+
+
 def test_restart_ios_app_for_publish_entry_skips_android():
     class FakeDriver:
         capabilities = {"platformName": "Android"}
 
     config = type("Config", (), {"bundle_id": "com.velowind.rider"})()
     assert session._restart_ios_app_for_publish_entry(FakeDriver(), config) is False
+
+
+def test_restart_android_app_for_publish_entry_waits_for_clickable_resource(monkeypatch):
+    events = []
+    state = {"ready": False}
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def terminate_app(self, app_package):
+            events.append(("terminate", app_package))
+
+        def activate_app(self, app_package):
+            events.append(("activate", app_package))
+            state["ready"] = True
+
+    monkeypatch.setattr(session, "_publish_entry_resource_ready", lambda driver: state["ready"])
+    monkeypatch.setattr(session.time, "sleep", lambda seconds: None)
+
+    config = type("Config", (), {"app_package": "com.velowind.rider"})()
+    assert session._restart_android_app_for_publish_entry(FakeDriver(), config) is True
+    assert events == [
+        ("terminate", "com.velowind.rider"),
+        ("activate", "com.velowind.rider"),
+    ]
+
+
+def test_ensure_logged_in_for_publish_entry_restarts_android_before_slow_recovery(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+    monkeypatch.setattr(
+        session,
+        "_restart_android_app_for_publish_entry",
+        lambda driver, config: events.append("restart-android") or True,
+    )
+    monkeypatch.setattr(
+        session,
+        "_publish_entry_ready",
+        lambda driver: (_ for _ in ()).throw(AssertionError("slow fallback must not run")),
+    )
+    monkeypatch.setattr(
+        session,
+        "dismiss_common_system_alerts",
+        lambda driver: (_ for _ in ()).throw(AssertionError("alert scan must not run")),
+    )
+
+    assert session.ensure_logged_in_for_publish_entry(FakeDriver(), object()) is False
+    assert events == ["restart-android"]
+
+
+def test_ensure_logged_in_on_home_returns_immediately_for_clickable_publish_entry(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(session, "_publish_entry_resource_ready", lambda driver: True)
+    monkeypatch.setattr(
+        session,
+        "_restart_ios_app_for_publish_entry",
+        lambda driver, config: events.append("restart") or False,
+    )
+    monkeypatch.setattr(
+        session,
+        "dismiss_common_system_alerts",
+        lambda driver: events.append("dismiss-alerts"),
+    )
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert events == []
+
+
+def test_ensure_logged_in_on_home_uses_ios_restart_before_legacy_recovery(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+    monkeypatch.setattr(session, "_publish_entry_resource_ready", lambda driver: False)
+    monkeypatch.setattr(
+        session,
+        "_restart_ios_app_for_publish_entry",
+        lambda driver, config: events.append("restart") or True,
+    )
+    monkeypatch.setattr(
+        session,
+        "dismiss_common_system_alerts",
+        lambda driver: events.append("dismiss-alerts"),
+    )
+
+    assert session.ensure_logged_in_on_home(FakeDriver(), object()) is False
+    assert events == ["restart"]
 
 
 def test_ensure_logged_in_for_publish_entry_logs_in_and_recovers(monkeypatch):

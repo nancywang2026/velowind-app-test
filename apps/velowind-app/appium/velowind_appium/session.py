@@ -16,6 +16,7 @@ from velowind_appium.modules.home_feed import wait_for_home_feed
 
 
 COMMON_ALERT_TEXTS = ["Close app", "关闭应用", "允许", "好", "以后", "暂不", "取消"]
+ANDROID_STARTUP_CONSENT_TEXTS = ["同意并继续", "同意"]
 OPTIONAL_ALERT_TIMEOUT_SECONDS = 0.2
 HOME_BLOCKING_TEXTS = [
     "发布活动",
@@ -56,21 +57,35 @@ PUBLISH_ENTRY_RESOURCE_ID = "bottom-nav-center-action"
 
 
 def dismiss_common_system_alerts(driver: WebDriver, step=None) -> None:
-    for text in COMMON_ALERT_TEXTS:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    page_source = _safe_page_source(driver) if is_android else None
+    candidate_texts = [*COMMON_ALERT_TEXTS, *ANDROID_STARTUP_CONSENT_TEXTS] if is_android else COMMON_ALERT_TEXTS
+    visible_texts = (
+        [text for text in candidate_texts if text in page_source]
+        if page_source is not None
+        else candidate_texts
+    )
+    matched_any = False
+    for text in visible_texts:
         if step is None:
-            tap_text_if_present(driver, text, timeout=OPTIONAL_ALERT_TIMEOUT_SECONDS)
+            matched_any = tap_text_if_present(driver, text, timeout=OPTIONAL_ALERT_TIMEOUT_SECONDS) or matched_any
         else:
             matched = tap_text_if_present(driver, text, timeout=OPTIONAL_ALERT_TIMEOUT_SECONDS)
             if matched:
+                matched_any = True
                 step(
                     f"dismiss-alert-{text}",
                     lambda matched=matched: matched,
                 )
-    _accept_startup_agreement_if_present(driver)
+    _accept_startup_agreement_if_present(
+        driver,
+        page_source=None if matched_any else page_source,
+    )
 
 
-def _accept_startup_agreement_if_present(driver: WebDriver) -> bool:
-    page_source = _safe_page_source(driver)
+def _accept_startup_agreement_if_present(driver: WebDriver, *, page_source: str | None = None) -> bool:
+    page_source = _safe_page_source(driver) if page_source is None else page_source
     if "agreement-popup-backdrop" not in page_source and "请阅读并同意以下条款" not in page_source:
         return False
     if tap_text_if_present(driver, "同意并继续", timeout=0.8):
@@ -146,6 +161,18 @@ def _login_required_after_short_wait(driver: WebDriver, timeout: float = 3.0) ->
 
 
 def ensure_logged_in_on_home(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:
+    # Most real-device cases only need a clean, already-authenticated app root.
+    # Avoid several full hierarchy dumps when the publish-capable home tab is
+    # already actionable, and cold-relaunch iOS before entering the legacy
+    # navigation recovery chain when another deep page is still foregrounded.
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        if not _ios_login_page_resource_visible(driver):
+            if _publish_entry_resource_ready(driver):
+                return False
+            if _restart_ios_app_for_publish_entry(driver, ios_config):
+                return False
+
     dismiss_common_system_alerts(driver)
     _dismiss_android_cancel_signup_dialog(driver)
     tap_text_if_present(driver, "同意并继续", timeout=2)
@@ -295,13 +322,29 @@ def ensure_read_session_on_home(driver: WebDriver, ios_config: IosAppiumConfig) 
 
 
 def ensure_logged_in_for_publish_entry(driver: WebDriver, ios_config: IosAppiumConfig, step=None) -> bool:
-    if _publish_entry_ready(driver):
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if is_ios and not _ios_login_page_resource_visible(driver):
+        # Stay within the running app when a previous publish flow merely left
+        # us on another tab. Exact accessibility lookups are cheaper than a
+        # full hierarchy dump and avoid a cold app launch in the common case.
+        if _publish_entry_resource_ready(driver):
+            return False
+        if _open_ios_home_for_publish_entry(driver):
+            return False
+        if _restart_ios_app_for_publish_entry(driver, ios_config):
+            return False
+    elif is_android and _restart_android_app_for_publish_entry(driver, ios_config):
         return False
-    if _restart_ios_app_for_publish_entry(driver, ios_config):
+    elif _publish_entry_ready(driver):
+        return False
+    if not is_ios and _restart_ios_app_for_publish_entry(driver, ios_config):
         return False
     dismiss_common_system_alerts(driver)
-    tap_text_if_present(driver, "同意并继续", timeout=2)
-    tap_text_if_present(driver, "同意", timeout=1)
+    if not is_android:
+        tap_text_if_present(driver, "同意并继续", timeout=2)
+        tap_text_if_present(driver, "同意", timeout=1)
 
     def _tap_home_fast() -> bool:
         if _tap_home_tab_by_coordinate(driver):
@@ -430,10 +473,47 @@ def _publish_entry_resource_ready(driver: WebDriver) -> bool:
             raise NoSuchElementException()
         if platform_name == "ios" and str(element.get_attribute("hittable")).lower() != "true":
             raise NoSuchElementException()
+        if platform_name == "ios" and _ios_login_page_resource_visible(driver):
+            return False
         return True
     except (AttributeError, NoSuchElementException, WebDriverException):
         # Compatibility fallback for app builds that do not expose the new test ID.
         return False
+
+
+def _ios_login_page_resource_visible(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+    try:
+        driver.find_element(AppiumBy.ACCESSIBILITY_ID, "login-page")
+        return True
+    except (AttributeError, NoSuchElementException, WebDriverException):
+        return False
+
+
+def _open_ios_home_for_publish_entry(driver: WebDriver, timeout: float = 3) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+    try:
+        home_tab = driver.find_element(AppiumBy.ACCESSIBILITY_ID, "bottom-nav-home")
+        if not home_tab.is_displayed() or not home_tab.is_enabled():
+            return False
+        if str(home_tab.get_attribute("hittable")).lower() != "true":
+            return False
+        home_tab.click()
+    except (AttributeError, NoSuchElementException, WebDriverException):
+        return False
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        if _ios_login_page_resource_visible(driver):
+            return False
+        if _publish_entry_resource_ready(driver):
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def _restart_ios_app_for_publish_entry(
@@ -453,6 +533,36 @@ def _restart_ios_app_for_publish_entry(
         terminate_app(bundle_id)
         time.sleep(0.5)
         activate_app(bundle_id)
+    except (AttributeError, WebDriverException):
+        return False
+
+    end_at = time.monotonic() + timeout
+    while time.monotonic() < end_at:
+        if _ios_login_page_resource_visible(driver):
+            return False
+        if _publish_entry_resource_ready(driver):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _restart_android_app_for_publish_entry(
+    driver: WebDriver,
+    config: IosAppiumConfig,
+    timeout: float = 8,
+) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return False
+    app_package = str(getattr(config, "app_package", "") or "").strip()
+    terminate_app = getattr(driver, "terminate_app", None)
+    activate_app = getattr(driver, "activate_app", None)
+    if not app_package or not callable(terminate_app) or not callable(activate_app):
+        return False
+    try:
+        terminate_app(app_package)
+        time.sleep(0.3)
+        activate_app(app_package)
     except (AttributeError, WebDriverException):
         return False
 

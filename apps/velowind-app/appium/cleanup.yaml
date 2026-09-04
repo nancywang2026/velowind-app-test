@@ -1,8 +1,7 @@
 cleanup:
-  # Submitted notes stay pending review and are not immediately available in
-  # the deletable My Notes list. Run the dedicated cleanup command after they
-  # become visible instead of adding a guaranteed no-op to every publish case.
-  delete_published_note_after_success: false
+  # Keep publish cases isolated: after all assertions pass, wait for the note
+  # to become deletable and remove the exact title created by that case.
+  delete_published_note_after_success: true
 
   note_matchers:
     - "测试 -"

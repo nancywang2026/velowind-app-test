@@ -267,6 +267,8 @@ def test_fill_advanced_field_prefers_exact_placeholder(monkeypatch):
     calls = []
 
     class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
         def find_element(self, _by, xpath):
             calls.append(xpath)
             if '@placeholderValue="例如：68km"' in xpath:
@@ -277,7 +279,25 @@ def test_fill_advanced_field_prefers_exact_placeholder(monkeypatch):
 
     assert activity._fill_advanced_field(FakeDriver(), ["总里程", "里程"], "128", ["例如：68km"]) is True
     assert field.sent_keys == ["128"]
-    assert calls
+    assert len(calls) == 1
+    assert "XCUIElementTypeTextField" in calls[0]
+    assert "XCUIElementTypeTextView" in calls[0]
+
+
+def test_fill_advanced_settings_prefers_specific_duration_placeholder(monkeypatch):
+    captured = []
+    draft = build_activity_draft()
+
+    monkeypatch.setattr(activity, "_open_advanced_settings", lambda driver, values: True)
+    monkeypatch.setattr(
+        activity,
+        "_fill_advanced_field",
+        lambda driver, keywords, value, placeholders: captured.append((keywords[0], placeholders)) or True,
+    )
+
+    activity._fill_advanced_settings(object(), draft)
+
+    assert captured[0] == ("参考时长", ["例如：2天1晚", "2天1晚"])
 
 
 def test_open_activity_publisher_retries_when_publish_entry_opens_login(monkeypatch):
@@ -332,6 +352,22 @@ def test_open_activity_publisher_prepares_android_publish_entry_before_loop(monk
     open_activity_publisher(FakeDriver(), ios_config=object(), timeout=5)
 
     assert events == ["prepare-android-publish-entry"]
+
+
+def test_open_activity_publisher_reuses_one_snapshot_for_loop_decisions(monkeypatch):
+    source_reads = []
+    page_source = '<AppiumAUT><XCUIElementTypeStaticText name="发布活动" /></AppiumAUT>'
+
+    monkeypatch.setattr(
+        activity,
+        "_safe_page_source",
+        lambda driver: source_reads.append(True) or page_source,
+    )
+    monkeypatch.setattr(activity, "_prepare_android_publish_entry", lambda driver: None)
+
+    open_activity_publisher(object(), timeout=5)
+
+    assert len(source_reads) == 1
 
 
 def test_open_activity_publisher_does_not_tap_activity_type_when_publish_sheet_is_absent(monkeypatch):
@@ -492,6 +528,36 @@ def test_publish_sheet_visible_ignores_bottom_activity_tab(monkeypatch):
     monkeypatch.setattr(activity, "_safe_page_source", lambda driver: "首页 活动 消息 我的")
 
     assert activity._publish_sheet_visible(object())() is False
+
+
+def test_fill_activity_form_skips_locator_wait_when_snapshot_is_already_ready(monkeypatch):
+    events = []
+    draft = build_activity_draft()
+
+    monkeypatch.setattr(
+        activity,
+        "_safe_page_source",
+        lambda driver: '<AppiumAUT><XCUIElementTypeStaticText name="发布活动" /></AppiumAUT>',
+    )
+    monkeypatch.setattr(
+        activity,
+        "wait_for_activity_form",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("locator wait should be skipped")),
+    )
+    monkeypatch.setattr(activity, "_upload_activity_image", lambda driver, value: events.append("upload"))
+    monkeypatch.setattr(activity, "_fill_title", lambda driver, value: events.append("title"))
+    monkeypatch.setattr(activity, "_select_activity_type", lambda driver, value: events.append("type"))
+    monkeypatch.setattr(activity, "_select_activity_region", lambda driver, province, city: events.append("region"))
+    monkeypatch.setattr(activity, "_fill_description", lambda driver, value: events.append("description"))
+    monkeypatch.setattr(activity, "_fill_itinerary", lambda driver, value: events.append("itinerary"))
+    monkeypatch.setattr(activity, "_fill_known_text_fields", lambda driver, value: events.append("known"))
+    monkeypatch.setattr(activity, "_fill_advanced_settings", lambda driver, value: events.append("advanced"))
+    monkeypatch.setattr(activity, "_resolve_picker_fields", lambda driver, timeout=60: events.append("pickers"))
+    monkeypatch.setattr(activity, "_required_field_markers_resolved", lambda driver: True)
+
+    fill_activity_form(object(), draft, timeout=30)
+
+    assert events == ["upload", "title", "type", "region", "description", "itinerary", "known", "advanced", "pickers"]
 
 
 def test_fill_activity_form_resolves_picker_placeholders_after_text_fields(monkeypatch):
@@ -1486,10 +1552,8 @@ def test_fill_itinerary_fills_each_segment_and_taps_add_between_items(monkeypatc
 
     assert events == [
         ("fill-item", 0, ActivityItineraryItem("Day1 集合说明", "石家庄集合签到", "完成签到、路线说明与安全须知确认。")),
-        "dismiss-keyboard",
         "add-segment",
         ("fill-item", 1, ActivityItineraryItem("Day2 主线骑行", "峡谷耐力挑战", "完成主线路骑行并设置2个补给点。")),
-        "dismiss-keyboard",
         "add-segment",
         ("fill-item", 2, ActivityItineraryItem("Day3 返程收尾", "自由骑行返程", "自由骑行返程，完成活动复盘后解散。")),
         "close",
@@ -1522,6 +1586,27 @@ def test_find_indexed_itinerary_fields_support_android_edit_text():
     assert activity._find_indexed_editor_text_view(FakeDriver(), 0) is body
 
 
+def test_find_indexed_itinerary_field_preserves_global_index_after_scroll():
+    class FakeElement:
+        def __init__(self, displayed, y):
+            self.displayed = displayed
+            self.rect = {"x": 78, "y": y, "width": 259, "height": 92}
+
+        def is_displayed(self):
+            return self.displayed
+
+    first_hidden = FakeElement(False, 17)
+    second_visible = FakeElement(True, 241)
+
+    class FakeDriver:
+        def find_elements(self, by, value):
+            if value == "//XCUIElementTypeTextView":
+                return [first_hidden, second_visible]
+            return []
+
+    assert activity._find_indexed_editor_text_view(FakeDriver(), 1) is second_visible
+
+
 def test_find_add_itinerary_segment_button_supports_android_view_group():
     class FakeElement:
         rect = {"x": 930, "y": 937, "width": 82, "height": 81}
@@ -1538,6 +1623,38 @@ def test_find_add_itinerary_segment_button_supports_android_view_group():
             return []
 
     assert activity._find_add_itinerary_segment_button(FakeDriver()) is add_button
+
+
+def test_add_itinerary_segment_taps_ios_add_control_from_existing_snapshot(monkeypatch):
+    taps = []
+    sources = iter(
+        [
+            """
+            <AppiumAUT>
+              <XCUIElementTypeTextField visible="true" placeholderValue="标题" />
+              <XCUIElementTypeOther visible="true" x="340" y="620" width="30" height="30" />
+            </AppiumAUT>
+            """,
+            """
+            <AppiumAUT>
+              <XCUIElementTypeTextField visible="true" placeholderValue="标题" />
+              <XCUIElementTypeTextField visible="true" placeholderValue="标题" />
+            </AppiumAUT>
+            """,
+        ]
+    )
+
+    class FakeDriver:
+        def execute_script(self, script, payload):
+            taps.append((script, payload))
+
+        def find_elements(self, by, value):
+            raise AssertionError("remote XPath fallback should not run")
+
+    monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(sources))
+
+    assert activity._add_itinerary_segment(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 355, "y": 635})]
 
 
 def test_count_itinerary_editor_sections_supports_android_title_fields():
@@ -1642,9 +1759,7 @@ def test_fill_itinerary_editor_item_targets_title_subtitle_and_body(monkeypatch)
 
     assert events == [
         ("field", "标题", "Day2 主线骑行", 1),
-        "dismiss-keyboard",
         ("field", "副标题", "峡谷耐力挑战", 1),
-        "dismiss-keyboard",
         ("body", "完成主线路骑行并设置2个补给点。", 1),
         "dismiss-keyboard",
     ]

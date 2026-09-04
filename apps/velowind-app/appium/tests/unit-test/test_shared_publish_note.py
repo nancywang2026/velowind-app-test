@@ -64,24 +64,25 @@ def test_run_publish_note_case_keeps_note_when_cleanup_is_disabled(monkeypatch):
     ]
 
 
-def test_cleanup_does_not_override_success_when_pending_note_is_not_deletable(monkeypatch):
-    attachments = []
+def test_cleanup_retries_until_pending_note_is_deletable(monkeypatch):
+    reports = iter(
+        [
+            CleanupReport("note", [], []),
+            CleanupReport("note", ["测试 - 长白山"], []),
+        ]
+    )
     monkeypatch.setattr(
         shared_publish_note,
         "cleanup_published_note",
-        lambda *args: CleanupReport("note", [], []),
+        lambda *args: next(reports),
     )
-    monkeypatch.setattr(
-        shared_publish_note,
-        "attach_text",
-        lambda name, value: attachments.append((name, value)),
+    monkeypatch.setattr(shared_publish_note.time, "sleep", lambda seconds: None)
+
+    shared_publish_note.cleanup_published_note_after_success(
+        object(),
+        object(),
+        "测试 - 长白山",
+        timeout=1,
     )
 
-    shared_publish_note._cleanup_published_note_after_success(object(), object(), "测试 - 长白山")
-
-    assert attachments == [
-        (
-            "message-note-cleanup-result",
-            "Published note is not visible in the deletable My Notes list yet; title='测试 - 长白山'",
-        )
-    ]
+    assert list(reports) == []

@@ -8,6 +8,7 @@ from velowind_appium.cleanup import (
     cleanup_matching_visible_items,
     confirm_destructive_action,
     find_matching_visible_texts,
+    find_visible_truncated_title_variants,
 )
 
 
@@ -270,6 +271,112 @@ def test_cleanup_exact_visible_item_returns_immediately_when_title_is_absent(mon
 
     assert report == CleanupReport("note", [], [])
     assert events == ["测试 - 长白山"]
+
+
+def test_find_visible_truncated_title_variants_accepts_ios_two_line_truncation():
+    full_title = "测试 - 长白山真的有种让人瞬间安静下来的魔力"
+    page_source = """
+    <App>
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+        name="测试 - 长白山真的有种让人瞬间安静下来"
+        label="测试 - 长白山真的有种让人瞬间安静下来"
+        visible="true" />
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+        name="测试 - 长白山真的有种让人瞬间安静下来"
+        visible="false" />
+    </App>
+    """
+
+    assert find_visible_truncated_title_variants(page_source, full_title) == [
+        "测试 - 长白山真的有种让人瞬间安静下来"
+    ]
+
+
+def test_find_visible_truncated_title_variants_rejects_short_or_non_prefix_titles():
+    page_source = """
+    <App>
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="测试 - 长白山" visible="true" />
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="测试 - 长白山旧笔记标题" visible="true" />
+    </App>
+    """
+
+    assert find_visible_truncated_title_variants(
+        page_source,
+        "测试 - 长白山真的有种让人瞬间安静下来的魔力",
+    ) == []
+
+
+def test_tap_exact_visible_title_falls_back_to_rendered_ios_prefix(monkeypatch):
+    full_title = "测试 - 长白山真的有种让人瞬间安静下来的魔力"
+    rendered_title = "测试 - 长白山真的有种让人瞬间安静下来"
+    tapped = []
+
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = f"""
+        <App>
+          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+            name="{rendered_title}" visible="true" />
+        </App>
+        """
+
+        def find_elements(self, by, locator):
+            if f'name == "{rendered_title}"' in locator:
+                return [FakeElement()]
+            return []
+
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._tap_element_center",
+        lambda driver, element: tapped.append(element),
+    )
+
+    from velowind_appium.cleanup import _tap_exact_visible_title
+
+    assert _tap_exact_visible_title(FakeDriver(), full_title) is True
+    assert len(tapped) == 1
+
+
+def test_tap_exact_visible_title_waits_for_ios_list_loading(monkeypatch):
+    full_title = "测试 - 长白山真的有种让人瞬间安静下来的魔力"
+    rendered_title = "测试 - 长白山真的有种让人瞬间安静下来"
+    sources = iter(
+        [
+            '<App><XCUIElementTypeActivityIndicator visible="true" /></App>',
+            f"""
+            <App>
+              <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+                name="{rendered_title}" visible="true" />
+            </App>
+            """,
+        ]
+    )
+
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @property
+        def page_source(self):
+            return next(sources)
+
+        def find_elements(self, by, locator):
+            if f'name == "{rendered_title}"' in locator:
+                return [FakeElement()]
+            return []
+
+    monkeypatch.setattr("velowind_appium.cleanup.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("velowind_appium.cleanup._tap_element_center", lambda driver, element: True)
+
+    from velowind_appium.cleanup import _tap_exact_visible_title
+
+    assert _tap_exact_visible_title(FakeDriver(), full_title) is True
 
 
 def test_cleanup_matching_visible_items_stops_when_page_is_already_at_end(monkeypatch):

@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from velowind_appium.cleanup import cleanup_published_note
@@ -75,18 +76,25 @@ def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, ver
     if cleanup_config.delete_published_note_after_success:
         step(
             f"cleanup-published-note-{use_case_id}",
-            lambda: _cleanup_published_note_after_success(app_driver, app_config, draft.title),
+            lambda: cleanup_published_note_after_success(app_driver, app_config, draft.title),
         )
 
 
-def _cleanup_published_note_after_success(app_driver, app_config, title: str) -> None:
+def cleanup_published_note_after_success(
+    app_driver,
+    app_config,
+    title: str,
+    *,
+    timeout: float = 60,
+    retry_interval: float = 2,
+) -> None:
+    end_at = time.monotonic() + max(0, timeout)
     report = cleanup_published_note(app_driver, title, app_config)
-    assert report.deleted in ([], [title]), (
-        f"Expected cleanup to delete only the note created by this case, "
+    while not report.deleted and time.monotonic() < end_at:
+        time.sleep(max(0, retry_interval))
+        report = cleanup_published_note(app_driver, title, app_config)
+
+    assert report.deleted == [title], (
+        f"Expected cleanup to delete the note created by this case, "
         f"got deleted={report.deleted}, skipped={report.skipped}, title={title!r}"
     )
-    if not report.deleted:
-        attach_text(
-            "message-note-cleanup-result",
-            f"Published note is not visible in the deletable My Notes list yet; title={title!r}",
-        )

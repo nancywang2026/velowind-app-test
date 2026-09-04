@@ -411,6 +411,15 @@ def publish_message_note(
     timeout: int = 60,
     video_source_path: Path | None = None,
 ) -> str:
+    if draft.media_type == "video" and draft.media_source == "camera":
+        # A session-scoped driver can retain the source path recorded by a
+        # previous album-video case. A newly recorded camera clip has no such
+        # local source unless the caller explicitly supplies one, so never
+        # compare it against stale media from the preceding test.
+        try:
+            delattr(driver, "_publish_note_source_video_path")
+        except AttributeError:
+            pass
     effective_video_source_path = video_source_path
     if draft.media_type == "video" and draft.media_source != "camera":
         android_source = _pull_android_selected_video_source(driver, video_index=draft.video_index)
@@ -2497,8 +2506,15 @@ def _capture_loaded_published_note_video_frame(
     frame_index: int,
     max_attempts: int,
 ) -> Image.Image:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
     for _attempt in range(max_attempts):
-        if _published_note_video_loading_visible(_safe_page_source(driver)):
+        # Android hierarchy serialization is unusually expensive on the video
+        # detail page (several seconds per read). Loading has already been
+        # checked once before sampling, so avoid reading the same hierarchy
+        # before and after every Android screenshot. A blank-frame check still
+        # protects us from accepting an unrendered player surface.
+        if not is_android and _published_note_video_loading_visible(_safe_page_source(driver)):
             time.sleep(0.3)
             continue
         screenshot_png = driver.get_screenshot_as_png()
@@ -2507,7 +2523,11 @@ def _capture_loaded_published_note_video_frame(
             bounds,
             window_size=window_size,
         )
-        loading_after_capture = _published_note_video_loading_visible(_safe_page_source(driver))
+        loading_after_capture = (
+            False
+            if is_android
+            else _published_note_video_loading_visible(_safe_page_source(driver))
+        )
         if not loading_after_capture and _published_note_video_frame_has_rendered_content(frame):
             return frame
         time.sleep(0.3)
@@ -5164,6 +5184,9 @@ def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
 
 
 def _tap_bottom_action_element_center_at_index(driver: WebDriver, action_index: int) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        return _tap_android_bottom_action_by_source(driver, action_index, tap_count=True)
     candidates = _find_bottom_action_elements(driver)
     if len(candidates) <= action_index:
         return False
@@ -5246,16 +5269,26 @@ def _ios_preview_close_rect(page_source: str) -> tuple[int, int, int, int] | Non
     return max(right_candidates, key=lambda rect: (rect[0], -rect[1]))
 
 
-def _tap_android_bottom_action_by_source(driver: WebDriver, action_index: int) -> bool:
+def _tap_android_bottom_action_by_source(
+    driver: WebDriver,
+    action_index: int,
+    *,
+    tap_count: bool = False,
+) -> bool:
     page_source = _safe_page_source(driver)
     entries = _android_bottom_action_entries(page_source)
     if len(entries) <= action_index:
         return False
     _, left, top, right, bottom = entries[action_index]
+    height = max(1, bottom - top)
+    # React Native exposes the numeric label but not the Pressable as clickable
+    # on Android. The SVG action icon sits immediately to the label's left and
+    # is the reliable hit target. Keep the label center as the retry target.
+    x = (left + right) // 2 if tap_count else left - height // 2
     try:
         driver.execute_script(
             "mobile: tap",
-            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+            {"x": x, "y": (top + bottom) // 2},
         )
         return True
     except (AttributeError, WebDriverException):

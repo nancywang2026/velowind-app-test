@@ -21,6 +21,8 @@ NOTE_ACTION_TEXTS = ["删除", "确认删除"]
 ACTIVITY_ACTION_TEXTS = ["下架", "取消发布", "删除"]
 SESSION_ACTION_TEXTS = ["删除", "取消", "下架"]
 CONFIRM_TEXTS = ["确认删除", "确定", "确认", "删除", "下架", "取消发布"]
+MIN_TRUNCATED_TITLE_PREFIX_LENGTH = 12
+TRUNCATED_TITLE_WAIT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -165,24 +167,85 @@ def cleanup_exact_visible_item(
 def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
-    if platform == "android":
-        quoted = json.dumps(title, ensure_ascii=False)
-        locator = (AppiumBy.ANDROID_UIAUTOMATOR, f"new UiSelector().text({quoted})")
-    else:
-        escaped = title.replace("\\", "\\\\").replace('"', '\\"')
-        locator = (
-            AppiumBy.IOS_PREDICATE,
-            f'name == "{escaped}" OR label == "{escaped}" OR value == "{escaped}"',
-        )
-    try:
-        elements = driver.find_elements(*locator)
-    except (AttributeError, NoSuchElementException, WebDriverException):
-        return False
-    for element in elements:
-        if not _element_is_visible(element):
-            continue
-        return _tap_element_center(driver, element)
+    candidates = [title]
+
+    for candidate in candidates:
+        if platform == "android":
+            quoted = json.dumps(candidate, ensure_ascii=False)
+            locator = (AppiumBy.ANDROID_UIAUTOMATOR, f"new UiSelector().text({quoted})")
+        else:
+            escaped = candidate.replace("\\", "\\\\").replace('"', '\\"')
+            locator = (
+                AppiumBy.IOS_PREDICATE,
+                f'name == "{escaped}" OR label == "{escaped}" OR value == "{escaped}"',
+            )
+        try:
+            elements = driver.find_elements(*locator)
+        except (AttributeError, NoSuchElementException, WebDriverException):
+            elements = []
+        for element in elements:
+            if not _element_is_visible(element):
+                continue
+            _tap_element_center(driver, element)
+            return True
+
+    if platform == "ios":
+        end_at = time.monotonic() + TRUNCATED_TITLE_WAIT_SECONDS
+        while True:
+            for rendered_title in find_visible_truncated_title_variants(_safe_page_source(driver), title):
+                escaped = rendered_title.replace("\\", "\\\\").replace('"', '\\"')
+                locator = (
+                    AppiumBy.IOS_PREDICATE,
+                    f'name == "{escaped}" OR label == "{escaped}" OR value == "{escaped}"',
+                )
+                try:
+                    elements = driver.find_elements(*locator)
+                except (AttributeError, NoSuchElementException, WebDriverException):
+                    continue
+                for element in elements:
+                    if not _element_is_visible(element):
+                        continue
+                    _tap_element_center(driver, element)
+                    return True
+            if time.monotonic() >= end_at:
+                break
+            time.sleep(0.2)
     return False
+
+
+def find_visible_truncated_title_variants(page_source: str, title: str) -> list[str]:
+    """Return visible iOS title labels that are safe truncations of ``title``."""
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return []
+
+    variants: list[str] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        element_type = element.attrib.get("type", element.tag)
+        if element_type != "XCUIElementTypeStaticText" or element.attrib.get("visible") == "false":
+            continue
+        rendered_title = next(
+            (
+                element.attrib.get(attribute, "").strip()
+                for attribute in ("name", "label", "value")
+                if element.attrib.get(attribute, "").strip()
+            ),
+            "",
+        )
+        comparable_title = rendered_title.rstrip("…").rstrip()
+        if (
+            rendered_title in seen
+            or len(comparable_title) < MIN_TRUNCATED_TITLE_PREFIX_LENGTH
+            or len(comparable_title) >= len(title)
+            or not title.startswith(comparable_title)
+        ):
+            continue
+        seen.add(rendered_title)
+        variants.append(rendered_title)
+
+    return sorted(variants, key=lambda value: len(value.rstrip("…").rstrip()), reverse=True)
 
 
 def _cleanup_page_reached_end(page_source: str) -> bool:

@@ -182,7 +182,10 @@ def open_activity_publisher(
     _prepare_android_publish_entry(driver)
 
     while time.monotonic() < end_at:
-        if login_required_from_page_source(_safe_page_source(driver)):
+        # One iOS hierarchy serialization can take several seconds. Reuse the
+        # same snapshot for all decisions made in this iteration.
+        page_source = _safe_page_source(driver)
+        if login_required_from_page_source(page_source):
             if ios_config is None:
                 raise AssertionError("Publish flow reached a login page but no iOS config was provided for re-login")
             ensure_logged_in_if_needed(driver, ios_config)
@@ -190,10 +193,10 @@ def open_activity_publisher(
             time.sleep(1)
             continue
 
-        if activity_form_is_visible(_safe_page_source(driver)):
+        if activity_form_is_visible(page_source):
             return
 
-        if _publish_sheet_visible(driver)() and _tap_activity_type_if_present(driver):
+        if _publish_sheet_visible_from_source(page_source) and _tap_activity_type_if_present(driver):
             if _wait_until(lambda: activity_form_is_visible(_safe_page_source(driver)), timeout=10):
                 return
 
@@ -230,7 +233,10 @@ def _prepare_android_publish_entry(driver: WebDriver) -> None:
 
 
 def fill_activity_form(driver: WebDriver, draft: ActivityDraft, timeout: int = 60) -> None:
-    wait_for_activity_form(driver, timeout=timeout)
+    # open_activity_publisher already verified this state. Prefer one hierarchy
+    # snapshot over probing several optional IDs and text locators again.
+    if not activity_form_is_visible(_safe_page_source(driver)):
+        wait_for_activity_form(driver, timeout=timeout)
 
     with _activity_profile("upload-image"):
         _upload_activity_image(driver, draft)
@@ -371,10 +377,13 @@ def _tap_publish_trigger_and_verify(driver: WebDriver, tap_action) -> bool:
 
 def _publish_sheet_visible(driver):
     def _check() -> bool:
-        source = _safe_page_source(driver)
-        return any(text in source for text in PUBLISH_SHEET_TEXTS)
+        return _publish_sheet_visible_from_source(_safe_page_source(driver))
 
     return _check
+
+
+def _publish_sheet_visible_from_source(page_source: str) -> bool:
+    return any(text in page_source for text in PUBLISH_SHEET_TEXTS)
 
 
 def _tap_activity_type_if_present(driver: WebDriver) -> bool:
@@ -448,8 +457,6 @@ def _fill_itinerary(driver: WebDriver, itinerary: list[ActivityItineraryItem]) -
     if opened:
         for index, item in enumerate(itinerary):
             if index > 0:
-                with _activity_profile(f"itinerary-{index}-dismiss-before-add"):
-                    _dismiss_editor_keyboard_fast(driver)
                 with _activity_profile(f"itinerary-{index}-add-segment"):
                     added = _add_itinerary_segment(driver)
                 if not added:
@@ -960,7 +967,7 @@ def _visible_exact_text_in_page_source(page_source: str, text: str) -> bool:
             continue
         if any(
             html.unescape(element.attrib.get(attribute, "")).strip() == text
-            for attribute in ("text", "name", "label", "value", "hint")
+            for attribute in ("text", "name", "label", "value", "hint", "placeholderValue")
         ):
             return True
     return False
@@ -1632,12 +1639,8 @@ def _fill_editor_title(driver: WebDriver, title: str) -> None:
 def _fill_itinerary_editor_item(driver: WebDriver, index: int, item: ActivityItineraryItem) -> None:
     with _activity_profile(f"itinerary-{index}-fill-title"):
         _fill_indexed_editor_text_field(driver, "标题", item.title, index)
-    with _activity_profile(f"itinerary-{index}-dismiss-after-title"):
-        _dismiss_editor_keyboard_fast(driver)
     with _activity_profile(f"itinerary-{index}-fill-subtitle"):
         _fill_indexed_editor_text_field(driver, "副标题", item.subtitle, index)
-    with _activity_profile(f"itinerary-{index}-dismiss-after-subtitle"):
-        _dismiss_editor_keyboard_fast(driver)
     with _activity_profile(f"itinerary-{index}-fill-body"):
         _fill_indexed_editor_text_view(driver, item.body, index)
     with _activity_profile(f"itinerary-{index}-dismiss-after-body"):
@@ -1683,9 +1686,16 @@ def _find_indexed_visible_editor_element(driver: WebDriver, xpath: str | list[st
         elements = []
         for candidate_xpath in xpaths:
             try:
-                elements.extend(driver.find_elements(AppiumBy.XPATH, candidate_xpath))
+                candidate_elements = driver.find_elements(AppiumBy.XPATH, candidate_xpath)
             except WebDriverException:
                 continue
+            # Preserve document order before filtering visibility. After the
+            # editor scrolls, earlier itinerary sections remain in the AX tree
+            # as invisible nodes; filtering first changes the global index and
+            # makes the visible second section look like index zero.
+            if len(candidate_elements) > index and _element_is_visible(candidate_elements[index]):
+                return candidate_elements[index]
+            elements.extend(candidate_elements)
         visible_elements = sorted(
             [element for element in elements if _element_is_visible(element)],
             key=lambda element: (element.rect.get("y", 0), element.rect.get("x", 0)),
@@ -1708,7 +1718,11 @@ def _element_is_visible(element) -> bool:
 
 
 def _add_itinerary_segment(driver: WebDriver) -> bool:
-    before_count = _count_itinerary_editor_sections(_safe_page_source(driver))
+    page_source = _safe_page_source(driver)
+    before_count = _count_itinerary_editor_sections(page_source)
+    if _tap_add_itinerary_segment_from_source(driver, page_source):
+        if _wait_until(lambda: _count_itinerary_editor_sections(_safe_page_source(driver)) > before_count, timeout=4):
+            return True
     for _ in range(4):
         button = _find_add_itinerary_segment_button(driver)
         if button is None:
@@ -1719,6 +1733,47 @@ def _add_itinerary_segment(driver: WebDriver) -> bool:
         if _wait_until(lambda: _count_itinerary_editor_sections(_safe_page_source(driver)) > before_count, timeout=4):
             return True
     return False
+
+
+def _tap_add_itinerary_segment_from_source(driver: WebDriver, page_source: str) -> bool:
+    """Tap the same last visible iOS 30x30 add control without a remote XPath query."""
+    if "<XCUIElementType" not in page_source:
+        return False
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return False
+
+    candidates = []
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "XCUIElementTypeOther":
+            continue
+        if element.attrib.get("visible") != "true":
+            continue
+        rect = _ios_rect_from_attrs(element.attrib)
+        if rect is None:
+            continue
+        try:
+            width = float(rect["width"])
+            height = float(rect["height"])
+            x = float(rect["x"])
+            y = float(rect["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if round(width) == 30 and round(height) == 30:
+            candidates.append((y, x, width, height))
+    if not candidates:
+        return False
+
+    y, x, width, height = max(candidates)
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {"x": int(x + width / 2), "y": int(y + height / 2)},
+        )
+        return True
+    except (AttributeError, WebDriverException):
+        return False
 
 
 def _find_add_itinerary_segment_button(driver: WebDriver):
@@ -1824,7 +1879,7 @@ def _normalize_string_list(raw_value) -> list[str]:
 
 def _fill_advanced_settings(driver: WebDriver, draft: ActivityDraft) -> None:
     advanced_values = [
-        (["参考时长", "活动时长", "时长"], draft.reference_duration, ["2天1晚", "例如：2天1晚"]),
+        (["参考时长", "活动时长", "时长"], draft.reference_duration, ["例如：2天1晚", "2天1晚"]),
         (["总里程", "里程"], draft.total_mileage, ["例如：68km"]),
         (["最高海拔", "海拔"], draft.max_altitude, ["例如：812m"]),
         (["累计爬升", "爬升"], draft.elevation_gain, ["例如：1260m"]),
@@ -1839,8 +1894,9 @@ def _fill_advanced_settings(driver: WebDriver, draft: ActivityDraft) -> None:
         raise AssertionError("Unable to open activity advanced settings")
 
     for keywords, value, placeholders in advanced_values:
-        if not _fill_advanced_field(driver, keywords, value, placeholders):
-            raise AssertionError(f"Unable to fill advanced activity field: {keywords[0]}")
+        with _activity_profile(f"advanced-field-{keywords[0]}"):
+            if not _fill_advanced_field(driver, keywords, value, placeholders):
+                raise AssertionError(f"Unable to fill advanced activity field: {keywords[0]}")
 
 
 def _fill_advanced_field(driver: WebDriver, keywords: list[str], value: str, placeholders: list[str] | None = None) -> bool:
@@ -1857,12 +1913,32 @@ def _fill_advanced_field(driver: WebDriver, keywords: list[str], value: str, pla
     return False
 
 
-def _fill_input_by_placeholder(driver: WebDriver, placeholder: str, value: str) -> bool:
-    xpaths = [
-        f'//XCUIElementTypeTextField[@placeholderValue="{placeholder}" or @value="{placeholder}"]',
-        f'//XCUIElementTypeTextView[@placeholderValue="{placeholder}" or @value="{placeholder}"]',
-        f'//android.widget.EditText[@hint="{placeholder}" or @text="{placeholder}"]',
-    ]
+def _fill_input_by_placeholder(
+    driver: WebDriver,
+    placeholder: str,
+    value: str,
+    *,
+    page_source: str | None = None,
+) -> bool:
+    if page_source is not None and placeholder not in html.unescape(page_source):
+        return False
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    platform = str(capabilities.get("platformName", "")).lower()
+    if platform == "ios" or page_source is not None and "<XCUIElementType" in page_source:
+        xpaths = [
+            (
+                f'//XCUIElementTypeTextField[@placeholderValue="{placeholder}" or @value="{placeholder}"]'
+                f' | //XCUIElementTypeTextView[@placeholderValue="{placeholder}" or @value="{placeholder}"]'
+            ),
+        ]
+    elif platform == "android" or page_source is not None and "android.widget" in page_source:
+        xpaths = [f'//android.widget.EditText[@hint="{placeholder}" or @text="{placeholder}"]']
+    else:
+        xpaths = [
+            f'//XCUIElementTypeTextField[@placeholderValue="{placeholder}" or @value="{placeholder}"]',
+            f'//XCUIElementTypeTextView[@placeholderValue="{placeholder}" or @value="{placeholder}"]',
+            f'//android.widget.EditText[@hint="{placeholder}" or @text="{placeholder}"]',
+        ]
     for xpath in xpaths:
         try:
             element = driver.find_element(AppiumBy.XPATH, xpath)
@@ -1881,15 +1957,21 @@ def _open_advanced_settings(driver: WebDriver, advanced_values: list[tuple[list[
         page_source = _safe_page_source(driver)
         if _advanced_field_visible(page_source, advanced_values):
             return True
-        for text in ["高级设置", "更多信息", "更多设置", "展开更多", "补充更多信息"]:
-            if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
-                time.sleep(0.5)
-                if _advanced_field_visible(_safe_page_source(driver), advanced_values):
-                    return True
         if _tap_advanced_settings_row(driver, page_source=page_source):
-            time.sleep(0.5)
-            if _advanced_field_visible(_safe_page_source(driver), advanced_values):
+            if _wait_until(
+                lambda: _advanced_field_visible(_safe_page_source(driver), advanced_values),
+                timeout=3,
+            ):
                 return True
+        for text in ["高级设置", "更多信息", "更多设置", "展开更多", "补充更多信息"]:
+            if text not in page_source:
+                continue
+            if tap_text_if_present(driver, text, timeout=FAST_OPTIONAL_TAP_TIMEOUT):
+                if _wait_until(
+                    lambda: _advanced_field_visible(_safe_page_source(driver), advanced_values),
+                    timeout=3,
+                ):
+                    return True
         swipe_vertical(driver, direction="up")
         time.sleep(0.3)
     return _advanced_field_visible(_safe_page_source(driver), advanced_values)
@@ -1927,6 +2009,8 @@ def _ios_advanced_field_visible(page_source: str, advanced_values: list[tuple]) 
 def _tap_advanced_settings_row(driver: WebDriver, *, page_source: str | None = None) -> bool:
     page_source = page_source if page_source is not None else _safe_page_source(driver)
     if "<XCUIElementType" in page_source:
+        if _tap_ios_advanced_settings_row_from_source(driver, page_source):
+            return True
         return _tap_ios_advanced_settings_row(driver)
 
     for text in ["高级选项", "高级设置"]:
@@ -1948,6 +2032,45 @@ def _tap_advanced_settings_row(driver: WebDriver, *, page_source: str | None = N
         except (NoSuchElementException, WebDriverException, AttributeError, KeyError, TypeError):
             continue
     return False
+
+
+def _tap_ios_advanced_settings_row_from_source(driver: WebDriver, page_source: str) -> bool:
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return False
+    candidates = []
+    for element in root.iter():
+        if element.attrib.get("visible") != "true":
+            continue
+        if not any(text == _element_text(element).strip() for text in ("高级选项", "高级设置")):
+            continue
+        rect = _ios_rect_from_attrs(element.attrib)
+        if rect is None:
+            continue
+        try:
+            width = float(rect["width"])
+            height = float(rect["height"])
+            y = float(rect["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if width > 0 and 0 < height <= 120 and y >= 100:
+            candidates.append((width, height, y, rect))
+    if not candidates:
+        return False
+    _, _, _, rect = max(candidates, key=lambda item: (item[0], item[1]))
+    try:
+        width = float(rect["width"])
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(float(rect["x"]) + width - min(28, max(12, width * 0.08))),
+                "y": int(float(rect["y"]) + float(rect["height"]) / 2),
+            },
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, ValueError, WebDriverException):
+        return False
 
 
 def _tap_ios_advanced_settings_row(driver: WebDriver) -> bool:

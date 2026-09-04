@@ -5,10 +5,12 @@ from pathlib import Path
 
 import yaml
 
+from velowind_appium.cleanup_config import load_cleanup_config
 from velowind_appium.modules import load_message_note_draft
 from velowind_appium.reporting import attach_text
 from velowind_appium.session import ensure_logged_in_for_publish_entry
 from velowind_appium.modules import publish_message_note
+from tests.shared_publish_note import cleanup_published_note_after_success
 
 
 TESTDATA_PATH = Path(__file__).resolve().parent / "testdata" / "xiaodai_video_notes.yaml"
@@ -107,3 +109,10 @@ def run_xiaodai_video_upload_case(app_driver, app_config, step, use_case_id: str
     assert any(token in success_signal for token in SUCCESS_TOKENS), (
         f"Expected 小黛 video case {use_case_id} to end in a success/review state, got: {success_signal}"
     )
+
+    cleanup_config = load_cleanup_config()
+    if cleanup_config.delete_published_note_after_success:
+        step(
+            f"cleanup-published-note-{use_case_id}",
+            lambda: cleanup_published_note_after_success(app_driver, app_config, draft.title),
+        )

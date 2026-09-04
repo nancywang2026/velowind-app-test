@@ -75,6 +75,39 @@ def test_publish_message_note_forwards_observed_video_progress_signal(monkeypatc
     assert observed_signals == ["视频上传中"]
 
 
+def test_camera_video_publish_does_not_validate_against_previous_album_video(monkeypatch, tmp_path: Path):
+    stale_source = tmp_path / "previous-album-video.mp4"
+    stale_source.write_bytes(b"stale")
+    validation_calls = []
+
+    class FakeDriver:
+        def __init__(self):
+            self._publish_note_source_video_path = str(stale_source)
+
+    driver = FakeDriver()
+    monkeypatch.setattr(message_detail, "open_message_note_publisher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail, "fill_message_note_form", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail, "submit_message_note", lambda *args, **kwargs: "待审核")
+    monkeypatch.setattr(
+        message_detail,
+        "_validate_published_note_video_matches_source",
+        lambda *args, **kwargs: validation_calls.append(kwargs),
+    )
+
+    draft = MessageNoteDraft(
+        title="现场录制",
+        body="正文",
+        topics=[],
+        location="",
+        media_type="video",
+        media_source="camera",
+    )
+
+    assert message_detail.publish_message_note(driver, draft) == "待审核"
+    assert not hasattr(driver, "_publish_note_source_video_path")
+    assert validation_calls == []
+
+
 def test_load_message_note_draft_reads_video_media_source(tmp_path: Path):
     testdata = tmp_path / "publish_notes.yaml"
     testdata.write_text(
@@ -601,6 +634,34 @@ def test_capture_published_note_video_frames_retries_until_frame_is_loaded(monke
     assert len(frames) == 1
     assert frames[0].getpixel((50, 50)) == (255, 0, 0)
     assert len(paths) == 1
+
+
+def test_android_video_frame_capture_does_not_serialize_detail_hierarchy(monkeypatch):
+    screenshot = BytesIO()
+    Image.new("RGB", (100, 100), "red").save(screenshot, format="PNG")
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @property
+        def page_source(self):
+            raise AssertionError("Android frame sampling must not serialize the detail hierarchy")
+
+        @staticmethod
+        def get_screenshot_as_png():
+            return screenshot.getvalue()
+
+    monkeypatch.setattr(message_detail.time, "sleep", lambda _seconds: None)
+
+    frame = message_detail._capture_loaded_published_note_video_frame(
+        FakeDriver(),
+        type("Bounds", (), {"x": 0, "y": 0, "width": 100, "height": 100})(),
+        window_size=(100, 100),
+        frame_index=1,
+        max_attempts=2,
+    )
+
+    assert frame.getpixel((50, 50)) == (255, 0, 0)
 
 
 def test_capture_published_note_video_frame_fails_when_loading_never_clears(monkeypatch):
@@ -1853,7 +1914,7 @@ def test_favorite_note_toggles_second_bottom_action_and_waits_for_count_change(m
     assert events == [("tap-bottom-action", 1)]
 
 
-def test_android_bottom_action_taps_count_center_by_index():
+def test_android_bottom_action_taps_icon_center_by_index():
     taps = []
 
     class FakeDriver:
@@ -1874,7 +1935,28 @@ def test_android_bottom_action_taps_count_center_by_index():
             taps.append((script, payload))
 
     assert message_detail._tap_bottom_action_at_index(FakeDriver(), 2) is True
-    assert taps == [("mobile: tap", {"x": 1011, "y": 2299})]
+    assert taps == [("mobile: tap", {"x": 952, "y": 2299})]
+
+
+def test_android_bottom_action_retry_taps_count_center_by_index():
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        page_source = """
+        <hierarchy>
+          <android.widget.TextView text="0" bounds="[624,2275][694,2323]" />
+          <android.widget.TextView text="1" bounds="[800,2275][871,2323]" />
+          <android.widget.TextView text="2" bounds="[976,2275][1047,2323]" />
+        </hierarchy>
+        """
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    assert message_detail._tap_bottom_action_element_center_at_index(FakeDriver(), 0) is True
+    assert taps == [("mobile: tap", {"x": 659, "y": 2299})]
 
 
 def test_ios_bottom_action_taps_icon_center_by_index_from_source():
