@@ -169,6 +169,7 @@ def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
     platform = str(capabilities.get("platformName", "")).lower()
     candidates = [title]
 
+    exact_title_found = False
     for candidate in candidates:
         if platform == "android":
             quoted = json.dumps(candidate, ensure_ascii=False)
@@ -183,6 +184,7 @@ def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
             elements = driver.find_elements(*locator)
         except (AttributeError, NoSuchElementException, WebDriverException):
             elements = []
+        exact_title_found = exact_title_found or bool(elements)
         for element in elements:
             if not _element_is_visible(element):
                 continue
@@ -190,6 +192,29 @@ def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
             return True
 
     if platform == "ios":
+        # React Native can expose the title in page source as an exact visible
+        # StaticText while the native predicate query still returns no match.
+        # Stay on the current viewport and use an exact XPath fallback before
+        # considering rendered truncation; newly published notes are at the top.
+        escaped_title = _xpath_literal(title)
+        exact_xpath = (
+            '//*[@visible="true" and '
+            f'(@name={escaped_title} or @label={escaped_title} or @value={escaped_title})]'
+        )
+        try:
+            exact_elements = driver.find_elements(AppiumBy.XPATH, exact_xpath)
+        except (AttributeError, NoSuchElementException, WebDriverException):
+            exact_elements = []
+        for element in exact_elements:
+            if not _element_is_visible(element):
+                continue
+            _tap_element_center(driver, element)
+            return True
+
+        # An exact but off-screen match needs scrolling, not a ten-second wait
+        # for a truncated rendering of the same title.
+        if exact_title_found:
+            return False
         end_at = time.monotonic() + TRUNCATED_TITLE_WAIT_SECONDS
         while True:
             for rendered_title in find_visible_truncated_title_variants(_safe_page_source(driver), title):

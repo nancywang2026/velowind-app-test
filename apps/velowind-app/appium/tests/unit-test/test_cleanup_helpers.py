@@ -261,6 +261,10 @@ def test_cleanup_exact_visible_item_returns_immediately_when_title_is_absent(mon
         "velowind_appium.cleanup.tap_first_available_text",
         lambda *args: (_ for _ in ()).throw(AssertionError("delete actions must not run")),
     )
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._scroll_page",
+        lambda *args: (_ for _ in ()).throw(AssertionError("newly published notes must be checked at the list top")),
+    )
 
     report = cleanup_exact_visible_item(
         object(),
@@ -290,6 +294,34 @@ def test_find_visible_truncated_title_variants_accepts_ios_two_line_truncation()
     assert find_visible_truncated_title_variants(page_source, full_title) == [
         "测试 - 长白山真的有种让人瞬间安静下来"
     ]
+
+
+def test_tap_exact_visible_title_uses_exact_ios_xpath_without_scrolling(monkeypatch):
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_elements(self, by, value):
+            if by == "-ios predicate string":
+                return []
+            assert by == "xpath"
+            assert '@name="测试 - 长白山现场拍摄视频记录"' in value
+            return [object()]
+
+    events = []
+    monkeypatch.setattr("velowind_appium.cleanup._element_is_visible", lambda element: True)
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._tap_element_center",
+        lambda driver, element: events.append("tap"),
+    )
+    monkeypatch.setattr(
+        "velowind_appium.cleanup.swipe_vertical",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not scroll")),
+    )
+
+    from velowind_appium.cleanup import _tap_exact_visible_title
+
+    assert _tap_exact_visible_title(FakeDriver(), "测试 - 长白山现场拍摄视频记录") is True
+    assert events == ["tap"]
 
 
 def test_find_visible_truncated_title_variants_rejects_short_or_non_prefix_titles():

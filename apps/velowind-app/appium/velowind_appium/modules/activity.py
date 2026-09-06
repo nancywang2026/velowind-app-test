@@ -172,7 +172,9 @@ def open_activity_publisher(
     timeout: int = 30,
 ) -> None:
     end_at = time.monotonic() + timeout
-    if ios_config is not None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if ios_config is not None and not is_android:
         try:
             from velowind_appium.session import ensure_logged_in_for_publish_entry
 
