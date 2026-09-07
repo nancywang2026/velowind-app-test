@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import html
 import os
 from pathlib import Path
@@ -30,6 +30,7 @@ from velowind_appium.actions import (
     xpath as locator_xpath,
 )
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
+from velowind_appium.android_media_sync import prepare_video_fixture
 from velowind_appium.config import IosAppiumConfig
 from velowind_appium.image_validation import (
     compare_images_for_publish_note,
@@ -281,6 +282,7 @@ class MessageNoteDraft:
     media_source: str = "library"
     camera_record_seconds: float | None = None
     video_index: int = 1
+    android_video_date: tuple[int, ...] | None = None
     source_video: str = ""
     caption_image: str = ""
 
@@ -421,7 +423,18 @@ def publish_message_note(
         except AttributeError:
             pass
     effective_video_source_path = video_source_path
-    if draft.media_type == "video" and draft.media_source != "camera":
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if (
+        draft.media_type == "video" and draft.media_source != "camera"
+        and video_source_path is not None
+        and str(capabilities.get("platformName", "")).lower() == "android"
+    ):
+        udid = str(capabilities.get("appium:udid") or capabilities.get("udid") or os.environ.get("VW_ANDROID_UDID", ""))
+        picker_date = prepare_video_fixture(udid=udid, source_path=video_source_path)
+        draft = replace(draft, album=None, video_index=1, android_video_date=picker_date)
+    # An explicit fixture is the expected content. MediaStore ordering is only
+    # a fallback for cases without one; it must not replace the caller's source.
+    if draft.media_type == "video" and draft.media_source != "camera" and video_source_path is None:
         android_source = _pull_android_selected_video_source(driver, video_index=draft.video_index)
         if android_source is not None:
             effective_video_source_path = android_source
@@ -1996,6 +2009,9 @@ def _tap_texts_now(driver: WebDriver, texts: list[str]) -> bool:
 def _fill_note_title(driver: WebDriver, title: str) -> None:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if is_android:
+        # Reset per case so a failed read cannot reuse the previous note title.
+        setattr(driver, "_android_note_submitted_title", (title, title))
     if not is_android:
         element = wait_for_first(
             driver,
@@ -2012,6 +2028,8 @@ def _fill_note_title(driver: WebDriver, title: str) -> None:
     for attempt in range(attempts):
         for keyword in TITLE_FIELD_KEYWORDS:
             if _fill_input_near_label(driver, keyword, title):
+                if is_android:
+                    _remember_android_note_submitted_title(driver, title)
                 return
         if is_android and attempt + 1 < attempts:
             wait_for_message_note_form(driver, timeout=5)
@@ -2027,6 +2045,23 @@ def _fill_note_title(driver: WebDriver, title: str) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to locate the note title input")
+
+
+def _remember_android_note_submitted_title(driver: WebDriver, requested_title: str) -> None:
+    """Remember native input truncation for exact post-publish cleanup."""
+    try:
+        root = ElementTree.fromstring(_safe_page_source(driver))
+    except ElementTree.ParseError:
+        return
+    for element in root.iter("android.widget.EditText"):
+        if element.get("resource-id") != "note-title-input" and not any(
+            keyword in element.get("hint", "") for keyword in TITLE_FIELD_KEYWORDS
+        ):
+            continue
+        actual_title = element.get("text", "").strip()
+        if actual_title and requested_title.startswith(actual_title):
+            setattr(driver, "_android_note_submitted_title", (requested_title, actual_title))
+        return
 
 
 def _stabilize_android_note_form_after_upload(driver: WebDriver, timeout: int) -> None:
@@ -2166,6 +2201,7 @@ def _upload_note_media(driver: WebDriver, draft: MessageNoteDraft) -> None:
                 driver,
                 album_name=draft.album,
                 video_index=draft.video_index,
+                **({"source_date": draft.android_video_date} if draft.android_video_date else {}),
             ):
                 raise AssertionError(
                     "Video library opened but no selectable video was found. "

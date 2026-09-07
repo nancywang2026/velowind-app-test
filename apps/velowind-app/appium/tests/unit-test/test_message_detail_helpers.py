@@ -50,6 +50,46 @@ def test_publish_message_note_validates_video_only_when_media_type_is_video(monk
     assert calls == [source_video, "image"]
 
 
+@pytest.mark.parametrize("explicit_source", [True, False])
+def test_android_video_publish_preserves_explicit_source(monkeypatch, tmp_path: Path, explicit_source):
+    monkeypatch.setattr(message_detail, "prepare_video_fixture", lambda **kwargs: (2026, 4, 24, 14, 28, 57))
+    source_video = tmp_path / "fixture.mp4"
+    device_video = tmp_path / "device.mp4"
+    source_video.write_bytes(b"expected video")
+    device_video.write_bytes(b"different video")
+    pull_calls = []
+    validation_calls = []
+    filled_drafts = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        _publish_note_source_video_path = str(device_video)
+
+    monkeypatch.setattr(message_detail, "open_message_note_publisher", lambda *args, **kwargs: None)
+    monkeypatch.setattr(message_detail, "fill_message_note_form", lambda driver, note, **kwargs: filled_drafts.append(note))
+    monkeypatch.setattr(message_detail, "submit_message_note", lambda *args, **kwargs: "待审核")
+    monkeypatch.setattr(
+        message_detail,
+        "_pull_android_selected_video_source",
+        lambda *args, **kwargs: pull_calls.append(kwargs["video_index"]) or device_video,
+    )
+    monkeypatch.setattr(
+        message_detail,
+        "_validate_published_note_video_matches_source",
+        lambda *args, **kwargs: validation_calls.append(kwargs["source_path"]),
+    )
+    draft = MessageNoteDraft(title="视频", body="正文", topics=[], location="", media_type="video")
+
+    message_detail.publish_message_note(
+        FakeDriver(), draft, video_source_path=source_video if explicit_source else None,
+    )
+
+    assert pull_calls == ([] if explicit_source else [1])
+    assert validation_calls == [source_video if explicit_source else device_video]
+    assert filled_drafts[0].android_video_date == ((2026, 4, 24, 14, 28, 57) if explicit_source else None)
+    assert draft.android_video_date is None
+
+
 def test_publish_message_note_forwards_observed_video_progress_signal(monkeypatch, tmp_path: Path):
     source_video = tmp_path / "source.mp4"
     source_video.write_bytes(b"video")

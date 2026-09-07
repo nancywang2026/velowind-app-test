@@ -152,6 +152,8 @@ def cleanup_exact_visible_item(
     action_texts: list[str],
 ) -> CleanupReport:
     """Delete a just-created item only when its exact title is visible at the list top."""
+    if item_type == "note" and _is_android(driver):
+        return _cleanup_exact_android_note(driver, item_type=item_type, title=title, action_texts=action_texts)
     if not _tap_exact_visible_title(driver, title):
         return CleanupReport(item_type=item_type, deleted=[], skipped=[])
     time.sleep(0.5)
@@ -162,6 +164,70 @@ def cleanup_exact_visible_item(
     if not confirm_destructive_action(driver):
         return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
     return CleanupReport(item_type=item_type, deleted=[title], skipped=[])
+
+
+def _is_android(driver) -> bool:
+    return str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android"
+
+
+def _cleanup_exact_android_note(driver, *, item_type, title, action_texts) -> CleanupReport:
+    deadline = time.monotonic() + 10
+    opened = False
+    while not opened:
+        # Scope to note cards: a transitioning screen can still expose the
+        # previous detail's title in the same Android hierarchy.
+        for rendered in _visible_text_values(_safe_page_source(driver)):
+            prefix = rendered.rstrip("…").rstrip()
+            if rendered != title and not (
+                len(prefix) >= MIN_TRUNCATED_TITLE_PREFIX_LENGTH
+                and len(prefix) < len(title) and title.startswith(prefix)
+            ):
+                continue
+            locator = (
+                '//*[starts-with(@resource-id, "post-home-feed-note-card-")]'
+                f'//*[@text={_xpath_literal(rendered)}]'
+            )
+            for element in driver.find_elements(AppiumBy.XPATH, locator):
+                if _element_is_visible(element):
+                    _tap_element_center(driver, element)
+                    opened = True
+                    break
+            if opened:
+                break
+        if opened or time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+    if not opened:
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[])
+    # A prefix is only sufficient to open a candidate, never to delete it.
+    deadline = time.monotonic() + 8
+    detail_title = f'//*[@resource-id="post-detail-page"]//*[@text={_xpath_literal(title)}]'
+    while not any(_element_is_visible(e) for e in driver.find_elements(AppiumBy.XPATH, detail_title)):
+        if time.monotonic() >= deadline:
+            safe_back(driver)
+            return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+        time.sleep(0.2)
+    if not _tap_android_note_more(driver) or not tap_first_available_text(driver, action_texts):
+        safe_back(driver)
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    if not tap_first_available_text(driver, CONFIRM_TEXTS):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    deadline = time.monotonic() + 8
+    while driver.find_elements(AppiumBy.ID, "post-detail-page"):
+        if time.monotonic() >= deadline:
+            return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+        time.sleep(0.2)
+    return CleanupReport(item_type=item_type, deleted=[title], skipped=[])
+
+
+def _tap_android_note_more(driver) -> bool:
+    # The header has a stable testID; its final direct child is the menu icon.
+    locator = '//*[@resource-id="post-detail-top-nav-subpage-header"]/android.view.ViewGroup[last()]'
+    for element in driver.find_elements(AppiumBy.XPATH, locator):
+        if _element_is_visible(element):
+            _tap_element_center(driver, element)
+            return True
+    return False
 
 
 def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
@@ -335,7 +401,10 @@ def _delete_candidate(driver: WebDriver, text: str, action_texts: list[str]) -> 
         return False
     time.sleep(0.5)
     if not tap_first_available_text(driver, ["更多", "...", "…"]):
-        _tap_ios_top_right_more(driver)
+        if _is_android(driver):
+            _tap_android_note_more(driver)
+        else:
+            _tap_ios_top_right_more(driver)
     if not tap_first_available_text(driver, action_texts):
         return False
     return confirm_destructive_action(driver)

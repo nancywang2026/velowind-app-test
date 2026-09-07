@@ -484,3 +484,21 @@ def test_choose_video_from_library_fails_when_no_video_candidate_was_tapped(monk
     monkeypatch.setattr(photo_picker, "_wait_for_ios_video_preview", lambda driver, timeout: True)
 
     assert photo_picker.choose_video_from_library(object(), video_index=10) is False
+
+
+def test_android_xiaodai_repeated_runs_use_distinct_titles(monkeypatch, tmp_path):
+    draft = modules.MessageNoteDraft(title="Velowind｜解锁轻松骑行状态 🚲", body="正文", topics=[], location="", media_type="video")
+    titles = []
+    class Driver:
+        capabilities = {"platformName": "Android"}
+    monkeypatch.setattr(xiaodai_video_upload, "load_message_note_draft", lambda *a, **k: draft)
+    monkeypatch.setattr(xiaodai_video_upload, "xiaodai_source_video_path", lambda *a: tmp_path / "video.mp4")
+    monkeypatch.setattr(xiaodai_video_upload, "ensure_logged_in_for_publish_entry", lambda *a: None)
+    monkeypatch.setattr(xiaodai_video_upload, "publish_message_note", lambda driver, note, **k: titles.append(note.title) or "已发布")
+    monkeypatch.setattr(xiaodai_video_upload, "attach_text", lambda *a, **k: None)
+    monkeypatch.setattr(xiaodai_video_upload, "load_cleanup_config", lambda: SimpleNamespace(delete_published_note_after_success=False))
+    for _ in range(2):
+        xiaodai_video_upload.run_xiaodai_video_upload_case(Driver(), object(), lambda name, action: action(), "xiaodai-0424")
+    assert titles[0] != titles[1]
+    assert all(len(title) <= 20 for title in titles)
+    assert draft.title == "Velowind｜解锁轻松骑行状态 🚲"

@@ -1499,3 +1499,24 @@ def test_tap_android_cropper_confirm_fallbacks_uses_adb_after_appium_tap(monkeyp
     ) is True
     assert taps == [(0.735, 0.9375)]
     assert adb_taps == [(0.735, 0.9375)]
+
+
+def test_android_video_candidate_selects_fixture_date_instead_of_first(monkeypatch):
+    class Card:
+        def __init__(self, description, x):
+            self.description = description
+            self.rect = {"x": x, "y": 100, "width": 100, "height": 100}
+        def get_attribute(self, name):
+            return self.description
+    class Driver:
+        def find_elements(self, *args):
+            return [Card("视频，2026年9月4日 10:58:32", 0), Card("视频，2026年9月7日 14:30:5", 100)]
+    tapped = []
+    monkeypatch.setattr(photo_picker, "_adb_tap", lambda driver, **kw: tapped.append(kw) or True)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda *a, **kw: True)
+    assert photo_picker._tap_android_photo_picker_video_candidate(Driver(), source_date=(2026, 9, 7, 14, 30, 5))
+    assert tapped == [{"x": 150, "y": 150}]
+    import pytest
+    with pytest.raises(AssertionError, match="Expected exactly one Android video"):
+        photo_picker._tap_android_photo_picker_video_candidate(Driver(), source_date=(2026, 9, 7, 14, 31, 5))
+    assert len(tapped) == 1

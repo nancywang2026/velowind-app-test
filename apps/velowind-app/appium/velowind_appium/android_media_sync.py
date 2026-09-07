@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -64,6 +66,53 @@ def _adb(*args: str, udid: str) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=60,
     )
+
+
+def prepare_video_fixture(*, udid: str, source_path: Path) -> tuple[int, ...]:
+    """Stage a fixture and return its device-local picker timestamp."""
+    source_path = Path(source_path).expanduser().resolve()
+    if not udid or not source_path.is_file():
+        raise AssertionError(f"Android video fixture requires a device and source file: {source_path}")
+    digest = hashlib.sha256()
+    with source_path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    album = f"VWVideo_{digest.hexdigest()[:12]}"
+    target_dir = f"/sdcard/Pictures/{album}"
+    target_path = f"{target_dir}/source{source_path.suffix.lower()}"
+    commands = [
+        ("shell", "mkdir", "-p", target_dir),
+        ("push", str(source_path), target_path),
+        ("shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", f"file://{target_path}"),
+    ]
+    for command in commands:
+        result = _adb(*command, udid=udid)
+        if result.returncode != 0:
+            raise AssertionError(f"Unable to prepare Android video fixture: {result.stderr or result.stdout}")
+    # Broadcast delivery can precede MediaStore indexing. Do not open a picker
+    # until the file is indexed, and never fall back to the user's recent media.
+    end_at = time.monotonic() + 30
+    indexed_suffix = f"/Pictures/{album}/{Path(target_path).name}"
+    while time.monotonic() < end_at:
+        result = _adb(
+            "shell", "content", "query", "--uri", "content://media/external/video/media",
+            "--projection", "datetaken:_data", udid=udid,
+        )
+        matching = [line for line in result.stdout.splitlines() if line.strip().endswith(indexed_suffix)]
+        if result.returncode == 0 and len(matching) == 1:
+            match = re.search(r"datetaken=(\d+),", matching[0])
+            if match and int(match.group(1)) > 0:
+                # Use the same device-local capture date shown in the picker's
+                # accessibility description. Do not infer identity from sort
+                # order or change metadata managed by Android's media scanner.
+                epoch = int(match.group(1)) // 1000
+                date = _adb("shell", "date", "-d", f"@{epoch}", "+%Y,%m,%d,%H,%M,%S", udid=udid)
+                fields = date.stdout.strip().split(",")
+                if date.returncode != 0 or len(fields) != 6 or not all(value.isdigit() for value in fields):
+                    raise AssertionError("Unable to read device-local capture time for Android video selection")
+                return tuple(map(int, fields))
+        time.sleep(0.5)
+    raise AssertionError(f"Android video fixture was not indexed: {target_path}")
 
 
 def sync_media_to_android_device(*, udid: str, media_assets: list[MediaAsset]) -> tuple[int, list[str]]:

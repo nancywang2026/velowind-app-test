@@ -234,3 +234,31 @@ def test_refresh_android_gallery_cache_skips_when_gallery3d_activity_is_unavaila
         (("shell", "am", "start", "-n", "com.android.gallery3d/.app.GalleryActivity"), "127.0.0.1:16385"),
     ]
     assert messages == ["Android gallery refresh skipped: Gallery3D is unavailable on this device"]
+
+
+def test_prepare_video_fixture_scans_and_waits_for_media_index(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    source = tmp_path / "视频.mp4"
+    source.write_bytes(b"fixture video")
+    pushed = []
+    scanned = []
+
+    def adb(*args, udid):
+        if args[0] == "push":
+            pushed.append(args[-1])
+        if "broadcast" in args:
+            scanned.append(args[-1])
+        output = ""
+        if "query" in args and scanned:
+            output = "Row: 0 datetaken=1788762605000, _data=" + pushed[0]
+        if "date" in args:
+            output = "2026,09,07,14,30,05"
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr(android_media_sync, "_adb", adb)
+    picker_date = android_media_sync.prepare_video_fixture(udid="physical", source_path=source)
+    assert picker_date == (2026, 9, 7, 14, 30, 5)
+    assert len(pushed) == 1
+    assert pushed[0].startswith("/sdcard/Pictures/VWVideo_")
+    assert pushed[0].endswith("/source.mp4")
+    assert scanned == [f"file://{pushed[0]}"]

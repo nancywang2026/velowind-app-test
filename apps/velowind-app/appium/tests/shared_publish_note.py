@@ -91,6 +91,11 @@ def cleanup_published_note_after_success(
     timeout: float = 60,
     retry_interval: float = 2,
 ) -> Optional[CleanupReport]:
+    capabilities = getattr(app_driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        requested, submitted = getattr(app_driver, "_android_note_submitted_title", (title, title))
+        if requested == title:
+            title = submitted
     end_at = time.monotonic() + max(0, timeout)
     report = None
     last_timeout = None
