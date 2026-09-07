@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from selenium.common.exceptions import TimeoutException
+
 from velowind_appium.cleanup import CleanupReport
 
 from tests import shared_publish_note
@@ -86,3 +88,60 @@ def test_cleanup_retries_until_pending_note_is_deletable(monkeypatch):
     )
 
     assert list(reports) == []
+
+
+def test_cleanup_retries_when_ios_hierarchy_is_temporarily_unavailable(monkeypatch):
+    attempts = iter(
+        [
+            TimeoutException("Home feed did not become ready; page_source=<empty>"),
+            CleanupReport("note", ["测试 - 长白山"], []),
+        ]
+    )
+
+    def cleanup(*args):
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(shared_publish_note, "cleanup_published_note", cleanup)
+    monkeypatch.setattr(shared_publish_note.time, "sleep", lambda seconds: None)
+
+    shared_publish_note.cleanup_published_note_after_success(
+        object(),
+        object(),
+        "测试 - 长白山",
+        timeout=1,
+    )
+
+    assert list(attempts) == []
+
+
+def test_cleanup_does_not_fail_publish_when_reviewing_note_is_not_listed(monkeypatch):
+    attachments = []
+    monkeypatch.setattr(
+        shared_publish_note,
+        "cleanup_published_note",
+        lambda *args: CleanupReport("note", [], []),
+    )
+    monkeypatch.setattr(shared_publish_note.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        shared_publish_note,
+        "attach_text",
+        lambda name, body: attachments.append((name, body)),
+    )
+
+    report = shared_publish_note.cleanup_published_note_after_success(
+        object(),
+        object(),
+        "Velowind｜解锁轻松骑行状态 🚲",
+        timeout=0,
+    )
+
+    assert report == CleanupReport("note", [], [])
+    assert attachments == [
+        (
+            "publish-note-cleanup-pending",
+            "title=Velowind｜解锁轻松骑行状态 🚲\ndeleted=[]\nskipped=[]",
+        )
+    ]

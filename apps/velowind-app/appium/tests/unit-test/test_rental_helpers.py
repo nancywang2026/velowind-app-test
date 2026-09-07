@@ -84,7 +84,7 @@ def test_read_latest_rental_order_summary_uses_current_complete_source_before_wa
     assert waits == []
 
 
-def test_submit_rental_order_uses_remaining_timeout_for_payment_wait(monkeypatch):
+def test_submit_rental_order_uses_bounded_payment_wait(monkeypatch):
     waits = []
 
     monkeypatch.setattr(rental_order_confirm, "wait_for_rental_order_confirm_page", lambda driver, timeout: None)
@@ -101,7 +101,33 @@ def test_submit_rental_order_uses_remaining_timeout_for_payment_wait(monkeypatch
 
     rental_order_confirm.submit_rental_order(object(), timeout=25)
 
-    assert waits and waits[0] > 20
+    assert waits == [10]
+
+
+def test_submit_rental_order_retries_after_retryable_failure(monkeypatch):
+    attempts = []
+    sources = iter(["订单确认 订单提交失败，请稍后重试。 提交订单", "支付中心 确认支付"])
+
+    monkeypatch.setattr(rental_order_confirm, "wait_for_rental_order_confirm_page", lambda driver, timeout: None)
+    monkeypatch.setattr(
+        rental_order_confirm,
+        "tap_first_available",
+        lambda driver, accessibility_ids, texts, timeout: attempts.append(timeout) or True,
+    )
+
+    def wait_for_payment(driver, timeout):
+        if len(attempts) == 1:
+            from selenium.common.exceptions import TimeoutException
+
+            raise TimeoutException("payment page did not appear yet")
+
+    monkeypatch.setattr(rental_order_confirm, "wait_for_rental_payment_center_page", wait_for_payment)
+    monkeypatch.setattr(rental_order_confirm, "safe_page_source", lambda driver: next(sources))
+    monkeypatch.setattr(rental_order_confirm.time, "sleep", lambda seconds: None)
+
+    rental_order_confirm.submit_rental_order(object(), timeout=25)
+
+    assert len(attempts) == 2
 
 
 def test_confirm_payment_prefers_ios_coordinate_before_locator_scan(monkeypatch):

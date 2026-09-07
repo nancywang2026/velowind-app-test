@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 import yaml
 
@@ -78,6 +80,10 @@ def xiaodai_source_video_path(use_case_id: str) -> Path:
 def run_xiaodai_video_upload_case(app_driver, app_config, step, use_case_id: str) -> None:
     draft = load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH)
     source_video = xiaodai_source_video_path(use_case_id)
+    if str((getattr(app_driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android":
+        # Detail lookup and cleanup must target this run, even when a previous
+        # failed run left a note with the same fixture title behind.
+        draft = replace(draft, title=f"{draft.title[:11]}-{uuid4().hex[:8]}")
 
     step("prepare-home-session", lambda: ensure_logged_in_for_publish_entry(app_driver, app_config))
     success_signal = step(

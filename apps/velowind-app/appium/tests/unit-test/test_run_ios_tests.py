@@ -86,8 +86,16 @@ pytest_args:
 def test_build_pytest_command_uses_named_publish_suite_profile():
     command = run_ios_tests.build_pytest_command(["--suite-profile", "publish"])
 
-    assert str(run_ios_tests.TEST_PATH / "message" / "test_ios_publish_note.py") in command
-    assert "--maxfail=1" in command
+    assert all(
+        str(run_ios_tests.TEST_PATH / test_file) in command
+        for test_file in [
+            "message/test_ios_publish_note.py",
+            "message/test_ios_xiaodai_publish_video.py",
+            "message/test_ios_publish_video_record_note.py",
+            "activity/test_publish_activity.py",
+        ]
+    )
+    assert "--maxfail=1" not in command
 
 
 def test_build_pytest_command_uses_isolated_allure_run_dir(monkeypatch):

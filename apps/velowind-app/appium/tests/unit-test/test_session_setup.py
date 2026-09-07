@@ -122,7 +122,7 @@ def test_prepare_logged_in_session_treats_uuid_udid_as_ios_simulator(monkeypatch
     assert calls == [(driver, ios_config)]
 
 
-def test_prepare_logged_in_session_keeps_physical_ios_device_on_home_setup(monkeypatch):
+def test_prepare_logged_in_session_checks_me_tab_first_on_physical_ios(monkeypatch):
     driver = object()
     ios_config = type("Config", (), {"target": "device", "udid": "00008150-0006799C2693401C"})()
     calls = []
@@ -130,7 +130,7 @@ def test_prepare_logged_in_session_keeps_physical_ios_device_on_home_setup(monke
 
     monkeypatch.setattr(
         conftest,
-        "ensure_logged_in_on_home",
+        "ensure_logged_in_from_me_then_home",
         lambda received_driver, received_config: calls.append((received_driver, received_config)) or True,
     )
 

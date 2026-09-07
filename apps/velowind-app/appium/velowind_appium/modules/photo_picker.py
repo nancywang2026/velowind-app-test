@@ -111,6 +111,7 @@ def choose_video_from_library(
     *,
     album_name: str | None = None,
     video_index: int = 1,
+    source_date: tuple[int, ...] | None = None,
 ) -> bool:
     """Choose a one-based video position from the system picker."""
     capabilities = getattr(driver, "capabilities", {}) or {}
@@ -147,6 +148,7 @@ def choose_video_from_library(
         candidate_tapped = _tap_android_photo_picker_video_candidate(
             driver,
             video_index=max(1, video_index),
+            **({"source_date": source_date} if source_date else {}),
         )
     else:
         candidate_tapped = tap_photo_grid_candidate(driver, max(1, video_index))
@@ -156,7 +158,9 @@ def choose_video_from_library(
     return _confirm_video_picker_selection(driver)
 
 
-def _tap_android_photo_picker_video_candidate(driver: WebDriver, *, video_index: int = 1) -> bool:
+def _tap_android_photo_picker_video_candidate(
+    driver: WebDriver, *, video_index: int = 1, source_date: tuple[int, ...] | None = None,
+) -> bool:
     try:
         candidates = driver.find_elements(
             AppiumBy.XPATH,
@@ -165,6 +169,13 @@ def _tap_android_photo_picker_video_candidate(driver: WebDriver, *, video_index:
     except (AttributeError, WebDriverException):
         candidates = []
     candidates = [candidate for candidate in candidates if _rect_snapshot(candidate) is not None]
+    if source_date is not None:
+        candidates = [
+            candidate for candidate in candidates
+            if tuple(int(value) for value in re.findall(r"\d+", candidate.get_attribute("content-desc") or "")) == source_date
+        ]
+        if len(candidates) != 1:
+            raise AssertionError(f"Expected exactly one Android video matching fixture date {source_date}; found {len(candidates)}")
     candidates.sort(
         key=lambda candidate: (
             (_rect_snapshot(candidate) or {}).get("y", 0),
@@ -228,6 +239,8 @@ def _tap_first_ios_video_candidate(driver: WebDriver, *, video_index: int = 1) -
 
 
 def _record_video_from_camera(driver: WebDriver, *, record_seconds: float | None = None) -> bool:
+    if str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android":
+        return _record_android_video_from_camera(driver, record_seconds=record_seconds)
     if not _wait_until(lambda: _camera_video_controls_visible(driver), timeout=5):
         return False
     if not _tap_camera_record_control(driver, start=True):
@@ -243,6 +256,61 @@ def _record_video_from_camera(driver: WebDriver, *, record_seconds: float | None
     ):
         return False
     if not _tap_camera_record_control(driver, start=False):
+        return False
+    if not _wait_until(lambda: _camera_video_preview_visible(driver), timeout=10):
+        return False
+    actual_seconds = _camera_video_duration_seconds(_safe_page_source(driver))
+    if actual_seconds is None or actual_seconds <= 0:
+        return False
+    setattr(driver, "_camera_video_actual_seconds", actual_seconds)
+    return _confirm_camera_video_selection(driver)
+
+
+def _android_camera_record_rect(page_source: str) -> dict[str, float] | None:
+    """Find the unlabelled shutter between Cancel and Flip in the camera toolbar."""
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    for toolbar in root.iter():
+        children = list(toolbar)
+        if len(children) != 3:
+            continue
+        if not any(node.get("text") == "取消" for node in children[0].iter()):
+            continue
+        if not any(node.get("text") == "翻转" for node in children[2].iter()):
+            continue
+        control = children[1]
+        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", control.get("bounds", ""))
+        if bounds and control.get("displayed") != "false":
+            left, top, right, bottom = map(int, bounds.groups())
+            if right > left and bottom > top:
+                return {"x": left, "y": top, "width": right - left, "height": bottom - top}
+    return None
+
+
+def _record_android_video_from_camera(driver: WebDriver, *, record_seconds: float | None) -> bool:
+    rect = None
+
+    def controls_ready() -> bool:
+        nonlocal rect
+        rect = _android_camera_record_rect(_safe_page_source(driver))
+        return rect is not None
+
+    if not _wait_until(controls_ready, timeout=5):
+        return False
+    # Cache the toolbar position before recording. Native hierarchy queries and
+    # text searches can wait for camera idleness while its timer keeps changing.
+    def tap_shutter() -> bool:
+        return _adb_tap_rect_ratio(driver, rect, x_ratio=0.5, y_ratio=0.5) or _tap_rect_center(driver, rect)
+
+    if not tap_shutter():
+        return False
+    try:
+        duration_ok = _wait_for_camera_recording_duration(driver, 5 if record_seconds is None else record_seconds)
+    finally:
+        stopped = tap_shutter()
+    if not duration_ok or not stopped:
         return False
     if not _wait_until(lambda: _camera_video_preview_visible(driver), timeout=10):
         return False

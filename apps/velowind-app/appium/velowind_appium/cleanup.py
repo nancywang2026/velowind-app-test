@@ -152,6 +152,8 @@ def cleanup_exact_visible_item(
     action_texts: list[str],
 ) -> CleanupReport:
     """Delete a just-created item only when its exact title is visible at the list top."""
+    if item_type == "note" and _is_android(driver):
+        return _cleanup_exact_android_note(driver, item_type=item_type, title=title, action_texts=action_texts)
     if not _tap_exact_visible_title(driver, title):
         return CleanupReport(item_type=item_type, deleted=[], skipped=[])
     time.sleep(0.5)
@@ -164,11 +166,76 @@ def cleanup_exact_visible_item(
     return CleanupReport(item_type=item_type, deleted=[title], skipped=[])
 
 
+def _is_android(driver) -> bool:
+    return str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android"
+
+
+def _cleanup_exact_android_note(driver, *, item_type, title, action_texts) -> CleanupReport:
+    deadline = time.monotonic() + 10
+    opened = False
+    while not opened:
+        # Scope to note cards: a transitioning screen can still expose the
+        # previous detail's title in the same Android hierarchy.
+        for rendered in _visible_text_values(_safe_page_source(driver)):
+            prefix = rendered.rstrip("…").rstrip()
+            if rendered != title and not (
+                len(prefix) >= MIN_TRUNCATED_TITLE_PREFIX_LENGTH
+                and len(prefix) < len(title) and title.startswith(prefix)
+            ):
+                continue
+            locator = (
+                '//*[starts-with(@resource-id, "post-home-feed-note-card-")]'
+                f'//*[@text={_xpath_literal(rendered)}]'
+            )
+            for element in driver.find_elements(AppiumBy.XPATH, locator):
+                if _element_is_visible(element):
+                    _tap_element_center(driver, element)
+                    opened = True
+                    break
+            if opened:
+                break
+        if opened or time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+    if not opened:
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[])
+    # A prefix is only sufficient to open a candidate, never to delete it.
+    deadline = time.monotonic() + 8
+    detail_title = f'//*[@resource-id="post-detail-page"]//*[@text={_xpath_literal(title)}]'
+    while not any(_element_is_visible(e) for e in driver.find_elements(AppiumBy.XPATH, detail_title)):
+        if time.monotonic() >= deadline:
+            safe_back(driver)
+            return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+        time.sleep(0.2)
+    if not _tap_android_note_more(driver) or not tap_first_available_text(driver, action_texts):
+        safe_back(driver)
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    if not tap_first_available_text(driver, CONFIRM_TEXTS):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    deadline = time.monotonic() + 8
+    while driver.find_elements(AppiumBy.ID, "post-detail-page"):
+        if time.monotonic() >= deadline:
+            return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+        time.sleep(0.2)
+    return CleanupReport(item_type=item_type, deleted=[title], skipped=[])
+
+
+def _tap_android_note_more(driver) -> bool:
+    # The header has a stable testID; its final direct child is the menu icon.
+    locator = '//*[@resource-id="post-detail-top-nav-subpage-header"]/android.view.ViewGroup[last()]'
+    for element in driver.find_elements(AppiumBy.XPATH, locator):
+        if _element_is_visible(element):
+            _tap_element_center(driver, element)
+            return True
+    return False
+
+
 def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
     candidates = [title]
 
+    exact_title_found = False
     for candidate in candidates:
         if platform == "android":
             quoted = json.dumps(candidate, ensure_ascii=False)
@@ -183,6 +250,7 @@ def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
             elements = driver.find_elements(*locator)
         except (AttributeError, NoSuchElementException, WebDriverException):
             elements = []
+        exact_title_found = exact_title_found or bool(elements)
         for element in elements:
             if not _element_is_visible(element):
                 continue
@@ -190,6 +258,29 @@ def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
             return True
 
     if platform == "ios":
+        # React Native can expose the title in page source as an exact visible
+        # StaticText while the native predicate query still returns no match.
+        # Stay on the current viewport and use an exact XPath fallback before
+        # considering rendered truncation; newly published notes are at the top.
+        escaped_title = _xpath_literal(title)
+        exact_xpath = (
+            '//*[@visible="true" and '
+            f'(@name={escaped_title} or @label={escaped_title} or @value={escaped_title})]'
+        )
+        try:
+            exact_elements = driver.find_elements(AppiumBy.XPATH, exact_xpath)
+        except (AttributeError, NoSuchElementException, WebDriverException):
+            exact_elements = []
+        for element in exact_elements:
+            if not _element_is_visible(element):
+                continue
+            _tap_element_center(driver, element)
+            return True
+
+        # An exact but off-screen match needs scrolling, not a ten-second wait
+        # for a truncated rendering of the same title.
+        if exact_title_found:
+            return False
         end_at = time.monotonic() + TRUNCATED_TITLE_WAIT_SECONDS
         while True:
             for rendered_title in find_visible_truncated_title_variants(_safe_page_source(driver), title):
@@ -310,7 +401,10 @@ def _delete_candidate(driver: WebDriver, text: str, action_texts: list[str]) -> 
         return False
     time.sleep(0.5)
     if not tap_first_available_text(driver, ["更多", "...", "…"]):
-        _tap_ios_top_right_more(driver)
+        if _is_android(driver):
+            _tap_android_note_more(driver)
+        else:
+            _tap_ios_top_right_more(driver)
     if not tap_first_available_text(driver, action_texts):
         return False
     return confirm_destructive_action(driver)
