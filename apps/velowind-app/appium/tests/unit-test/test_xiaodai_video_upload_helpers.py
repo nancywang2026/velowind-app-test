@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+from velowind_appium.cleanup import CleanupReport
 from velowind_appium import modules
 from tests.message import xiaodai_video_upload
 import velowind_appium.modules.message_detail as message_detail
@@ -111,6 +113,45 @@ use_cases:
     assert draft.video_index == 7
 
 
+def test_xiaodai_case_cleans_up_created_note_after_success(tmp_path: Path, monkeypatch):
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"video")
+    draft = SimpleNamespace(
+        title="Velowind｜解锁轻松骑行状态 🚲",
+        caption_image="0424/文案.png",
+        video_index=1,
+    )
+    events = []
+    monkeypatch.setattr(xiaodai_video_upload, "load_message_note_draft", lambda *args, **kwargs: draft)
+    monkeypatch.setattr(xiaodai_video_upload, "xiaodai_source_video_path", lambda *args: source_video)
+    monkeypatch.setattr(xiaodai_video_upload, "ensure_logged_in_for_publish_entry", lambda *args: None)
+    monkeypatch.setattr(xiaodai_video_upload, "publish_message_note", lambda *args, **kwargs: "已发布")
+    monkeypatch.setattr(xiaodai_video_upload, "attach_text", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        xiaodai_video_upload,
+        "load_cleanup_config",
+        lambda: SimpleNamespace(delete_published_note_after_success=True),
+    )
+    monkeypatch.setattr(
+        xiaodai_video_upload,
+        "cleanup_published_note_after_success",
+        lambda *args: events.append("delete") or CleanupReport("note", [draft.title], []),
+    )
+
+    def step(name, action):
+        events.append(name)
+        return action()
+
+    xiaodai_video_upload.run_xiaodai_video_upload_case(object(), object(), step, "xiaodai-0424")
+
+    assert events == [
+        "prepare-home-session",
+        "publish-xiaodai-video-xiaodai-0424",
+        "cleanup-published-note-xiaodai-0424",
+        "delete",
+    ]
+
+
 def test_upload_note_media_passes_draft_video_index_to_picker(monkeypatch):
     draft = modules.MessageNoteDraft(
         title="标题",
@@ -185,6 +226,51 @@ def test_ios_video_picker_uses_one_based_video_index(monkeypatch):
 
     assert photo_picker._tap_first_ios_video_candidate(FakeDriver(), video_index=2) is True
     assert taps == [{"x": 180, "y": 210}]
+
+
+def test_ios_album_video_picker_allows_large_video_preview_to_load(monkeypatch):
+    waits = []
+
+    class FakeElement:
+        rect = {"x": 10, "y": 160, "width": 100, "height": 100}
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_elements(self, by, value):
+            return [FakeElement()]
+
+        def execute_script(self, script, payload):
+            return None
+
+    monkeypatch.setattr(
+        photo_picker,
+        "_wait_for_ios_video_preview",
+        lambda driver, timeout: waits.append(timeout) or True,
+    )
+
+    assert photo_picker._tap_album_ios_video_candidate(FakeDriver()) is True
+    assert waits == [30]
+
+
+def test_ios_video_confirmation_waits_longer_for_large_video(monkeypatch):
+    waits = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def execute_script(self, script, payload):
+            return None
+
+    monkeypatch.setattr(photo_picker, "_visible_text_present", lambda driver, text: False)
+    monkeypatch.setattr(
+        photo_picker,
+        "_wait_for_ios_video_preview",
+        lambda driver, timeout: waits.append(timeout) or False,
+    )
+
+    assert photo_picker._confirm_video_picker_selection(FakeDriver()) is False
+    assert waits == [30]
 
 
 def test_ios_video_picker_scrolls_when_index_is_beyond_first_page(monkeypatch):

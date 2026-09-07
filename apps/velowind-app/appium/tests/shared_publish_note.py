@@ -1,5 +1,8 @@
+import time
 from pathlib import Path
 
+from velowind_appium.cleanup import cleanup_published_note
+from velowind_appium.cleanup_config import load_cleanup_config
 from velowind_appium.modules import (
     list_message_note_use_case_ids,
     load_message_note_draft,
@@ -67,4 +70,31 @@ def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, ver
     assert success_signal, f"Expected a success signal after submitting the {assertion_label} message note for review"
     assert any(token in success_signal for token in SUCCESS_TOKENS), (
         f"Expected the {assertion_label} note publish flow to end in a success/review state, got: {success_signal}"
+    )
+
+    cleanup_config = load_cleanup_config()
+    if cleanup_config.delete_published_note_after_success:
+        step(
+            f"cleanup-published-note-{use_case_id}",
+            lambda: cleanup_published_note_after_success(app_driver, app_config, draft.title),
+        )
+
+
+def cleanup_published_note_after_success(
+    app_driver,
+    app_config,
+    title: str,
+    *,
+    timeout: float = 60,
+    retry_interval: float = 2,
+) -> None:
+    end_at = time.monotonic() + max(0, timeout)
+    report = cleanup_published_note(app_driver, title, app_config)
+    while not report.deleted and time.monotonic() < end_at:
+        time.sleep(max(0, retry_interval))
+        report = cleanup_published_note(app_driver, title, app_config)
+
+    assert report.deleted == [title], (
+        f"Expected cleanup to delete the note created by this case, "
+        f"got deleted={report.deleted}, skipped={report.skipped}, title={title!r}"
     )

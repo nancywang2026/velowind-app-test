@@ -19,6 +19,9 @@ from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_
 from velowind_appium.timing import profile_section
 
 
+ACTIVITY_SESSION_NAVIGATION_TIMEOUT_SECONDS = 15
+
+
 @dataclass(frozen=True)
 class ActivitySessionDraft:
     title: str
@@ -54,6 +57,7 @@ def _format_datetime(day: date, clock: datetime_time) -> str:
 
 
 def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
+    navigation_timeout = min(timeout, ACTIVITY_SESSION_NAVIGATION_TIMEOUT_SECONDS)
     with profile_section("activity-session.dismiss-alerts"):
         dismiss_common_system_alerts(driver)
     with profile_section("activity-session.leave-stale-form"):
@@ -67,16 +71,16 @@ def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config:
         pass
     try:
         with profile_section("activity-session.open-my-activity"):
-            open_my_activity_publish_list(driver, timeout=timeout)
+            open_my_activity_publish_list(driver, timeout=navigation_timeout)
     except AssertionError:
         if not home_prepared:
             with profile_section("activity-session.open-my-activity-after-home-failure"):
-                open_my_activity_publish_list(driver, timeout=timeout)
+                open_my_activity_publish_list(driver, timeout=navigation_timeout)
         else:
             with profile_section("activity-session.prepare-home-after-open-failure"):
                 ensure_logged_in_on_home(driver, config)
             with profile_section("activity-session.open-my-activity-after-home-recovery"):
-                open_my_activity_publish_list(driver, timeout=timeout)
+                open_my_activity_publish_list(driver, timeout=navigation_timeout)
     with profile_section("activity-session.open-manage-sessions"):
         open_manage_sessions_for_approved_activity(driver, timeout=timeout)
     with profile_section("activity-session.open-create-session-form"):
@@ -98,24 +102,18 @@ def open_my_activity_publish_list(driver: WebDriver, timeout: int = 30) -> None:
         if _my_activity_list_visible(page_source):
             _tap_publish_tab(driver)
             return
-        if tap_text_if_present(driver, "我的活动", timeout=1):
+        # Decide the next action from this single hierarchy snapshot. The old
+        # flow tried the same two My Activity locators both before and after
+        # tapping Me, causing repeated full iOS hierarchy serialization.
+        if "我的活动" not in page_source:
+            _tap_me_tab(driver)
+            time.sleep(0.2)
+            continue
+        if tap_text_if_present(driver, "我的活动", timeout=0.5) or _tap_my_activity_entry(driver):
             if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
                 _tap_publish_tab(driver)
                 return
-        if _tap_my_activity_entry(driver):
-            if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
-                _tap_publish_tab(driver)
-                return
-        _tap_me_tab(driver)
-        if tap_text_if_present(driver, "我的活动", timeout=1):
-            if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
-                _tap_publish_tab(driver)
-                return
-        if _tap_my_activity_entry(driver):
-            if _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6):
-                _tap_publish_tab(driver)
-                return
-        time.sleep(0.5)
+        time.sleep(0.2)
     raise AssertionError("Unable to open My Activity publish list")
 
 
@@ -126,13 +124,18 @@ def open_manage_sessions_for_approved_activity(driver: WebDriver, timeout: int =
             page_source = _safe_page_source(driver)
         if _session_form_visible(page_source):
             return
+        if _activity_detail_preview_visible(page_source):
+            with profile_section("activity-session.manage.leave-wrong-detail"):
+                _leave_activity_detail_preview(driver)
+            time.sleep(0.3)
+            continue
         if "管理场次" in page_source:
             with profile_section("activity-session.manage.tap-visible-manage"):
                 tapped_manage = tap_text_if_present(driver, "管理场次", timeout=1)
             if tapped_manage:
                 return
         with profile_section("activity-session.manage.tap-more-approved"):
-            tapped_more = _tap_more_for_approved_activity(driver)
+            tapped_more = _tap_more_for_approved_activity(driver, page_source=page_source)
         if tapped_more:
             with profile_section("activity-session.manage.wait-menu"):
                 menu_visible = _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=5)
@@ -153,10 +156,15 @@ def open_create_session_form(driver: WebDriver, timeout: int = 20) -> None:
         page_source = _safe_page_source(driver)
         if _session_form_visible(page_source):
             return
-        if _tap_top_right_plus(driver) or tap_text_if_present(driver, "+", timeout=0.5) or tap_text_if_present(driver, "新增场次", timeout=0.5):
+        tapped_create = _tap_top_right_plus(driver, page_source=page_source)
+        if not tapped_create and "+" in page_source:
+            tapped_create = tap_text_if_present(driver, "+", timeout=0.5)
+        if not tapped_create and "新增场次" in page_source:
+            tapped_create = tap_text_if_present(driver, "新增场次", timeout=0.5)
+        if tapped_create:
             if _wait_until(lambda: _session_form_visible(_safe_page_source(driver)), timeout=6):
                 return
-        time.sleep(0.5)
+        time.sleep(0.2)
     raise AssertionError("Unable to open create activity session form")
 
 
@@ -2219,38 +2227,24 @@ def _toggle_show_delisted(driver: WebDriver) -> bool:
     return False
 
 
-def _tap_more_for_approved_activity(driver: WebDriver) -> bool:
-    page_source = _safe_page_source(driver)
+def _tap_more_for_approved_activity(driver: WebDriver, page_source: str | None = None) -> bool:
+    if page_source is None:
+        page_source = _safe_page_source(driver)
+    if _is_ios_driver(driver):
+        if "通过" not in page_source or "上架" not in page_source:
+            return False
+        # On iOS only act on a card that structurally contains both states.
+        # Do not fall through to a generic More button, which could belong to
+        # a pending, rejected, or delisted activity.
+        return _tap_ios_approved_more_element(driver)
     if "通过" in page_source:
         tapped_any_approved_card = False
-        center_ys = (
-            _ios_approved_more_button_center_ys_from_source(driver, page_source)
-            if _is_ios_driver(driver)
-            else []
-        )
-        if _is_ios_driver(driver) and not center_ys:
-            center_ys = _ios_approved_badge_center_ys_from_source(driver, page_source)
-        if _is_ios_driver(driver) and center_ys:
-            for y in center_ys:
-                if _tap_right_side_of_approved_card_at_y(driver, y):
-                    tapped_any_approved_card = True
-                    if _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=1):
-                        return True
-            if tapped_any_approved_card:
-                return True
-        if _is_ios_driver(driver) and _tap_ios_approved_more_element(driver):
-            return True
-        if _is_ios_driver(driver) and "<XCUIElementType" in page_source and not center_ys:
-            return False
-        if not center_ys:
-            center_ys = _approved_badge_center_ys(driver)
+        center_ys = _approved_badge_center_ys(driver)
         for y in center_ys:
             if _tap_right_side_of_approved_card_at_y(driver, y):
                 tapped_any_approved_card = True
                 if _wait_until(lambda: "管理场次" in _safe_page_source(driver), timeout=1):
                     return True
-        if not center_ys and "<XCUIElementType" in page_source:
-            return False
         if not center_ys and _tap_right_side_of_approved_card_at_y(driver, None):
             tapped_any_approved_card = True
         if tapped_any_approved_card:
@@ -2298,52 +2292,64 @@ def _top_approved_badge_center_y(driver: WebDriver) -> int | None:
 
 
 def _tap_ios_approved_more_element(driver: WebDriver) -> bool:
-    try:
-        window_width = int(driver.get_window_rect()["width"])
-        window_height = int(driver.get_window_rect()["height"])
-        elements = driver.find_elements(AppiumBy.XPATH, "//XCUIElementTypeOther")
-    except (WebDriverException, KeyError, TypeError, AttributeError):
-        return False
-
-    approved_center_ys = _approved_badge_center_ys(driver)
-    if not approved_center_ys:
-        return False
-
-    candidates = []
-    for element in elements:
+    # Match the card structurally: its content group contains both exact state
+    # badges (approved and listed), while its third group is the card's More
+    # action. No screen coordinates or fixed dimensions participate here.
+    state_predicate = (
+        '//*[@name="通过" or @label="通过" or @value="通过"]'
+        ' and .//*[@name="上架" or @label="上架" or @value="上架"]'
+    )
+    xpaths = [
+        (
+            '//XCUIElementTypeOther[@visible="true"]'
+            f'[XCUIElementTypeOther[2][.{state_predicate}]]'
+            '/XCUIElementTypeOther[3]/XCUIElementTypeOther[1]'
+        ),
+    ]
+    for xpath in xpaths:
         try:
-            if not element.is_displayed():
-                continue
-            rect = element.rect
-            x = int(rect["x"])
-            y = int(rect["y"])
-            width = int(rect["width"])
-            height = int(rect["height"])
-            if any(str(element.get_attribute(name) or "").strip() for name in ["name", "label", "value"]):
-                continue
-        except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
-            continue
-        if (
-            x < int(window_width * 0.82)
-            or y < 150
-            or y >= window_height
-            or width < 26
-            or width > 40
-            or height < 26
-            or height > 40
-        ):
-            continue
-        if not any(abs((y + int(height / 2)) - approved_y) <= 16 for approved_y in approved_center_ys):
-            continue
-        candidates.append((y, x, element))
-
-    for _y, _x, element in sorted(candidates):
-        try:
-            element.click()
-            return True
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
         except (WebDriverException, AttributeError):
             continue
+        for element in elements:
+            try:
+                if not element.is_displayed():
+                    continue
+                rect = element.rect
+                driver.execute_script(
+                    "mobile: tap",
+                    {
+                        "x": float(rect["x"]) + float(rect["width"]) / 2,
+                        "y": float(rect["y"]) + float(rect["height"]) / 2,
+                    },
+                )
+                return True
+            except (WebDriverException, KeyError, TypeError, ValueError, AttributeError):
+                continue
     return False
+
+
+def _activity_detail_preview_visible(page_source: str) -> bool:
+    return (
+        "activity-route-detail-v3-sticky-header" in page_source
+        or "当前为详情页预览" in page_source
+        or all(token in page_source for token in ["活动详情", "路线说明", "活动评论", "回到顶部"])
+    )
+
+
+def _leave_activity_detail_preview(driver: WebDriver) -> bool:
+    try:
+        back_button = driver.find_element(
+            AppiumBy.ACCESSIBILITY_ID,
+            "activity-route-detail-v3-sticky-header-back-button",
+        )
+        back_button.click()
+    except (NoSuchElementException, WebDriverException, AttributeError):
+        try:
+            driver.back()
+        except (WebDriverException, AttributeError):
+            return False
+    return _wait_until(lambda: _my_activity_list_visible(_safe_page_source(driver)), timeout=6)
 
 
 def _ios_approved_more_button_center_ys_from_source(driver: WebDriver, page_source: str) -> list[int]:
@@ -2457,8 +2463,9 @@ def _approved_badge_elements(driver: WebDriver) -> list:
     return candidates
 
 
-def _tap_top_right_plus(driver: WebDriver) -> bool:
-    point = _android_top_right_plus_point(_safe_page_source(driver))
+def _tap_top_right_plus(driver: WebDriver, page_source: str | None = None) -> bool:
+    source = page_source if page_source is not None else _safe_page_source(driver)
+    point = _android_top_right_plus_point(source)
     if point is not None:
         try:
             driver.execute_script("mobile: tap", {"x": point[0], "y": point[1]})
@@ -2535,15 +2542,7 @@ def _scroll_my_activity_list(driver: WebDriver) -> bool:
     try:
         rect = driver.get_window_rect()
         if _is_ios_driver(driver):
-            center_x = int(rect["width"] * 0.5)
-            driver.swipe(
-                center_x,
-                int(rect["height"] * 0.82),
-                center_x,
-                int(rect["height"] * 0.34),
-                duration=450,
-            )
-            return True
+            return _scroll_ios_my_activity_list(driver)
         driver.execute_script(
             "mobile: dragGesture",
             {
@@ -2565,6 +2564,33 @@ def _scroll_my_activity_list(driver: WebDriver) -> bool:
                 return True
             except (WebDriverException, AttributeError):
                 return False
+
+
+def _scroll_ios_my_activity_list(driver: WebDriver) -> bool:
+    """Scroll the visible My Activity list toward cards below the viewport."""
+    scroll_view_xpaths = [
+        (
+            '//XCUIElementTypeScrollView[@visible="true"]'
+            '[.//*[contains(@name,"搜索活动") or contains(@label,"搜索活动") '
+            'or contains(@name,"显示下架活动") or contains(@label,"显示下架活动")]]'
+        ),
+        '//XCUIElementTypeScrollView[@visible="true"]',
+    ]
+    for xpath in scroll_view_xpaths:
+        try:
+            scroll_view = driver.find_element(AppiumBy.XPATH, xpath)
+            driver.execute_script(
+                "mobile: scroll",
+                {"elementId": scroll_view.id, "direction": "down"},
+            )
+            return True
+        except (NoSuchElementException, WebDriverException, AttributeError):
+            continue
+    try:
+        driver.execute_script("mobile: scroll", {"direction": "down"})
+        return True
+    except (WebDriverException, AttributeError):
+        return False
 
 
 def _scroll_my_activity_list_toward_approved_activity(driver: WebDriver) -> bool:

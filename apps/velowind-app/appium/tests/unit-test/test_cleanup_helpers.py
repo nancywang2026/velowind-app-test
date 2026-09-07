@@ -1,11 +1,14 @@
 from velowind_appium.cleanup import (
     CleanupReport,
     cleanup_activities,
+    cleanup_exact_visible_item,
     cleanup_notes,
+    cleanup_published_note,
     cleanup_sessions,
     cleanup_matching_visible_items,
     confirm_destructive_action,
     find_matching_visible_texts,
+    find_visible_truncated_title_variants,
 )
 
 
@@ -222,6 +225,208 @@ def test_cleanup_notes_leaves_my_notes_page_after_dry_run(monkeypatch):
 
     assert report == CleanupReport("note", [], ["测试 - 长白山"])
     assert events == ["ensure-home", ("open", "我的笔记"), ("cleanup", True), "back"]
+
+
+def test_cleanup_published_note_uses_exact_title_and_leaves_my_notes_page(monkeypatch):
+    events = []
+    monkeypatch.setattr("velowind_appium.cleanup.ensure_logged_in_on_home", lambda *args: events.append("ensure-home"))
+    monkeypatch.setattr("velowind_appium.cleanup._open_me_entry", lambda driver, text: events.append(("open", text)))
+    monkeypatch.setattr(
+        "velowind_appium.cleanup.cleanup_exact_visible_item",
+        lambda *args, **kwargs: events.append(
+            ("cleanup", kwargs["title"])
+        )
+        or CleanupReport("note", ["测试 - 长白山"], []),
+    )
+    monkeypatch.setattr("velowind_appium.cleanup.safe_back", lambda driver: events.append("back"))
+
+    report = cleanup_published_note(object(), "测试 - 长白山", object())
+
+    assert report == CleanupReport("note", ["测试 - 长白山"], [])
+    assert events == [
+        "ensure-home",
+        ("open", "我的笔记"),
+        ("cleanup", "测试 - 长白山"),
+        "back",
+    ]
+
+
+def test_cleanup_exact_visible_item_returns_immediately_when_title_is_absent(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._tap_exact_visible_title",
+        lambda driver, title: events.append(title) or False,
+    )
+    monkeypatch.setattr(
+        "velowind_appium.cleanup.tap_first_available_text",
+        lambda *args: (_ for _ in ()).throw(AssertionError("delete actions must not run")),
+    )
+
+    report = cleanup_exact_visible_item(
+        object(),
+        item_type="note",
+        title="测试 - 长白山",
+        action_texts=["删除"],
+    )
+
+    assert report == CleanupReport("note", [], [])
+    assert events == ["测试 - 长白山"]
+
+
+def test_find_visible_truncated_title_variants_accepts_ios_two_line_truncation():
+    full_title = "测试 - 长白山真的有种让人瞬间安静下来的魔力"
+    page_source = """
+    <App>
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+        name="测试 - 长白山真的有种让人瞬间安静下来"
+        label="测试 - 长白山真的有种让人瞬间安静下来"
+        visible="true" />
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+        name="测试 - 长白山真的有种让人瞬间安静下来"
+        visible="false" />
+    </App>
+    """
+
+    assert find_visible_truncated_title_variants(page_source, full_title) == [
+        "测试 - 长白山真的有种让人瞬间安静下来"
+    ]
+
+
+def test_find_visible_truncated_title_variants_rejects_short_or_non_prefix_titles():
+    page_source = """
+    <App>
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="测试 - 长白山" visible="true" />
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="测试 - 长白山旧笔记标题" visible="true" />
+    </App>
+    """
+
+    assert find_visible_truncated_title_variants(
+        page_source,
+        "测试 - 长白山真的有种让人瞬间安静下来的魔力",
+    ) == []
+
+
+def test_tap_exact_visible_title_falls_back_to_rendered_ios_prefix(monkeypatch):
+    full_title = "测试 - 长白山真的有种让人瞬间安静下来的魔力"
+    rendered_title = "测试 - 长白山真的有种让人瞬间安静下来"
+    tapped = []
+
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = f"""
+        <App>
+          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+            name="{rendered_title}" visible="true" />
+        </App>
+        """
+
+        def find_elements(self, by, locator):
+            if f'name == "{rendered_title}"' in locator:
+                return [FakeElement()]
+            return []
+
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._tap_element_center",
+        lambda driver, element: tapped.append(element),
+    )
+
+    from velowind_appium.cleanup import _tap_exact_visible_title
+
+    assert _tap_exact_visible_title(FakeDriver(), full_title) is True
+    assert len(tapped) == 1
+
+
+def test_tap_exact_visible_title_waits_for_ios_list_loading(monkeypatch):
+    full_title = "测试 - 长白山真的有种让人瞬间安静下来的魔力"
+    rendered_title = "测试 - 长白山真的有种让人瞬间安静下来"
+    sources = iter(
+        [
+            '<App><XCUIElementTypeActivityIndicator visible="true" /></App>',
+            f"""
+            <App>
+              <XCUIElementTypeStaticText type="XCUIElementTypeStaticText"
+                name="{rendered_title}" visible="true" />
+            </App>
+            """,
+        ]
+    )
+
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @property
+        def page_source(self):
+            return next(sources)
+
+        def find_elements(self, by, locator):
+            if f'name == "{rendered_title}"' in locator:
+                return [FakeElement()]
+            return []
+
+    monkeypatch.setattr("velowind_appium.cleanup.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("velowind_appium.cleanup._tap_element_center", lambda driver, element: True)
+
+    from velowind_appium.cleanup import _tap_exact_visible_title
+
+    assert _tap_exact_visible_title(FakeDriver(), full_title) is True
+
+
+def test_cleanup_matching_visible_items_stops_when_page_is_already_at_end(monkeypatch):
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._safe_page_source",
+        lambda driver: '<App><Text text="已经到底了" /></App>',
+    )
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._scroll_page",
+        lambda driver: (_ for _ in ()).throw(AssertionError("end marker must avoid scrolling")),
+    )
+
+    report = cleanup_matching_visible_items(
+        object(),
+        item_type="note",
+        matchers=["测试 - 长白山"],
+        action_texts=["删除"],
+        dry_run=False,
+        exact_match=True,
+    )
+
+    assert report == CleanupReport("note", [], [])
+
+
+def test_cleanup_matching_visible_items_exact_match_skips_similar_title(monkeypatch):
+    page_source = """
+    <App>
+      <Text text="测试 - 长白山旧笔记" />
+      <Text text="测试 - 长白山" />
+    </App>
+    """
+    events = []
+    monkeypatch.setattr("velowind_appium.cleanup._safe_page_source", lambda driver: page_source)
+    monkeypatch.setattr(
+        "velowind_appium.cleanup._delete_candidate",
+        lambda driver, candidate, action_texts: events.append(candidate) or True,
+    )
+    monkeypatch.setattr("velowind_appium.cleanup._scroll_page", lambda driver: False)
+
+    report = cleanup_matching_visible_items(
+        object(),
+        item_type="note",
+        matchers=["测试 - 长白山"],
+        action_texts=["删除"],
+        dry_run=False,
+        exact_match=True,
+    )
+
+    assert report.deleted == ["测试 - 长白山"]
+    assert events == ["测试 - 长白山"]
 
 
 def test_cleanup_activities_leaves_my_activity_page_after_dry_run(monkeypatch):

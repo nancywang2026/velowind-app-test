@@ -76,7 +76,12 @@ TICKET_TOGGLE_IDS = [
     "ticket-toggle",
 ]
 TICKET_TOGGLE_TEXTS = ["查看图票", "图票", "收起图票"]
+PUBLISH_ENTRY_PRIMARY_ID = "bottom-nav-center-action"
+NOTE_IMAGE_ENTRY_PRIMARY_ID = "publish-note-image-entry-button"
+NOTE_VIDEO_ENTRY_PRIMARY_ID = "publish-note-video-entry-button"
+
 PUBLISH_ENTRY_IDS = [
+    PUBLISH_ENTRY_PRIMARY_ID,
     "bottom-nav-publish",
     "bottom-nav-plus",
     "bottom-nav-add",
@@ -86,6 +91,7 @@ PUBLISH_ENTRY_IDS = [
 PUBLISH_ENTRY_TEXTS = ["发布", "创建", "+", "＋"]
 
 PUBLISH_ENTRY_CANDIDATES = [
+    locator_accessibility_id(PUBLISH_ENTRY_PRIMARY_ID),
     locator_accessibility_id("bottom-nav-publish"),
     locator_accessibility_id("bottom-nav-plus"),
     locator_accessibility_id("bottom-nav-add"),
@@ -405,6 +411,20 @@ def publish_message_note(
     timeout: int = 60,
     video_source_path: Path | None = None,
 ) -> str:
+    if draft.media_type == "video" and draft.media_source == "camera":
+        # A session-scoped driver can retain the source path recorded by a
+        # previous album-video case. A newly recorded camera clip has no such
+        # local source unless the caller explicitly supplies one, so never
+        # compare it against stale media from the preceding test.
+        try:
+            delattr(driver, "_publish_note_source_video_path")
+        except AttributeError:
+            pass
+    effective_video_source_path = video_source_path
+    if draft.media_type == "video" and draft.media_source != "camera":
+        android_source = _pull_android_selected_video_source(driver, video_index=draft.video_index)
+        if android_source is not None:
+            effective_video_source_path = android_source
     with _note_profile("open-publisher"):
         open_message_note_publisher(driver, ios_config=ios_config, timeout=timeout)
     with _note_profile("fill-form"):
@@ -431,16 +451,74 @@ def publish_message_note(
                 title=draft.title,
             )
     elif draft.media_type == "video" and (
-        video_source_path is not None or getattr(driver, "_publish_note_source_video_path", None)
+        effective_video_source_path is not None or getattr(driver, "_publish_note_source_video_path", None)
     ):
         with _note_profile("validate-published-video"):
             _validate_published_note_video_matches_source(
                 driver,
-                source_path=video_source_path,
+                source_path=effective_video_source_path,
                 title=draft.title,
                 timeout=min(timeout, 30),
             )
     return success_signal
+
+
+def _pull_android_selected_video_source(driver: WebDriver, *, video_index: int) -> Path | None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "android":
+        return None
+    udid = (
+        str(capabilities.get("appium:udid") or capabilities.get("udid") or "").strip()
+        or os.environ.get("VW_ANDROID_UDID", "").strip()
+    )
+    if not udid:
+        raise AssertionError("Android video source verification requires a device udid")
+    command = [
+        "adb",
+        "-s",
+        udid,
+        "shell",
+        "content",
+        "query",
+        "--uri",
+        "content://media/external/video/media",
+        "--projection",
+        "_data:date_modified",
+    ]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AssertionError("Unable to query Android videos for source verification") from error
+    if result.returncode != 0:
+        raise AssertionError(f"Unable to query Android videos: {(result.stderr or '').strip()}")
+    candidates: list[tuple[int, str]] = []
+    for line in (result.stdout or "").splitlines():
+        match = re.search(r"_data=(.*), date_modified=(\d+)$", line.strip())
+        if match:
+            candidates.append((int(match.group(2)), match.group(1)))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    target_index = max(1, int(video_index)) - 1
+    if target_index >= len(candidates):
+        raise AssertionError(f"Android video source index is unavailable: index={video_index} count={len(candidates)}")
+    remote_path = candidates[target_index][1]
+    suffix = Path(remote_path).suffix.lower() or ".mp4"
+    local_path = _publish_note_artifact_dir() / f"android-selected-source-video-{int(time.time())}{suffix}"
+    try:
+        pull_result = subprocess.run(
+            ["adb", "-s", udid, "pull", remote_path, str(local_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AssertionError(f"Unable to pull Android selected source video: {remote_path}") from error
+    if pull_result.returncode != 0 or not local_path.is_file():
+        raise AssertionError(
+            f"Unable to pull Android selected source video: {remote_path} stderr={(pull_result.stderr or '').strip()}"
+        )
+    setattr(driver, "_publish_note_source_video_path", str(local_path))
+    return local_path
 
 
 def wait_for_video_upload_completion(
@@ -1048,13 +1126,22 @@ def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
+    if _tap_publish_trigger_and_verify(
+        driver,
+        lambda: _tap_test_id_now(driver, PUBLISH_ENTRY_PRIMARY_ID),
+    ):
+        return True
     if platform == "android":
-        # The Android bottom navigation exposes stable ids in the normal home
-        # state. Try those immediately before the coordinate and broad text
-        # fallbacks; the latter can spend up to a second per candidate.
+        # The Android bottom navigation exposes the publish plus button through
+        # resource-id. Prefer that stable semantic locator over coordinates.
         page_source = _safe_page_source(driver)
-        for accessibility_id in PUBLISH_ENTRY_IDS:
-            if accessibility_id in page_source and _tap_accessibility_id_now(driver, accessibility_id):
+        for resource_id in PUBLISH_ENTRY_IDS:
+            if resource_id not in page_source:
+                continue
+            if _tap_publish_trigger_and_verify(
+                driver,
+                lambda resource_id=resource_id: _tap_resource_id_now(driver, resource_id),
+            ):
                 return True
         if _tap_publish_entry_by_coordinate(driver, y_ratios=(0.948,)):
             return True
@@ -1864,6 +1951,25 @@ def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
         return False
 
 
+def _tap_resource_id_now(driver: WebDriver, resource_id: str) -> bool:
+    try:
+        driver.find_element(AppiumBy.ID, resource_id).click()
+        return True
+    except (NoSuchElementException, WebDriverException):
+        return False
+
+
+def _tap_test_id_now(driver: WebDriver, test_id: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    platform = str(capabilities.get("platformName", "")).lower()
+    locator = AppiumBy.ID if platform == "android" else AppiumBy.ACCESSIBILITY_ID
+    try:
+        driver.find_element(locator, test_id).click()
+        return True
+    except (AttributeError, NoSuchElementException, WebDriverException):
+        return False
+
+
 def _tap_xpath_now(driver: WebDriver, xpath: str) -> bool:
     try:
         driver.find_element(AppiumBy.XPATH, xpath).click()
@@ -2052,7 +2158,7 @@ def _upload_note_media(driver: WebDriver, draft: MessageNoteDraft) -> None:
         if draft.media_source == "camera":
             if not photo_picker.choose_video_from_camera(
                 driver,
-                record_seconds=draft.camera_record_seconds,
+                record_seconds=draft.camera_record_seconds or 3,
             ):
                 raise AssertionError("Video camera opened but recording could not be completed.")
         else:
@@ -2187,7 +2293,11 @@ def _validate_published_note_video_matches_source(
         result = compare_video_to_frames(
             selected_source,
             actual_frames,
-            sample_count=len(actual_frames),
+            # Device screenshots are intentionally limited to four, but the
+            # source video needs a denser timeline so an arbitrary playback
+            # moment is compared with the same scene instead of the nearest
+            # one of only four unrelated source moments.
+            sample_count=_video_validation_source_sample_count(),
         )
     except Exception as error:
         raise AssertionError(f"Unable to compare the published video with its source: {error}") from error
@@ -2199,15 +2309,109 @@ def _validate_published_note_video_matches_source(
                 f"source_path={selected_source}",
                 f"sampled_frame_paths={','.join(str(path) for path in frame_paths)}",
                 f"comparison={result}",
+                *_publish_note_video_frame_summary_lines(result, frame_paths),
             ]
         ),
         encoding="utf-8",
     )
+    mismatch_artifacts = (
+        _save_publish_note_video_mismatch_artifacts(actual_frames, result)
+        if not result.is_valid
+        else {}
+    )
+    comparisons_by_index = {
+        comparison.actual_frame_index: comparison
+        for comparison in getattr(result, "frame_comparisons", ())
+    }
     for index, frame_path in enumerate(frame_paths, start=1):
-        attach_file_if_present(frame_path, name=f"publish-note-video-validation-frame-{index}.png")
+        comparison = comparisons_by_index.get(index)
+        if comparison is None:
+            attachment_name = f"publish-note-video-validation-actual-frame-{index:02d}.png"
+        else:
+            status = _publish_note_video_frame_status(result, comparison)
+            attachment_name = (
+                f"{status}-actual-frame-{index:02d}-"
+                f"similarity-{comparison.similarity:.6f}.png"
+            )
+        attach_file_if_present(
+            frame_path,
+            name=attachment_name,
+            attachment_type=allure.attachment_type.PNG,
+        )
+        for artifact_path, artifact_name in mismatch_artifacts.get(index, ()):
+            attach_file_if_present(
+                artifact_path,
+                name=artifact_name,
+                attachment_type=allure.attachment_type.PNG,
+            )
     attach_file_if_present(summary_path, name="publish-note-video-validation.txt", attachment_type=allure.attachment_type.TEXT)
     if not result.is_valid:
-        raise AssertionError(f"Published note video does not match the source video: {result}")
+        mismatch_summary = ", ".join(
+            f"frame-{comparison.actual_frame_index:02d}(similarity={comparison.similarity:.6f})"
+            for comparison in getattr(result, "frame_comparisons", ())
+            if not comparison.is_valid
+        ) or "none identified by per-frame similarity"
+        raise AssertionError(
+            "Published note video does not match the source video; "
+            f"mismatched screenshots: {mismatch_summary}; comparison={result}"
+        )
+
+
+def _publish_note_video_frame_summary_lines(result, frame_paths: list[Path]) -> list[str]:
+    paths_by_index = {index: path for index, path in enumerate(frame_paths, start=1)}
+    lines: list[str] = []
+    for comparison in getattr(result, "frame_comparisons", ()):
+        status = _publish_note_video_frame_status(result, comparison)
+        lines.append(
+            f"actual_frame_{comparison.actual_frame_index:02d}="
+            f"status={status},"
+            f"similarity={comparison.similarity:.6f},"
+            f"matched_source_frame={comparison.matched_source_frame_index:02d},"
+            f"path={paths_by_index.get(comparison.actual_frame_index, '')}"
+        )
+    return lines
+
+
+def _publish_note_video_frame_status(result, comparison) -> str:
+    if comparison.is_valid:
+        return "MATCH"
+    if result.is_valid:
+        return "LOW-SIMILARITY"
+    return "MISMATCH"
+
+
+def _save_publish_note_video_mismatch_artifacts(
+    actual_frames: list[Image.Image],
+    result,
+) -> dict[int, tuple[tuple[Path, str], ...]]:
+    artifact_dir = _publish_note_artifact_dir()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"publish-note-video-validation-{int(time.time())}"
+    artifacts: dict[int, tuple[tuple[Path, str], ...]] = {}
+    for comparison in getattr(result, "frame_comparisons", ()):
+        if comparison.is_valid:
+            continue
+        actual_offset = comparison.actual_frame_index - 1
+        if actual_offset < 0 or actual_offset >= len(actual_frames):
+            continue
+        actual_frame = actual_frames[actual_offset].convert("RGB")
+        source_frame = comparison.matched_source_frame.convert("RGB")
+        prefix = (
+            f"MISMATCH-frame-{comparison.actual_frame_index:02d}-"
+            f"similarity-{comparison.similarity:.6f}"
+        )
+        source_path = artifact_dir / f"{base_name}-{prefix}-source.png"
+        diff_path = artifact_dir / f"{base_name}-{prefix}-diff.png"
+        source_frame.save(source_path)
+        ImageChops.difference(source_frame.resize(actual_frame.size), actual_frame).save(diff_path)
+        artifacts[comparison.actual_frame_index] = (
+            (
+                source_path,
+                f"{prefix}-matched-source-frame-{comparison.matched_source_frame_index:02d}.png",
+            ),
+            (diff_path, f"{prefix}-diff.png"),
+        )
+    return artifacts
 
 
 def _wait_for_published_note_video_ready(driver: WebDriver, timeout: int = 30) -> None:
@@ -2229,6 +2433,16 @@ def _published_note_video_loading_visible(page_source: str) -> bool:
     return any(token in page_source for token in PUBLISHED_NOTE_VIDEO_LOADING_TEXTS)
 
 
+def _video_validation_source_sample_count() -> int:
+    try:
+        return max(
+            4,
+            min(120, int(os.environ.get("VW_VIDEO_VALIDATION_SOURCE_SAMPLE_COUNT", "24"))),
+        )
+    except ValueError:
+        return 24
+
+
 def _capture_published_note_video_frames(
     driver: WebDriver,
     bounds,
@@ -2241,9 +2455,9 @@ def _capture_published_note_video_frames(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     if sample_count is None:
         try:
-            sample_count = max(2, min(12, int(os.environ.get("VW_VIDEO_VALIDATION_SAMPLE_COUNT", "8"))))
+            sample_count = max(2, min(12, int(os.environ.get("VW_VIDEO_VALIDATION_SAMPLE_COUNT", "4"))))
         except ValueError:
-            sample_count = 8
+            sample_count = 4
     if seconds is None:
         try:
             seconds = max(1.0, min(20.0, float(os.environ.get("VW_VIDEO_VALIDATION_RECORD_SECONDS", "8"))))
@@ -2251,6 +2465,13 @@ def _capture_published_note_video_frames(
             seconds = 8.0
     sample_count = max(1, int(sample_count))
     interval = float(seconds) / max(1, sample_count - 1)
+    try:
+        frame_ready_attempts = max(
+            1,
+            min(30, int(os.environ.get("VW_VIDEO_VALIDATION_FRAME_READY_ATTEMPTS", "10"))),
+        )
+    except ValueError:
+        frame_ready_attempts = 10
     frames: list[Image.Image] = []
     frame_paths: list[Path] = []
     try:
@@ -2259,11 +2480,12 @@ def _capture_published_note_video_frames(
         for index in range(sample_count):
             if index:
                 time.sleep(interval)
-            screenshot_png = driver.get_screenshot_as_png()
-            frame = crop_image_from_screenshot(
-                screenshot_png,
+            frame = _capture_loaded_published_note_video_frame(
+                driver,
                 bounds,
                 window_size=window_size,
+                frame_index=index + 1,
+                max_attempts=frame_ready_attempts,
             )
             frame_path = artifact_dir / f"publish-note-video-validation-{int(time.time())}-{index + 1}.png"
             frame.save(frame_path)
@@ -2276,16 +2498,76 @@ def _capture_published_note_video_frames(
     return frames, frame_paths
 
 
+def _capture_loaded_published_note_video_frame(
+    driver: WebDriver,
+    bounds,
+    *,
+    window_size: tuple[int, int],
+    frame_index: int,
+    max_attempts: int,
+) -> Image.Image:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    for _attempt in range(max_attempts):
+        # Android hierarchy serialization is unusually expensive on the video
+        # detail page (several seconds per read). Loading has already been
+        # checked once before sampling, so avoid reading the same hierarchy
+        # before and after every Android screenshot. A blank-frame check still
+        # protects us from accepting an unrendered player surface.
+        if not is_android and _published_note_video_loading_visible(_safe_page_source(driver)):
+            time.sleep(0.3)
+            continue
+        screenshot_png = driver.get_screenshot_as_png()
+        frame = crop_image_from_screenshot(
+            screenshot_png,
+            bounds,
+            window_size=window_size,
+        )
+        loading_after_capture = (
+            False
+            if is_android
+            else _published_note_video_loading_visible(_safe_page_source(driver))
+        )
+        if not loading_after_capture and _published_note_video_frame_has_rendered_content(frame):
+            return frame
+        time.sleep(0.3)
+    raise AssertionError(
+        f"Published note video screenshot {frame_index} was still loading or blank "
+        f"after {max_attempts} attempts"
+    )
+
+
+def _published_note_video_frame_has_rendered_content(frame: Image.Image) -> bool:
+    grayscale = frame.convert("L")
+    pixel_count = grayscale.width * grayscale.height
+    if pixel_count <= 0:
+        return False
+    near_black_pixel_count = sum(grayscale.histogram()[:12])
+    return near_black_pixel_count / pixel_count < 0.98
+
+
 def _publish_note_video_validation_summary_path() -> Path:
     return _publish_note_artifact_dir() / f"publish-note-video-validation-{int(time.time())}.txt"
 
 
 def _open_published_note_detail_from_my_notes(driver: WebDriver, title: str, *, timeout: int = 20) -> None:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    reset_android_list_to_top = False
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
         if message_detail_is_visible(driver):
             return
+        if is_android and _my_notes_list_visible(page_source) and not reset_android_list_to_top:
+            reset_android_list_to_top = True
+            for _ in range(8):
+                try:
+                    swipe_vertical(driver, direction="down")
+                except (WebDriverException, AttributeError):
+                    break
+                time.sleep(0.4)
+            continue
         if _tap_published_note_title(driver, title, page_source=page_source):
             if _wait_until(lambda: message_detail_is_visible(driver), timeout=5):
                 return
@@ -2301,13 +2583,20 @@ def _open_published_note_detail_from_my_notes(driver: WebDriver, title: str, *, 
 
 
 def _my_notes_list_visible(page_source: str) -> bool:
-    return "我的笔记" in page_source and any(token in page_source for token in ["发布", "草稿箱", "我的发布"])
+    return "我的笔记" in page_source and (
+        any(token in page_source for token in ["发布", "草稿箱", "我的发布"])
+        or all(token in page_source for token in ["笔记", "收藏", "点赞"])
+    )
 
 
 def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str | None = None) -> bool:
     page_source = page_source or _safe_page_source(driver)
     if not page_source:
         return False
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if is_android and _tap_android_published_note_title_prefix(driver, title):
+        return True
     escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
     for xpath in [
         f'//XCUIElementTypeStaticText[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}") or contains(@text, "{escaped_title}")]',
@@ -2315,8 +2604,23 @@ def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str
         f'//*[contains(@name, "{escaped_title}") or contains(@label, "{escaped_title}") or contains(@value, "{escaped_title}")]',
     ]:
         try:
-            driver.find_element(AppiumBy.XPATH, xpath).click()
+            element = driver.find_element(AppiumBy.XPATH, xpath)
         except (NoSuchElementException, WebDriverException):
+            continue
+        rect = _rect_snapshot(element)
+        if is_android and rect is not None:
+            tapped = _adb_input_tap(
+                driver,
+                int(rect["x"] + rect["width"] / 2),
+                int(rect["y"] + rect["height"] / 2),
+            )
+        else:
+            try:
+                element.click()
+                tapped = True
+            except WebDriverException:
+                tapped = rect is not None and _tap_rect_center(driver, rect)
+        if not tapped:
             continue
         if _wait_until(lambda: message_detail_is_visible(driver), timeout=1.5):
             return True
@@ -2324,6 +2628,39 @@ def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str
     if title_rect is not None and _tap_rect_center(driver, title_rect):
         return True
     return tap_text_if_present(driver, title, timeout=1)
+
+
+def _tap_android_published_note_title_prefix(driver: WebDriver, title: str) -> bool:
+    normalized_title = str(title or "").strip()
+    if not normalized_title:
+        return False
+    minimum_prefix_length = max(10, (len(normalized_title) * 3 + 4) // 5)
+    prefix = normalized_title[:minimum_prefix_length]
+    escaped_prefix = prefix.replace("\\", "\\\\").replace('"', '\\"')
+    try:
+        candidates = driver.find_elements(
+            AppiumBy.XPATH,
+            f'//android.widget.TextView[contains(@text, "{escaped_prefix}")]',
+        )
+    except (AttributeError, WebDriverException):
+        return False
+    for candidate in candidates:
+        try:
+            candidate_text = str(candidate.get_attribute("text") or "")
+        except (AttributeError, WebDriverException):
+            continue
+        if not _published_note_title_matches(candidate_text, normalized_title):
+            continue
+        rect = _rect_snapshot(candidate)
+        if rect is None:
+            continue
+        if _adb_input_tap(
+            driver,
+            int(rect["x"] + rect["width"] / 2),
+            int(rect["y"] + rect["height"] / 2),
+        ):
+            return True
+    return False
 
 
 def _visible_ios_published_note_title_rect(page_source: str, title: str) -> dict[str, float] | None:
@@ -2814,6 +3151,9 @@ def _text_input_current_value(element) -> str:
 def _tap_note_image_plus(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    if _tap_test_id_now(driver, NOTE_IMAGE_ENTRY_PRIMARY_ID):
+        if _wait_for_note_photo_picker_opened(driver):
+            return True
     if not is_ios and _tap_android_note_image_plus_from_source(driver):
         return True
     if not is_ios and _tap_note_image_plus_by_coordinate(driver):
@@ -2858,13 +3198,27 @@ def _tap_note_image_plus(driver: WebDriver) -> bool:
 
 
 def _tap_note_video_entry(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if _tap_test_id_now(driver, NOTE_VIDEO_ENTRY_PRIMARY_ID):
+        return True
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        try:
+            size = driver.get_window_size()
+            # The Android publish media card is split horizontally: photo on
+            # top, video on bottom. Keep the tap away from the divider.
+            driver.execute_script(
+                "mobile: tap",
+                {"x": size["width"] * 0.098, "y": size["height"] * 0.212},
+            )
+            return True
+        except (AttributeError, KeyError, TypeError, WebDriverException):
+            pass
     for accessibility_id in ["note-video-add", "publish-video-add", "post-video-add"]:
         if tap_if_present(driver, accessibility_id, timeout=1):
             return True
     for text in ["添加视频", "上传视频", "视频"]:
         if tap_text_if_present(driver, text, timeout=1):
             return True
-    capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "ios":
         for x, y in [(60, 199), (60, 206), (60, 190)]:
             try:
@@ -2895,6 +3249,20 @@ def _tap_note_image_plus_by_coordinate(driver: WebDriver) -> bool:
                 continue
             if _tap_element_center(driver, candidate):
                 return True
+
+        # The updated publish card is rendered by the app shell without a
+        # clickable Android accessibility node. Its image half is stable at
+        # roughly 10% of the screen width and 16% of the screen height.
+        try:
+            size = driver.get_window_size()
+            driver.execute_script(
+                "mobile: tap",
+                {"x": size["width"] * 0.098, "y": size["height"] * 0.157},
+            )
+            if _wait_for_note_photo_picker_opened(driver):
+                return True
+        except (AttributeError, KeyError, TypeError, WebDriverException):
+            pass
         return False
 
     try:
@@ -2927,7 +3295,7 @@ def _tap_android_note_image_plus_from_source(driver: WebDriver) -> bool:
     except ElementTree.ParseError:
         return False
 
-    candidates: list[tuple[int, int, int, int]] = []
+    candidates: list[tuple[int, int, int, int, bool]] = []
     for element in root.iter():
         if element.tag not in {
             "android.view.ViewGroup",
@@ -2946,24 +3314,34 @@ def _tap_android_note_image_plus_from_source(driver: WebDriver) -> bool:
             height = int(float(attrs.get("height", "0")))
         except (TypeError, ValueError):
             continue
-        if x > 120 or y < 110 or y > 340 or width < 70 or height < 70:
+        if x > 150 or y < 110 or y > 700 or width < 70 or height < 70:
             continue
         ratio = width / height if height else 0
-        if not 0.65 <= ratio <= 1.5:
+        is_updated_media_card = (
+            attrs.get("resource-id") == "image"
+            and width >= 150
+            and height >= 200
+        )
+        if not is_updated_media_card and not 0.65 <= ratio <= 1.5:
             continue
         searchable = " ".join(
             str(attrs.get(attribute, ""))
             for attribute in ("resource-id", "content-desc", "text", "name", "label", "value", "type")
         ).lower()
-        if not any(token in searchable for token in ("image", "图片", "上传", "添加", "+", "＋")):
+        if not is_updated_media_card and not any(
+            token in searchable for token in ("image", "图片", "上传", "添加", "+", "＋")
+        ):
             continue
-        candidates.append((y, x, width, height))
+        candidates.append((y, x, width, height, is_updated_media_card))
 
-    for y, x, width, height in sorted(set(candidates)):
+    for y, x, width, height, is_updated_media_card in sorted(set(candidates)):
         try:
             driver.execute_script(
                 "mobile: tap",
-                {"x": x + width // 2, "y": y + height // 4},
+                {
+                    "x": x + width // 2,
+                    "y": y + (height // 10 if is_updated_media_card else height // 4),
+                },
             )
         except WebDriverException:
             continue
@@ -4806,6 +5184,9 @@ def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
 
 
 def _tap_bottom_action_element_center_at_index(driver: WebDriver, action_index: int) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android":
+        return _tap_android_bottom_action_by_source(driver, action_index, tap_count=True)
     candidates = _find_bottom_action_elements(driver)
     if len(candidates) <= action_index:
         return False
@@ -4888,16 +5269,26 @@ def _ios_preview_close_rect(page_source: str) -> tuple[int, int, int, int] | Non
     return max(right_candidates, key=lambda rect: (rect[0], -rect[1]))
 
 
-def _tap_android_bottom_action_by_source(driver: WebDriver, action_index: int) -> bool:
+def _tap_android_bottom_action_by_source(
+    driver: WebDriver,
+    action_index: int,
+    *,
+    tap_count: bool = False,
+) -> bool:
     page_source = _safe_page_source(driver)
     entries = _android_bottom_action_entries(page_source)
     if len(entries) <= action_index:
         return False
     _, left, top, right, bottom = entries[action_index]
+    height = max(1, bottom - top)
+    # React Native exposes the numeric label but not the Pressable as clickable
+    # on Android. The SVG action icon sits immediately to the label's left and
+    # is the reliable hit target. Keep the label center as the retry target.
+    x = (left + right) // 2 if tap_count else left - height // 2
     try:
         driver.execute_script(
             "mobile: tap",
-            {"x": (left + right) // 2, "y": (top + bottom) // 2},
+            {"x": x, "y": (top + bottom) // 2},
         )
         return True
     except (AttributeError, WebDriverException):

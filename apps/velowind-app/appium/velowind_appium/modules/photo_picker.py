@@ -74,6 +74,11 @@ def choose_photo_from_library(
     if not visible:
         return False
 
+    if album_name and str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android":
+        if not _select_android_photo_picker_albums_tab(driver):
+            _photo_picker_debug("failed to switch Android Photo Picker to 影集; refusing to continue in 全部")
+            return False
+
     choose_kwargs = {
         "album_name": album_name,
         "picture_index": picture_index,
@@ -87,6 +92,8 @@ def choose_photo_from_library(
         primary_chosen = choose_local_photo(driver, **choose_kwargs)
     if primary_chosen:
         return True
+    if _is_android_photo_picker(driver):
+        return False
 
     with _photo_picker_profile("choose-first-option-fallback"):
         fallback_opened = _choose_first_option(driver, preferred_texts=["最近项目", "照片图库", "照片", "所有照片"])
@@ -106,6 +113,9 @@ def choose_video_from_library(
     video_index: int = 1,
 ) -> bool:
     """Choose a one-based video position from the system picker."""
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
     picker_visible = photo_library_visible(driver, timeout=2)
     if not picker_visible:
         source_chosen = choose_photo_library_source(driver)
@@ -115,25 +125,28 @@ def choose_video_from_library(
     if not picker_visible:
         return False
     dismiss_photo_permission_alerts(driver)
-    if album_name:
+    if album_name and not is_android:
         album_opened = open_photo_album(driver, album_name)
         if not album_opened:
             return False
-        capabilities = getattr(driver, "capabilities", {}) or {}
-        if str(capabilities.get("platformName", "")).lower() == "ios" and not _ensure_ios_photo_album_active(
+        if is_ios and not _ensure_ios_photo_album_active(
             driver,
             album_name,
         ):
             return False
-    else:
+    elif not is_android:
         filter_selected = _select_ios_video_filter(driver)
         _photo_picker_debug(f"video-filter-selected={filter_selected}")
-    capabilities = getattr(driver, "capabilities", {}) or {}
-    if str(capabilities.get("platformName", "")).lower() == "ios":
+    if is_ios:
         candidate_tapped = (
             _tap_album_ios_video_candidate(driver, video_index=video_index)
             if album_name
             else _tap_first_ios_video_candidate(driver, video_index=video_index)
+        )
+    elif is_android and _is_android_photo_picker(driver):
+        candidate_tapped = _tap_android_photo_picker_video_candidate(
+            driver,
+            video_index=max(1, video_index),
         )
     else:
         candidate_tapped = tap_photo_grid_candidate(driver, max(1, video_index))
@@ -141,6 +154,35 @@ def choose_video_from_library(
         _photo_picker_debug(f"video-grid-tap-failed source={_safe_page_source(driver)[:600]}")
         return False
     return _confirm_video_picker_selection(driver)
+
+
+def _tap_android_photo_picker_video_candidate(driver: WebDriver, *, video_index: int = 1) -> bool:
+    try:
+        candidates = driver.find_elements(
+            AppiumBy.XPATH,
+            '//android.widget.FrameLayout[@clickable="true" and contains(@content-desc, "视频")]',
+        )
+    except (AttributeError, WebDriverException):
+        candidates = []
+    candidates = [candidate for candidate in candidates if _rect_snapshot(candidate) is not None]
+    candidates.sort(
+        key=lambda candidate: (
+            (_rect_snapshot(candidate) or {}).get("y", 0),
+            (_rect_snapshot(candidate) or {}).get("x", 0),
+        )
+    )
+    if not candidates:
+        return False
+    candidate = candidates[min(max(1, video_index), len(candidates)) - 1]
+    rect = _rect_snapshot(candidate)
+    if rect is None:
+        return False
+    tapped = _adb_tap(
+        driver,
+        x=rect["x"] + rect["width"] / 2,
+        y=rect["y"] + rect["height"] / 2,
+    ) or _tap_rect_center(driver, rect)
+    return tapped and _wait_until(lambda: _android_video_preview_visible(driver), timeout=15)
 
 
 def choose_video_from_camera(
@@ -282,7 +324,9 @@ def _tap_album_ios_video_candidate(driver: WebDriver, *, video_index: int = 1) -
     _, _, rect, _ = visible_candidates[target_index]
     if not _tap_rect_center(driver, rect):
         return False
-    return _wait_for_ios_video_preview(driver, timeout=10)
+    # Keep selecting from the requested album, but allow large videos on real
+    # devices enough time to finish preparing their preview.
+    return _wait_for_ios_video_preview(driver, timeout=30)
 
 
 def _tap_ios_video_grid_coordinate_fallback(driver: WebDriver, video_index: int) -> bool:
@@ -439,24 +483,51 @@ def _rect_snapshot_from_attributes(attributes: dict[str, str]) -> dict[str, floa
 
 
 def _confirm_video_picker_selection(driver: WebDriver) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if is_android:
+        if not _wait_until(lambda: _android_video_preview_visible(driver), timeout=15):
+            _photo_picker_debug("android-video-preview-not-visible; refusing to tap confirm")
+            return False
+        try:
+            confirm = driver.find_element(AppiumBy.XPATH, '//*[@text="确认"]')
+            rect = _rect_snapshot(confirm)
+        except (NoSuchElementException, AttributeError, WebDriverException):
+            rect = None
+        if rect is None:
+            return False
+        tapped = _adb_tap(
+            driver,
+            x=rect["x"] + rect["width"] / 2,
+            y=rect["y"] + rect["height"] / 2,
+        ) or _tap_rect_center(driver, rect)
+        return tapped and _wait_until(
+            lambda: not _android_video_preview_visible(driver)
+            and _android_publish_form_visible(_safe_page_source(driver)),
+            timeout=15,
+        )
     if not _visible_text_present(driver, "预览视频"):
-        if not _wait_for_ios_video_preview(driver, timeout=10):
+        if not _wait_for_ios_video_preview(driver, timeout=30):
             _photo_picker_debug("video-preview-not-visible; refusing to tap confirm")
             return False
     _wait_until(lambda: _video_preview_confirmation_ready(driver), timeout=10)
-    capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "ios":
         try:
             driver.execute_script("mobile: tap", {"x": 298, "y": 806})
-            _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30)
-            return True
+            if _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30):
+                return True
         except WebDriverException:
             pass
     for text in ["确认", "Confirm", "完成", "Done"]:
         if _tap_text_or_contains(driver, text):
-            _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30)
-            return True
+            if _wait_until(lambda: not _visible_text_present(driver, "预览视频"), timeout=30):
+                return True
     return confirm_system_photo_picker_selection(driver)
+
+
+def _android_video_preview_visible(driver: WebDriver) -> bool:
+    source = _safe_page_source(driver)
+    return 'package="com.velowind.rider"' in source and 'text="预览视频"' in source
 
 
 def _video_preview_confirmation_ready(driver: WebDriver) -> bool:
@@ -531,6 +602,12 @@ def photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
             except (NoSuchElementException, WebDriverException, AttributeError):
                 continue
         page_source = _safe_page_source(driver)
+        if (
+            "com.android.photopicker" in page_source
+            and 'content-desc="全部"' in page_source
+            and 'content-desc="影集"' in page_source
+        ):
+            return True
         if any(
             text in page_source
             for text in [
@@ -562,6 +639,7 @@ def choose_local_photo(
     normalized_indexes = _normalize_picture_indexes(picture_indexes)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
     if _is_android_gallery3d_picker(driver):
         gallery_kwargs = {
             "preferred_album_name": album_name,
@@ -581,18 +659,27 @@ def choose_local_photo(
         )
     if album_name:
         with _photo_picker_profile("open-photo-album"):
-            album_opened = open_photo_album(driver, album_name)
+            target_album = "相机" if is_android else album_name
+            album_opened = open_photo_album(driver, target_album)
         if not album_opened:
-            return False
+            if is_android:
+                return False
+            if not _select_android_photo_picker_all_tab(driver) and not find_photo_grid_candidates(driver):
+                return False
         if is_ios and not _ensure_ios_photo_album_active(driver, album_name):
             return False
+        if is_android and _is_android_photo_picker(driver):
+            # Android image-note cases always choose the first item from 相机.
+            normalized_index = 1
+            normalized_indexes = ()
+            select_all_from_album = False
     if album_name:
         if normalized_indexes:
             with _photo_picker_profile("tap-photo-grid-candidates"):
                 all_selected = tap_photo_grid_candidates(driver, normalized_indexes)
             if not all_selected:
                 return False
-        elif select_all_from_album:
+        elif select_all_from_album and not _is_android_photo_picker(driver):
             with _photo_picker_profile("select-all-album-photos"):
                 all_selected = select_all_album_photos(driver)
             if not all_selected:
@@ -698,6 +785,8 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
         if not _tap_named_element_center(driver, album_name):
             return False
         return _wait_until(lambda: bool(find_photo_grid_candidates(driver)), timeout=2)
+    if is_android:
+        return _open_android_photo_picker_album(driver, album_name)
 
     with _photo_picker_profile("open-photo-album-current-title"):
         current_title = photo_album_title(driver)
@@ -710,17 +799,8 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
         if not left_grid:
             _photo_picker_debug("failed to leave multi-select grid before opening requested album")
             return False
-        with _photo_picker_profile("open-photo-album-leave-grid-wait"):
-            left_grid_visible = _wait_until(
-                lambda: _photo_picker_collections_visible(driver) or photo_album_title(driver) != current_title,
-                timeout=2,
-            )
-        if not left_grid_visible:
-            _photo_picker_debug(f"still on multi-select grid after back; current={photo_album_title(driver)}")
-            return False
-        with _photo_picker_profile("open-photo-album-title-after-grid"):
-            current_title = photo_album_title(driver)
-        _photo_picker_debug(f"after leaving multi-select grid; current={current_title}")
+        time.sleep(0.2)
+        current_title = None
     if current_title not in {None, "选择最多9张照片。"}:
         with _photo_picker_profile("open-photo-album-return-collections"):
             returned_to_collections = _return_photo_picker_to_collections(driver, current_title=current_title)
@@ -731,7 +811,11 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
             current_title = photo_album_title(driver)
         _photo_picker_debug(f"after return to collections; current={current_title}")
     with _photo_picker_profile("open-photo-album-switch-collections"):
-        switched_to_collections = switch_photo_picker_to_collections(driver, current_title=current_title)
+        switched_to_collections = switch_photo_picker_to_collections(
+            driver,
+            current_title=current_title,
+            probe_current_title=False,
+        )
     if not switched_to_collections:
         _photo_picker_debug(f"failed to switch to collections; current={current_title}")
         return False
@@ -744,7 +828,9 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
                 if not tapped_album:
                     tapped_album = _tap_texts_by_predicate(driver, [album_name])
             else:
-                tapped_album = _tap_ios_named_element_from_source(driver, album_name) or _tap_named_element_center(driver, album_name)
+                tapped_album = _tap_texts_by_predicate(driver, [album_name])
+                if not tapped_album:
+                    tapped_album = _tap_ios_named_element_from_source(driver, album_name) or _tap_named_element_center(driver, album_name)
         if tapped_album:
             with _photo_picker_profile("open-photo-album-wait-target-title"):
                 target_opened = _wait_until(lambda: photo_album_title(driver) == album_name, timeout=2)
@@ -761,6 +847,117 @@ def open_photo_album(driver: WebDriver, album_name: str) -> bool:
         time.sleep(0.3)
     _photo_picker_debug(f"failed to open target album={album_name}; final={photo_album_title(driver)}")
     return False
+
+
+def _is_android_photo_picker(driver: WebDriver) -> bool:
+    return "com.android.photopicker" in _safe_page_source(driver)
+
+
+def _android_photo_picker_tab_selected(driver: WebDriver, tab_name: str) -> bool:
+    """Return whether an Android Photo Picker top tab reports selected=true."""
+    source = _safe_page_source(driver)
+    if not source:
+        return False
+    escaped_name = re.escape(tab_name)
+    return bool(
+        re.search(
+            rf'content-desc="{escaped_name}"[^>]*selected="true"',
+            source,
+        )
+        or re.search(
+            rf'text="{escaped_name}"[^>]*selected="true"',
+            source,
+        )
+    )
+
+
+def _select_android_photo_picker_albums_tab(driver: WebDriver) -> bool:
+    """Switch to 影集 using the stable device-layout coordinate and verify it."""
+    if _android_photo_picker_tab_selected(driver, "影集"):
+        return True
+    try:
+        size = driver.get_window_size()
+        if _adb_tap(driver, x=size["width"] * 0.742, y=size["height"] * 0.198):
+            if _wait_until(lambda: _android_photo_picker_tab_selected(driver, "影集"), timeout=2):
+                return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        pass
+    try:
+        element = driver.find_element(AppiumBy.XPATH, '//*[@content-desc="影集"]')
+        rect = _rect_snapshot(element)
+        if rect is not None:
+            driver.execute_script(
+                "mobile: tap",
+                {
+                    "x": int(rect["x"] + rect["width"] / 2),
+                    "y": int(rect["y"] + rect["height"] / 2),
+                },
+            )
+            if _wait_until(lambda: _android_photo_picker_tab_selected(driver, "影集"), timeout=2):
+                return True
+    except (NoSuchElementException, AttributeError, KeyError, TypeError, WebDriverException):
+        pass
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {"x": int(size["width"] * 0.742), "y": int(size["height"] * 0.198)},
+        )
+        if _wait_until(lambda: _android_photo_picker_tab_selected(driver, "影集"), timeout=2):
+            return True
+        switched = _adb_tap(
+            driver,
+            x=size["width"] * 0.742,
+            y=size["height"] * 0.198,
+        ) and _wait_until(
+            lambda: _android_photo_picker_tab_selected(driver, "影集"),
+            timeout=2,
+        )
+        _photo_picker_debug(f"android-photo-picker-switch-to-albums selected={switched}")
+        return switched
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        _photo_picker_debug("android-photo-picker-switch-to-albums coordinate tap failed")
+    return False
+
+
+def _open_android_photo_picker_album(driver: WebDriver, album_name: str) -> bool:
+    for _ in range(5):
+        for xpath in [
+            f'//*[contains(@text, "{album_name}")]',
+            f'//*[contains(@content-desc, "{album_name}")]',
+        ]:
+            try:
+                element = driver.find_element(AppiumBy.XPATH, xpath)
+                rect = _rect_snapshot(element)
+                if rect is not None and (
+                    _adb_tap(
+                        driver,
+                        x=rect["x"] + rect["width"] / 2,
+                        y=rect["y"] + rect["height"] / 2,
+                    )
+                    or _tap_rect_center(driver, rect)
+                ):
+                    return _wait_until(
+                        lambda: _android_photo_picker_album_opened(driver, album_name),
+                        timeout=3,
+                    )
+            except (NoSuchElementException, WebDriverException, AttributeError):
+                continue
+        try:
+            swipe_vertical(driver, direction="up")
+        except WebDriverException:
+            break
+        time.sleep(0.3)
+    return False
+
+
+def _android_photo_picker_album_opened(driver: WebDriver, album_name: str) -> bool:
+    source = _safe_page_source(driver)
+    return bool(
+        f'text="{album_name}"' in source
+        and 'resource-id="com.android.photopicker:id/action_bar_title"' in source
+        and 'content-desc="照片' in source
+    )
 
 
 def tap_photo_grid_candidate(
@@ -780,7 +977,47 @@ def tap_photo_grid_candidate(
     rect = _rect_snapshot(candidate)
     if rect is None:
         return False
+    candidate_package = ""
+    candidate_class = ""
+    try:
+        candidate_package = str(candidate.get_attribute("package") or "")
+        candidate_class = str(candidate.get_attribute("className") or candidate.get_attribute("class") or "")
+    except (AttributeError, WebDriverException):
+        pass
+    if _is_android_photo_picker(driver) or candidate_package == "com.android.photopicker" or candidate_class == "android.widget.FrameLayout":
+        # Android Photo Picker selects media through the card's checkbox;
+        # tapping the thumbnail opens preview without selecting it.
+        return _tap_android_photo_picker_checkbox(driver, rect)
     return _tap_rect_center(driver, rect)
+
+
+def _tap_android_photo_picker_checkbox(driver: WebDriver, rect: dict[str, float]) -> bool:
+    try:
+        x = rect["x"] + rect["width"] * 0.75
+        y = rect["y"] + rect["height"] * 0.75
+    except (KeyError, TypeError):
+        return False
+    if _adb_tap(driver, x=x, y=y):
+        return _wait_until(lambda: _android_photo_picker_has_checked_photo(driver), timeout=2)
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": x,
+                "y": y,
+            },
+        )
+        return _wait_until(lambda: _android_photo_picker_has_checked_photo(driver), timeout=2)
+    except WebDriverException:
+        return False
+
+
+def _android_photo_picker_has_checked_photo(driver: WebDriver) -> bool:
+    source = _safe_page_source(driver)
+    return bool(
+        'resource-id="com.android.photopicker:id/checkbox"' in source
+        and 'checked="true"' in source
+    )
 
 
 def select_all_album_photos(driver: WebDriver) -> bool:
@@ -860,21 +1097,38 @@ def _tap_all_photo_grid_candidates(driver: WebDriver) -> bool:
 
 
 def find_photo_grid_candidates(driver: WebDriver) -> list:
-    candidates = []
-    seen: set[tuple[float, float, float, float]] = set()
-    miui_xpaths = []
-    if _is_xiaomi_physical_android_driver(driver):
-        miui_xpaths = [
-            '//android.widget.ImageView[@resource-id="com.miui.gallery:id/micro_thumb"]',
-        ]
-    for xpath in [
+    android_xpaths = [
         '//android.widget.ImageView[@clickable="true" and contains(@content-desc, "Photo")]',
-        *miui_xpaths,
+        '//android.widget.FrameLayout[@clickable="true" and contains(@content-desc, "照片")]',
+    ]
+    if _is_xiaomi_physical_android_driver(driver):
+        android_xpaths.append('//android.widget.ImageView[@resource-id="com.miui.gallery:id/micro_thumb"]')
+    ios_xpaths = [
         "//XCUIElementTypeCell",
         "//XCUIElementTypeImage[@name='PXGGridLayout-Info']",
         "//XCUIElementTypeImage[contains(@label, 'Screenshot')]",
         "//XCUIElementTypeImage",
-    ]:
+    ]
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    platform = str(capabilities.get("platformName", "")).lower()
+    if platform == "ios":
+        xpath_groups = [[xpath] for xpath in ios_xpaths]
+    elif platform == "android":
+        xpath_groups = [[xpath] for xpath in android_xpaths]
+    else:
+        xpath_groups = [[*android_xpaths, *ios_xpaths]]
+
+    for xpaths in xpath_groups:
+        candidates = _photo_grid_candidates_for_xpaths(driver, xpaths)
+        if candidates:
+            return candidates
+    return []
+
+
+def _photo_grid_candidates_for_xpaths(driver: WebDriver, xpaths: list[str]) -> list:
+    candidates = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for xpath in xpaths:
         try:
             elements = driver.find_elements(AppiumBy.XPATH, xpath)
         except (AttributeError, WebDriverException):
@@ -898,6 +1152,30 @@ def find_photo_grid_candidates(driver: WebDriver) -> list:
     return candidates
 
 
+def _select_android_photo_picker_all_tab(driver: WebDriver) -> bool:
+    """Leave Android Photo Picker's album view and return to the media grid."""
+    page_source = _safe_page_source(driver)
+    if "com.android.photopicker" not in page_source:
+        return False
+    try:
+        element = driver.find_element(AppiumBy.XPATH, '//*[@content-desc="全部"]')
+        rect = _rect_snapshot(element)
+        if rect is not None and _tap_rect_center(driver, rect):
+            return _wait_until(lambda: bool(find_photo_grid_candidates(driver)), timeout=3)
+    except (NoSuchElementException, WebDriverException, AttributeError):
+        pass
+    try:
+        size = driver.get_window_size()
+        driver.execute_script(
+            "mobile: tap",
+            {"x": size["width"] * 0.258, "y": size["height"] * 0.198},
+        )
+        return _wait_until(lambda: bool(find_photo_grid_candidates(driver)), timeout=3)
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        pass
+    return False
+
+
 def photo_album_title(driver: WebDriver) -> str | None:
     for xpath in [
         "//XCUIElementTypeNavigationBar/XCUIElementTypeStaticText[1]",
@@ -913,23 +1191,51 @@ def photo_album_title(driver: WebDriver) -> str | None:
     return None
 
 
-def switch_photo_picker_to_collections(driver: WebDriver, *, current_title: str | None = None) -> bool:
-    if current_title is None:
+def switch_photo_picker_to_collections(
+    driver: WebDriver,
+    *,
+    current_title: str | None = None,
+    probe_current_title: bool = True,
+) -> bool:
+    if current_title is None and probe_current_title:
         with _photo_picker_profile("switch-collections-current-title"):
             current_title = photo_album_title(driver)
     if current_title == "精选集":
         return True
     with _photo_picker_profile("switch-collections-tap-tab"):
         tapped_collections = _tap_ios_text_from_source(driver, "精选集") or _tap_text_or_contains(driver, "精选集")
+        if not tapped_collections:
+            tapped_collections = _tap_texts_by_predicate(driver, ["精选集"])
     if not tapped_collections:
         return False
     with _photo_picker_profile("switch-collections-wait-visible"):
         return _wait_until(
-            lambda: _photo_picker_collections_visible(driver)
-            or photo_album_title(driver) == "精选集"
-            or _visible_text_present(driver, "精选集"),
+            lambda: photo_album_title(driver) == "精选集"
+            or _visible_text_present(driver, "精选集")
+            or _photo_picker_collections_visible(driver),
             timeout=1,
         )
+
+
+def _tap_ios_photo_picker_collections_button_by_coordinate(driver: WebDriver) -> bool:
+    """Tap the iOS 26 Photos picker Collections button without an AX snapshot."""
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() != "ios":
+        return False
+    size = _safe_window_size(driver)
+    if size is None:
+        return False
+    try:
+        driver.execute_script(
+            "mobile: tap",
+            {
+                "x": int(size["width"] * 0.579),
+                "y": int(size["height"] * 0.165),
+            },
+        )
+        return True
+    except (AttributeError, KeyError, TypeError, WebDriverException):
+        return False
 
 
 def _tap_photo_picker_back(driver: WebDriver) -> bool:
@@ -1059,6 +1365,8 @@ def confirm_system_photo_picker_selection(
     *,
     before_confirm_cropper: CropperImageObserver | None = None,
 ) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    is_android = str(capabilities.get("platformName", "")).lower() == "android"
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         with _photo_picker_profile("confirm-system-selection-tap-done"):
@@ -1072,7 +1380,9 @@ def confirm_system_photo_picker_selection(
                     driver,
                     before_confirm_cropper=before_confirm_cropper,
                 ),
-                timeout=2,
+                # Large Android camera photos can take several seconds to be
+                # copied from Photo Picker into the app cropper.
+                timeout=20 if is_android else 2,
             )
         if transitioned:
             return True
@@ -1115,6 +1425,7 @@ def _photo_picker_transition_completed(
             "Select photos",
             "Device folders",
             'package="com.google.android.apps.photos"',
+            'package="com.android.photopicker"',
             *(['package="com.miui.gallery"'] if _is_xiaomi_physical_android_driver(driver) else []),
             'text="Done"',
             "发布笔记",
@@ -1513,7 +1824,7 @@ def _tap_texts_by_predicate(driver: WebDriver, texts: list[str]) -> bool:
     try:
         driver.find_element(AppiumBy.IOS_PREDICATE, predicate).click()
         return True
-    except (NoSuchElementException, WebDriverException):
+    except (AttributeError, NoSuchElementException, WebDriverException):
         return False
 
 
@@ -1545,6 +1856,20 @@ def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
 def _tap_photo_picker_done_button(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "android":
+        try:
+            confirm_button = driver.find_element(
+                AppiumBy.XPATH,
+                '//*[@resource-id="com.android.photopicker:id/confirm_button" and @enabled="true"]',
+            )
+            rect = _rect_snapshot(confirm_button)
+            if rect is not None and _adb_tap(
+                driver,
+                x=rect["x"] + rect["width"] / 2,
+                y=rect["y"] + rect["height"] / 2,
+            ):
+                return True
+        except (NoSuchElementException, AttributeError, KeyError, TypeError, WebDriverException):
+            pass
         if tap_text_if_present(driver, "Done", timeout=1):
             return True
         if tap_text_if_present(driver, "确认", timeout=1):

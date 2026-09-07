@@ -1,9 +1,4 @@
 tests:
-   # 基础功能巡检
-  - file: smoke/test_ios_feature_walkthrough.py
-    methods:
-      - test_ios_feature_walkthrough
-      - test_bottom_tabs_are_reachable
   # 发布笔记 - 图片
   - file: message/test_ios_publish_note.py
     methods:
@@ -12,6 +7,15 @@ tests:
   - file: message/test_ios_xiaodai_publish_video.py
     methods:
       - test_user_can_publish_xiaodai_video_note_for_review
+  # 发布笔记 - 直接拍摄视频
+  - file: message/test_ios_publish_video_record_note.py
+    methods:
+      - test_user_can_publish_video_record_note_for_review
+   # 基础功能巡检
+  - file: smoke/test_ios_feature_walkthrough.py
+    methods:
+      - test_ios_feature_walkthrough
+      - test_bottom_tabs_are_reachable
   # 浏览笔记详情
   - file: message/test_ios_message_browse.py
     methods:
@@ -30,4 +34,4 @@ tests:
     methods:
       - test_user_can_create_rental_order_and_leave_payment_unfinished
 pytest_args:
-  - --maxfail=10
+  - --maxfail=1

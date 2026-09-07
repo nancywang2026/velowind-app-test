@@ -23,7 +23,7 @@ from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_
 
 @pytest.mark.manual_recording
 def test_artifact(driver, ios_config, step):
-    """Generated from manual recording: /private/var/folders/gj/7mdg85d11911slmkjlzzbk8h0000gn/T/pytest-of-test/pytest-215/test_generate_test_module_writ0/recording.json"""
+    """Generated from manual recording: /private/var/folders/gj/7mdg85d11911slmkjlzzbk8h0000gn/T/pytest-of-test/pytest-281/test_generate_test_module_writ0/recording.json"""
     dismiss_common_system_alerts(driver, step)
     step("prepare-home-session", lambda: ensure_logged_in_on_home(driver, ios_config))
 

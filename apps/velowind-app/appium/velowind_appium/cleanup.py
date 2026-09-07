@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import html
+import json
 import re
 import time
 from typing import Optional
@@ -20,6 +21,8 @@ NOTE_ACTION_TEXTS = ["删除", "确认删除"]
 ACTIVITY_ACTION_TEXTS = ["下架", "取消发布", "删除"]
 SESSION_ACTION_TEXTS = ["删除", "取消", "下架"]
 CONFIRM_TEXTS = ["确认删除", "确定", "确认", "删除", "下架", "取消发布"]
+MIN_TRUNCATED_TITLE_PREFIX_LENGTH = 12
+TRUNCATED_TITLE_WAIT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,20 @@ def cleanup_notes(driver: WebDriver, config: CleanupConfig, app_config, *, dry_r
             matchers=config.note_matchers,
             action_texts=NOTE_ACTION_TEXTS,
             dry_run=dry_run,
+        )
+    finally:
+        safe_back(driver)
+
+
+def cleanup_published_note(driver: WebDriver, title: str, app_config) -> CleanupReport:
+    ensure_logged_in_on_home(driver, app_config)
+    _open_me_entry(driver, "我的笔记")
+    try:
+        return cleanup_exact_visible_item(
+            driver,
+            item_type="note",
+            title=title,
+            action_texts=NOTE_ACTION_TEXTS,
         )
     finally:
         safe_back(driver)
@@ -86,6 +103,7 @@ def cleanup_matching_visible_items(
     dry_run: bool,
     required_texts: Optional[list[str]] = None,
     required_page_texts: Optional[list[str]] = None,
+    exact_match: bool = False,
     max_rounds: int = 20,
 ) -> CleanupReport:
     deleted: list[str] = []
@@ -97,7 +115,9 @@ def cleanup_matching_visible_items(
         page_has_required_texts = not required_page_texts or all(text in page_source for text in required_page_texts)
         candidates = [
             text for text in find_matching_visible_texts(page_source, matchers, required_texts=required_texts)
-            if text not in seen and page_has_required_texts
+            if text not in seen
+            and page_has_required_texts
+            and (not exact_match or text in matchers)
         ]
         if candidates:
             for candidate in candidates:
@@ -113,6 +133,8 @@ def cleanup_matching_visible_items(
                 break
             if not dry_run:
                 continue
+        if _cleanup_page_reached_end(page_source):
+            break
         if not _scroll_page(driver):
             break
         next_page_source = _safe_page_source(driver)
@@ -120,6 +142,114 @@ def cleanup_matching_visible_items(
             break
 
     return CleanupReport(item_type=item_type, deleted=deleted, skipped=skipped)
+
+
+def cleanup_exact_visible_item(
+    driver: WebDriver,
+    *,
+    item_type: str,
+    title: str,
+    action_texts: list[str],
+) -> CleanupReport:
+    """Delete a just-created item only when its exact title is visible at the list top."""
+    if not _tap_exact_visible_title(driver, title):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[])
+    time.sleep(0.5)
+    if not tap_first_available_text(driver, ["更多", "...", "…"]):
+        _tap_ios_top_right_more(driver)
+    if not tap_first_available_text(driver, action_texts):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    if not confirm_destructive_action(driver):
+        return CleanupReport(item_type=item_type, deleted=[], skipped=[title])
+    return CleanupReport(item_type=item_type, deleted=[title], skipped=[])
+
+
+def _tap_exact_visible_title(driver: WebDriver, title: str) -> bool:
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    platform = str(capabilities.get("platformName", "")).lower()
+    candidates = [title]
+
+    for candidate in candidates:
+        if platform == "android":
+            quoted = json.dumps(candidate, ensure_ascii=False)
+            locator = (AppiumBy.ANDROID_UIAUTOMATOR, f"new UiSelector().text({quoted})")
+        else:
+            escaped = candidate.replace("\\", "\\\\").replace('"', '\\"')
+            locator = (
+                AppiumBy.IOS_PREDICATE,
+                f'name == "{escaped}" OR label == "{escaped}" OR value == "{escaped}"',
+            )
+        try:
+            elements = driver.find_elements(*locator)
+        except (AttributeError, NoSuchElementException, WebDriverException):
+            elements = []
+        for element in elements:
+            if not _element_is_visible(element):
+                continue
+            _tap_element_center(driver, element)
+            return True
+
+    if platform == "ios":
+        end_at = time.monotonic() + TRUNCATED_TITLE_WAIT_SECONDS
+        while True:
+            for rendered_title in find_visible_truncated_title_variants(_safe_page_source(driver), title):
+                escaped = rendered_title.replace("\\", "\\\\").replace('"', '\\"')
+                locator = (
+                    AppiumBy.IOS_PREDICATE,
+                    f'name == "{escaped}" OR label == "{escaped}" OR value == "{escaped}"',
+                )
+                try:
+                    elements = driver.find_elements(*locator)
+                except (AttributeError, NoSuchElementException, WebDriverException):
+                    continue
+                for element in elements:
+                    if not _element_is_visible(element):
+                        continue
+                    _tap_element_center(driver, element)
+                    return True
+            if time.monotonic() >= end_at:
+                break
+            time.sleep(0.2)
+    return False
+
+
+def find_visible_truncated_title_variants(page_source: str, title: str) -> list[str]:
+    """Return visible iOS title labels that are safe truncations of ``title``."""
+    try:
+        root = ET.fromstring(page_source)
+    except ET.ParseError:
+        return []
+
+    variants: list[str] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        element_type = element.attrib.get("type", element.tag)
+        if element_type != "XCUIElementTypeStaticText" or element.attrib.get("visible") == "false":
+            continue
+        rendered_title = next(
+            (
+                element.attrib.get(attribute, "").strip()
+                for attribute in ("name", "label", "value")
+                if element.attrib.get(attribute, "").strip()
+            ),
+            "",
+        )
+        comparable_title = rendered_title.rstrip("…").rstrip()
+        if (
+            rendered_title in seen
+            or len(comparable_title) < MIN_TRUNCATED_TITLE_PREFIX_LENGTH
+            or len(comparable_title) >= len(title)
+            or not title.startswith(comparable_title)
+        ):
+            continue
+        seen.add(rendered_title)
+        variants.append(rendered_title)
+
+    return sorted(variants, key=lambda value: len(value.rstrip("…").rstrip()), reverse=True)
+
+
+def _cleanup_page_reached_end(page_source: str) -> bool:
+    return any(marker in page_source for marker in ["已经到底了", "没有更多了", "暂无更多"])
 
 
 def find_matching_visible_texts(

@@ -1,4 +1,8 @@
 cleanup:
+  # Keep publish cases isolated: after all assertions pass, wait for the note
+  # to become deletable and remove the exact title created by that case.
+  delete_published_note_after_success: true
+
   note_matchers:
     - "测试 -"
     - "自动化回归"
