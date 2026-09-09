@@ -2294,3 +2294,13 @@ def test_ios_datetime_picker_uses_four_visible_columns_before_legacy_coordinates
     for field, _, x in columns:
         assert activity_sessions._ios_datetime_picker_wheel_center(driver, driver.get_window_rect(), field) == (x + 42, 676)
     assert activity_sessions._ios_datetime_picker_column_center('<invalid', "minute") is None
+
+
+def test_ios_datetime_column_center_handles_zero_minute_boundary():
+    source = '''<root>
+      <XCUIElementTypeStaticText visible="true" label="9月10日9点00分" x="108" y="509" width="186" height="31" />
+      <XCUIElementTypeStaticText visible="true" label="分" x="301" y="575" width="84" height="20" />
+      <XCUIElementTypeStaticText visible="true" label="00" x="301" y="654" width="84" height="44" />
+      <XCUIElementTypeStaticText visible="true" label="05" x="301" y="698" width="84" height="32" />
+    </root>'''
+    assert activity_sessions._ios_datetime_picker_column_center(source, "minute") == (343, 676)

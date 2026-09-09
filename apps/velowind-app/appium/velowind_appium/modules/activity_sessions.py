@@ -1674,10 +1674,15 @@ def _ios_datetime_picker_column_center(page_source: str, field: str) -> tuple[in
     for text, x, y in leaves:
         if text != label:
             continue
-        rows = sorted(row_y for number, row_x, row_y in leaves
-                      if re.fullmatch(r"\d{1,2}", number) and abs(row_x - x) < 5 and row_y > y)
+        rows = [(number, row_y) for number, row_x, row_y in leaves
+                if re.fullmatch(r"\d{1,2}", number) and abs(row_x - x) < 5 and row_y > y]
+        current = (_ios_datetime_picker_current_parts_from_source(page_source) or {}).get(field)
+        for number, row_y in rows:
+            if current is not None and int(number) == int(current):
+                return int(x), int(row_y)
         if len(rows) >= 3:
-            return int(x), int(rows[len(rows) // 2])
+            positions = sorted(row_y for _, row_y in rows)
+            return int(x), int(positions[len(positions) // 2])
     return None
 
 
