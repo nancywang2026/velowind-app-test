@@ -604,7 +604,7 @@ def test_write_session_datetime_value_routes_ios_picker_to_ios_writer(monkeypatc
     assert calls == [("报名截止时间", "2026-07-23 18:00")]
 
 
-def test_write_ios_start_and_end_time_only_adjusts_date(monkeypatch):
+def test_write_ios_start_and_end_time_adjusts_date_and_hour(monkeypatch):
     driver = FakeDriver("开始时间 已选择时间 7月18日 22点 取消 确认 月 日 时")
     driver.capabilities = {"platformName": "iOS"}
     captured = []
@@ -620,12 +620,12 @@ def test_write_ios_start_and_end_time_only_adjusts_date(monkeypatch):
     assert activity_sessions._write_ios_datetime_picker_value(driver, "结束时间", "2026-07-28 18:00") is True
 
     assert captured == [
-        (["month", "day"], {"month": "07", "day": "23", "hour": "09", "minute": "00"}),
-        (["month", "day"], {"month": "07", "day": "28", "hour": "18", "minute": "00"}),
+        (["month", "day", "hour", "minute"], {"month": "07", "day": "23", "hour": "09", "minute": "00"}),
+        (["month", "day", "hour", "minute"], {"month": "07", "day": "28", "hour": "18", "minute": "00"}),
     ]
 
 
-def test_write_ios_deadline_only_adjusts_date(monkeypatch):
+def test_write_ios_deadline_adjusts_date_and_hour(monkeypatch):
     driver = FakeDriver("报名截止时间 已选择时间 7月18日 22点 取消 确认 月 日 时")
     driver.capabilities = {"platformName": "iOS"}
     captured = []
@@ -640,7 +640,7 @@ def test_write_ios_deadline_only_adjusts_date(monkeypatch):
     assert activity_sessions._write_ios_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is True
 
     assert captured == [
-        (["month", "day"], {"month": "07", "day": "23", "hour": "18", "minute": "00"}),
+        (["month", "day", "hour", "minute"], {"month": "07", "day": "23", "hour": "18", "minute": "00"}),
     ]
 
 
@@ -813,9 +813,9 @@ def test_write_ios_datetime_picker_value_taps_target_values_by_column():
 
     assert activity_sessions._write_ios_datetime_picker_value(driver, "报名截止时间", "2026-07-23 18:00") is True
 
-    assert driver.current == {"month": "07", "day": "23", "hour": "22"}
+    assert driver.current == {"month": "07", "day": "23", "hour": "18"}
     assert ("mobile: tap", {"x": 201.0, "y": 707.0}) in driver.scripts
-    assert ("mobile: tap", {"x": 316.0, "y": 647.0}) not in driver.scripts
+    assert ("mobile: tap", {"x": 316.0, "y": 647.0}) in driver.scripts
 
 
 def test_tap_ios_datetime_picker_wheel_step_swipes_between_visible_rows():
@@ -1473,7 +1473,7 @@ def test_choose_session_location_waits_for_picker_to_close_without_pressing_back
     events = []
 
     monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
-    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source, value: True)
     monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
     monkeypatch.setattr(activity_sessions, "_session_location_selected", lambda page_source: events.append("selected-check") or True)
     monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda driver: driver.page_source)
@@ -1495,7 +1495,7 @@ def test_choose_session_location_retries_android_selection_before_dismissing(mon
     selected_attempts = {"value": 0}
 
     monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
-    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source, value: True)
     monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
     monkeypatch.setattr(
         activity_sessions,
@@ -1519,7 +1519,7 @@ def test_choose_session_location_retries_android_selection_before_dismissing(mon
 
     assert activity_sessions._choose_session_location(driver, "张家界景区") is True
 
-    assert waits == [5, 6, 4]
+    assert waits == [30, 6, 4]
     assert events == [
         ("search", "张家界景区"),
         ("tap-result", "张家界景区"),
@@ -1537,7 +1537,7 @@ def test_choose_session_location_keeps_ios_short_wait_path(monkeypatch):
     waits = []
 
     monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
-    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source, value: True)
     monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
     monkeypatch.setattr(activity_sessions, "_session_location_selected", lambda page_source: events.append("selected-check") or True)
     monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda driver: driver.page_source)
@@ -1551,7 +1551,7 @@ def test_choose_session_location_keeps_ios_short_wait_path(monkeypatch):
 
     assert activity_sessions._choose_session_location(driver, "张家界景区") is True
 
-    assert waits == [5, 2]
+    assert waits == [30, 2]
     assert events == [
         ("search", "张家界景区"),
         ("tap-result", "张家界景区"),
@@ -1565,7 +1565,7 @@ def test_choose_session_location_dismisses_picker_when_selection_is_visible_behi
     dismissed = {"value": False}
 
     monkeypatch.setattr(activity_sessions, "_search_session_location", lambda driver, value: events.append(("search", value)) or True)
-    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source: True)
+    monkeypatch.setattr(activity_sessions, "_session_location_results_visible", lambda page_source, value: True)
     monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda driver, value: events.append(("tap-result", value)) or True)
     monkeypatch.setattr(
         activity_sessions,
@@ -2176,3 +2176,121 @@ def test_tap_top_right_plus_uses_ios_manage_session_plus_coordinates():
 
     assert activity_sessions._tap_top_right_plus(driver) is True
     assert driver.scripts == [("mobile: tap", {"x": 361, "y": 91})]
+
+
+def test_tap_submit_prefers_confirm_create_over_partial_page_title(monkeypatch):
+    tapped = []
+    monkeypatch.setattr(
+        activity_sessions, "tap_text_if_present",
+        lambda driver, text, timeout: tapped.append(text) or text in {"确认创建", "新增"},
+    )
+
+    assert activity_sessions._tap_submit(FakeDriver()) is True
+    assert tapped == ["确认创建"]
+
+
+def test_ios_datetime_picker_reads_visible_time_and_minutes_only():
+    source = '''<root>
+      <XCUIElementTypeOther visible="true" label="6月30日10点 9月8日11点30分">
+        <XCUIElementTypeStaticText visible="false" label="6月30日10点" />
+        <XCUIElementTypeStaticText visible="true" label="9月8日11点30分" />
+      </XCUIElementTypeOther>
+    </root>'''
+    assert activity_sessions._ios_datetime_picker_current_parts_from_source(source) == {
+        "month": "09", "day": "08", "hour": "11", "minute": "30",
+    }
+
+
+def _location_search_source(*, status="", result="", hidden=False):
+    return f'''<AppiumAUT>
+      <XCUIElementTypeTextField visible="true" value="张家界景区" placeholderValue="搜索地点" />
+      <XCUIElementTypeScrollView visible="true">
+        <XCUIElementTypeStaticText visible="true" label="{status}" />
+        <XCUIElementTypeOther visible="{'false' if hidden else 'true'}">
+          <XCUIElementTypeStaticText visible="true" label="{result}" />
+        </XCUIElementTypeOther>
+      </XCUIElementTypeScrollView>
+    </AppiumAUT>'''
+
+
+def test_location_results_require_visible_match_and_completed_search():
+    for source in [
+        _location_search_source(status="搜索中..."),
+        _location_search_source(status="搜索中…", result="张家界国家森林公园"),
+        _location_search_source(),
+        _location_search_source(result="张家界国家森林公园", hidden=True),
+        _location_search_source(result="北京故宫"),
+        _location_search_source(status="暂无搜索结果"),
+        "", "<invalid",
+    ]:
+        assert not activity_sessions._session_location_results_visible(source, "张家界景区")
+    assert activity_sessions._session_location_results_visible(
+        _location_search_source(result="张家界国家森林公园"), "张家界景区"
+    )
+    assert activity_sessions._session_location_results_visible('''<hierarchy>
+      <android.widget.EditText text="张家界景区" hint="搜索地点" />
+      <android.widget.ScrollView>
+        <android.widget.TextView text="张家界国家森林公园" />
+      </android.widget.ScrollView>
+    </hierarchy>''', "张家界景区")
+
+
+def test_choose_location_waits_through_slow_search_without_retyping(monkeypatch):
+    clock = [0.0]
+    searches = []
+    taps = []
+    driver = FakeDriver()
+    driver.capabilities = {"platformName": "iOS"}
+    monkeypatch.setattr(activity_sessions.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(activity_sessions, "_search_session_location", lambda d, v: searches.append(v) or True)
+
+    def source(d):
+        if taps:
+            return "新增场次 场次展示文案 集合地点 张家界国家森林公园"
+        if clock[0] < 8:
+            return _location_search_source(status="搜索中...")
+        return _location_search_source(result="张家界国家森林公园")
+
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", source)
+    monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda d, v: taps.append(clock[0]) or True)
+    assert activity_sessions._choose_session_location(driver, "张家界景区")
+    assert searches == ["张家界景区"]
+    assert len(taps) == 1 and 8 <= taps[0] < 9
+
+
+def test_choose_location_times_out_without_clicking_or_dismissing(monkeypatch):
+    import pytest
+
+    clock = [0.0]
+    driver = FakeDriver(_location_search_source(status="搜索中..."))
+    monkeypatch.setattr(activity_sessions.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(activity_sessions, "_search_session_location", lambda d, v: True)
+    monkeypatch.setattr(activity_sessions, "_tap_session_location_result", lambda *args: pytest.fail("clicked before results"))
+    monkeypatch.setattr(activity_sessions, "_dismiss_session_location_modal", lambda *args: pytest.fail("lost failure evidence"))
+    with pytest.raises(AssertionError, match="timed out after 3s.*searching"):
+        activity_sessions._choose_session_location(driver, "张家界景区", timeout=3)
+    assert 3 <= clock[0] < 3.3
+
+
+def test_ios_location_selection_never_falls_back_to_android_gestures(monkeypatch):
+    driver = FakeDriver()
+    driver.capabilities = {"platformName": "iOS"}
+    monkeypatch.setattr(activity_sessions, "_tap_ios_session_location_result", lambda *args: False)
+    assert not activity_sessions._tap_session_location_result(driver, "张家界景区")
+    assert driver.scripts == []
+
+
+def test_ios_datetime_picker_uses_four_visible_columns_before_legacy_coordinates(monkeypatch):
+    columns = [("month", "月", 17), ("day", "日", 111), ("hour", "时", 206), ("minute", "分", 301)]
+    nodes = []
+    for field, label, x in columns:
+        nodes.append(f'<XCUIElementTypeStaticText visible="true" label="{label}" x="{x}" y="575" width="84" height="20" />')
+        for value, y in [("09", 622), ("10", 654), ("11", 698)]:
+            nodes.append(f'<XCUIElementTypeStaticText visible="true" label="{value}" x="{x}" y="{y}" width="84" height="44" />')
+    driver = FakeDriver('<AppiumAUT>' + ''.join(nodes) + '</AppiumAUT>')
+    monkeypatch.setattr(activity_sessions, "_ios_datetime_picker_wheel_element_center", lambda *args: (_ for _ in ()).throw(AssertionError("unnecessary locator scan")))
+    for field, _, x in columns:
+        assert activity_sessions._ios_datetime_picker_wheel_center(driver, driver.get_window_rect(), field) == (x + 42, 676)
+    assert activity_sessions._ios_datetime_picker_column_center('<invalid', "minute") is None

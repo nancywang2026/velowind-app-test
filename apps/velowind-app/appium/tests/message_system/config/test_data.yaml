@@ -1,0 +1,393 @@
+# 业务输入/预期独立配置；deferred_coverage 不参与执行。
+schema_version: 1
+suite: message_system
+source: 测试用例.json
+execution:
+  poll_seconds: 0.5
+  http_timeout_seconds: 10
+  hold_seconds: 1.2
+  max_scrolls: 20
+  platform: ios
+  account_isolation: per_case
+  ui_concurrency: 1
+  page_timeout_seconds: 15
+  business_timeout_seconds: 30
+  cleanup: always
+  unresolved_placeholder: block
+  unknown_required_rule: block
+accounts:
+  actor:
+    username_env: MESSAGE_TEST_ACTOR_USERNAME
+    password_env: MESSAGE_TEST_ACTOR_PASSWORD
+  peer:
+    username_env: MESSAGE_TEST_PEER_USERNAME
+    password_env: MESSAGE_TEST_PEER_PASSWORD
+  owner:
+    username_env: MESSAGE_TEST_OWNER_USERNAME
+    password_env: MESSAGE_TEST_OWNER_PASSWORD
+rules:
+  notification_read_mode: per_item_click
+  hidden_chat_on_new_message: stay_hidden
+  group_roles:
+  - owner
+  - member
+  group_name_max_characters: 12
+  group_description_max_characters: 100
+  new_member_history_access: null
+  hidden_chat_push: null
+  hidden_chat_badge: null
+  multiple_pinned_order: null
+scenarios:
+  MSG-A01:
+    source_cases:
+    - HOME-009
+    - INTERACT-009
+    actor: actor
+    setup:
+      system_notifications:
+      - alias: N1
+        read: false
+        valid_target: true
+      - alias: N2
+        read: false
+        valid_target: true
+      - alias: N3
+        read: false
+        valid_target: true
+      interaction_notifications:
+      - alias: I1
+        read: false
+        type: note_like
+        valid_target: true
+      - alias: I2
+        read: false
+        type: activity_like
+        valid_target: true
+    input:
+      target_notification: ${runtime.N1.id}
+      repeat_open_count: 2
+    expected:
+      initial_system_unread: 3
+      initial_interaction_unread: 2
+      after_list_open_system_unread: 3
+      after_target_open_system_unread: 2
+      after_repeat_open_system_unread: 2
+      unchanged_interaction_unread: 2
+      target_read: true
+      other_system_notifications_read: false
+  MSG-A02:
+    source_cases:
+    - SESSION-001
+    - SESSION-003
+    - SESSION-004
+    actor: actor
+    sender: peer
+    setup:
+      conversation:
+        alias: C
+        type: direct
+        hidden: false
+      history_message:
+        alias: M0
+        text: 历史消息-${run_id}-${case_id}
+    input:
+      conversation_id: ${runtime.C.id}
+      incoming_text: 隐藏后新消息-${run_id}-${case_id}
+    expected:
+      hidden_after_action: true
+      hidden_after_incoming_sync: true
+      in_home_after_incoming_sync: false
+      in_hidden_list_after_incoming_sync: true
+      incoming_message_count: 1
+      original_message_preserved: true
+    exclusions:
+    - hidden_chat_push
+    - hidden_chat_badge
+    - restore_on_manual_open
+  MSG-A03:
+    source_cases:
+    - CHAT-002
+    - CHAT-010
+    - HOME-006
+    actor: actor
+    receiver: peer
+    parameters:
+      conversation_type:
+      - direct
+      - group
+    setup:
+      target_conversation:
+        alias: C
+      unrelated_conversation:
+        alias: D
+      group_members:
+      - actor
+      - peer
+    input:
+      outbound_text: 发送验证-${run_id}-${case_id}
+      reply_text: 回复验证-${run_id}-${case_id}
+    expected:
+      receiver_conversation: ${runtime.C.id}
+      outbound_sender: ${runtime.actor.id}
+      outbound_text_equals: input.outbound_text
+      outbound_occurrences: 1
+      unrelated_conversation_occurrences: 0
+      reply_sender: ${runtime.peer.id}
+      reply_text_equals: input.reply_text
+      reply_occurrences: 1
+      group_preview_equals: input.reply_text
+    exclusions:
+    - private_preview
+    - apns
+    - second_device_ui
+  MSG-A04:
+    source_cases:
+    - CREATE-001
+    - CREATE-004
+    - CREATE-008
+    - CREATE-013
+    - OWNER-001
+    actor: actor
+    setup:
+      creation_eligible: true
+    input:
+      name: 测群${short_id}
+      description: 消息系统自动化专用测试群
+      public: false
+      agreement_accepted: true
+    expected:
+      empty_form_submittable: false
+      without_agreement_submittable: false
+      group_name_equals: input.name
+      group_description_equals: input.description
+      public: false
+      member_count: 1
+      only_member: ${runtime.actor.id}
+      owner: ${runtime.actor.id}
+      created_group_count: 1
+      owner_controls_visible: true
+  MSG-A05:
+    source_cases:
+    - OWNER-006
+    - OWNER-010
+    - OWNER-011
+    - OWNER-012
+    - OWNER-013
+    - CROSS-001
+    actor: owner
+    applicant: peer
+    parameters:
+      decision:
+      - approve
+      - reject
+    setup:
+      group:
+        alias: G
+        owner: owner
+        approval_required: true
+      applicant_is_member: false
+      application:
+        alias: R
+        actor: peer
+        status: pending
+    input:
+      application_id: ${runtime.R.id}
+      permission_probe_text: 权限验证-${run_id}-${case_id}
+    expected:
+      before_decision_can_send: false
+      application_pending_after_decision: false
+      by_decision:
+        approve:
+          application_status: approved
+          member_count_relation: baseline_plus_one
+          applicant_member_occurrences: 1
+          applicant_can_send: true
+        reject:
+          application_status: rejected
+          member_count_relation: unchanged
+          applicant_member_occurrences: 0
+          applicant_can_send: false
+    exclusions:
+    - welcome_message
+    - applicant_push
+    - rejection_reason
+    - reapply_expiry
+  MSG-A06:
+    source_cases:
+    - MEMBER-003
+    actor: actor
+    positive_control_actor: owner
+    setup:
+      group:
+        alias: G
+        owner: owner
+        members:
+        - actor
+      application:
+        alias: R
+        actor: peer
+        status: pending
+      snapshot_fields:
+      - description
+      - public
+      - members
+      - application_status
+      - group_exists
+    parameters:
+      operation:
+      - edit_description
+      - edit_visibility
+      - approve_application
+      - dissolve_group
+    input:
+      description: 角色权限测试说明
+      public: true
+    expected:
+      member_owner_controls_visible: false
+      member_business_operation_allowed: false
+      state_relation: unchanged
+      positive_control_operation: edit_description
+      positive_control_allowed: true
+    response_error_contract: null
+  MSG-A07:
+    source_cases:
+    - HOME-013
+    actor: actor
+    setup:
+      groups:
+      - alias: G1
+        pinned: false
+      - alias: G2
+        pinned: false
+      - alias: G3
+        pinned: false
+      target_initially_first: false
+    input:
+      target_group: ${runtime.G3.id}
+    expected:
+      pinned_after_enable: true
+      rank_in_group_section_after_enable: 1
+      private_section_changed: false
+      pinned_after_reentry: true
+      pinned_after_disable: false
+    exclusions:
+    - normal_sort_after_unpin
+    - multiple_pinned_order
+  MSG-A08:
+    source_cases:
+    - INTERACT-001
+    - INTERACT-002
+    - INTERACT-003
+    actor: actor
+    setup:
+      events:
+      - alias: E1
+        type: note_like
+        valid_target: true
+      - alias: E2
+        type: activity_like
+        valid_target: true
+      - alias: E3
+        type: comment_like
+        valid_target: true
+      - alias: E4
+        type: note_favorite
+        valid_target: true
+      - alias: E5
+        type: new_follower
+        valid_target: true
+      - alias: E6
+        type: activity_comment
+        valid_target: true
+      - alias: E7
+        type: comment_reply
+        valid_target: true
+      - alias: E8
+        type: comment_mention
+        valid_target: true
+    expected:
+      categories:
+        all:
+        - E1
+        - E2
+        - E3
+        - E4
+        - E5
+        - E6
+        - E7
+        - E8
+        likes_and_favorites:
+        - E1
+        - E2
+        - E3
+        - E4
+        new_followers:
+        - E5
+        comments_and_mentions:
+        - E6
+        - E7
+        - E8
+      compare: exact_event_id_set
+      switching_categories_marks_read: false
+    exclusions:
+    - follow_back_submission
+    - content_navigation
+deferred_coverage:
+  interaction_read_sync:
+    interaction_read_sync:
+      target_alias: I1
+      categories:
+      - all
+      - likes_and_favorites
+      target_read_in_both_categories: true
+      non_target_read_changed: false
+  component_parameters:
+    group_name:
+      ordinary_chinese_character: 测
+      lengths:
+      - 0
+      - 1
+      - 12
+      - 13
+      expected_valid:
+      - false
+      - true
+      - true
+      - false
+    group_description:
+      ordinary_chinese_character: 测
+      lengths:
+      - 0
+      - 1
+      - 100
+      - 101
+      expected_valid:
+      - false
+      - true
+      - true
+      - false
+    required_combinations:
+    - name_present: false
+      description_present: true
+      agreement: true
+      valid: false
+    - name_present: true
+      description_present: false
+      agreement: true
+      valid: false
+    - name_present: true
+      description_present: true
+      agreement: false
+      valid: false
+    - name_present: true
+      description_present: true
+      agreement: true
+      valid: true
+  offline_reconnect:
+    offline_reconnect:
+      texts:
+      - 离线1-${run_id}
+      - 离线2-${run_id}
+      - 离线3-${run_id}
+      expected_unique_count: 3
+      ordering_contract: null
