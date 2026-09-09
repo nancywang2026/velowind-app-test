@@ -3,7 +3,7 @@ from velowind_appium import reporting
 from pathlib import Path
 from io import BytesIO
 import pytest
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, WebDriverException
 from PIL import Image
 from velowind_appium.video_validation import VideoComparisonResult, VideoFrameComparison
 
@@ -540,7 +540,9 @@ def test_android_publish_entry_prefers_resource_id_over_coordinate(monkeypatch):
 
     assert message_detail._tap_publish_entry_if_present(FakeDriver()) is True
     assert events == [
+        *[(message_detail.AppiumBy.ACCESSIBILITY_ID, value) for value in message_detail.PUBLISH_ENTRY_IDS],
         (message_detail.AppiumBy.ID, "bottom-nav-center-action"),
+        (message_detail.AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("bottom-nav-center-action")'),
         (message_detail.AppiumBy.ID, "bottom-nav-publish"),
         "click-resource-id",
     ]
@@ -904,24 +906,79 @@ def test_android_publish_entry_coordinate_targets_pixel_10_plus_button(monkeypat
     assert taps == [("mobile: tap", {"x": 640, "y": 2670})]
 
 
-def test_ios_publish_entry_coordinate_targets_visible_bottom_center_plus_button(monkeypatch):
-    taps = []
+def test_ios_publish_entry_missing_id_does_not_use_fallbacks():
+    calls = []
 
     class FakeDriver:
         capabilities = {"platformName": "iOS"}
 
-        @staticmethod
-        def get_window_rect():
-            return {"width": 402, "height": 874}
+        def find_element(self, by, value):
+            calls.append((by, value))
+            raise NoSuchElementException("publish entry missing")
 
-        @staticmethod
-        def execute_script(script, payload):
-            taps.append((script, payload))
+        def execute_script(self, *args):
+            pytest.fail("iOS publish entry must not use coordinates")
 
-    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: True)
+    assert message_detail._tap_publish_entry_if_present(FakeDriver()) is False
+    assert calls == [(message_detail.AppiumBy.ACCESSIBILITY_ID, "bottom-nav-center-action")]
 
-    assert message_detail._tap_publish_entry_by_coordinate(FakeDriver()) is True
-    assert taps == [("mobile: tap", {"x": 201, "y": 751})]
+
+@pytest.mark.parametrize("page_source", ["选择发布类型", "手机号登录 请输入手机号 密码登录 验证并登录"])
+def test_ios_publish_entry_waits_for_transition_without_reclicking(monkeypatch, page_source):
+    clicks = []
+
+    class FakeElement:
+        def click(self):
+            clicks.append("click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            return FakeElement()
+
+    driver = FakeDriver()
+    driver.page_source = "首页"
+
+    def wait_for_transition(condition, timeout):
+        assert timeout == 10
+        assert condition() is False
+        driver.page_source = page_source
+        return condition()
+
+    monkeypatch.setattr(message_detail, "_wait_until", wait_for_transition)
+    assert message_detail._tap_publish_entry_if_present(driver) is True
+    assert clicks == ["click"]
+
+
+def test_ios_publish_entry_reports_transition_timeout_without_fallback(monkeypatch):
+    clicks = []
+
+    class FakeElement:
+        def click(self):
+            clicks.append("click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            return FakeElement()
+
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: False)
+    with pytest.raises(AssertionError, match="accessibilityId=bottom-nav-center-action"):
+        message_detail._tap_publish_entry_if_present(FakeDriver())
+    assert clicks == ["click"]
+
+
+def test_ios_publish_entry_preserves_driver_errors():
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        def find_element(self, by, value):
+            raise WebDriverException("device disconnected")
+
+    with pytest.raises(WebDriverException, match="device disconnected"):
+        message_detail._tap_publish_entry_if_present(FakeDriver())
 
 
 def test_open_message_note_publisher_recovers_from_login_page_before_business_step(monkeypatch):
@@ -1156,6 +1213,43 @@ def test_parse_android_detail_snapshot_extracts_text_and_bottom_counts():
     assert snapshot.title == "想去一趟洱海，想顺便把自己也放空一下"
     assert snapshot.body == "#云南洱海 最近总在想，应该去一次洱海，沿着湖边慢慢骑行。"
     assert snapshot.bottom_action_counts == ["0", "0", "0"]
+
+
+@pytest.mark.parametrize("marker", ["my-posts-scroll-notes", "post-home-feed-page"])
+def test_android_note_list_is_not_detail_despite_numeric_badges(marker):
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        page_source = f'''<hierarchy>
+          <android.widget.ScrollView resource-id="{marker}" />
+          <android.widget.TextView text="我的笔记" />
+          <android.widget.TextView text="Velowind｜解锁轻松骑行状态" />
+          <android.widget.TextView text="15" />
+          <android.widget.TextView text="1" />
+          <android.widget.TextView text="20" />
+        </hierarchy>'''
+
+    driver = FakeDriver()
+    assert message_detail._snapshot_is_detail_ready(parse_detail_snapshot(driver.page_source))
+    assert message_detail.message_detail_is_visible(driver) is False
+    driver.page_source = driver.page_source.replace(
+        "</hierarchy>", '<android.view.ViewGroup resource-id="post-detail-banner-pager" /></hierarchy>'
+    )
+    assert message_detail.message_detail_is_visible(driver) is True
+
+
+def test_ios_detail_keeps_legacy_fallback_with_feed_marker():
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = '''<AppiumAUT>
+          <XCUIElementTypeOther name="post-home-feed-page" />
+          <XCUIElementTypeStaticText name="骑行测试笔记" />
+          <XCUIElementTypeStaticText name="这是一段骑行笔记正文" />
+          <XCUIElementTypeStaticText name="15" />
+          <XCUIElementTypeStaticText name="1" />
+          <XCUIElementTypeStaticText name="20" />
+        </AppiumAUT>'''
+
+    assert message_detail.message_detail_is_visible(FakeDriver()) is True
 
 
 def test_android_detail_visible_while_real_content_is_loading():
@@ -4526,3 +4620,66 @@ def test_fill_note_location_skips_when_configured_to_not_mark_location(monkeypat
     message_detail._fill_note_location(object(), "不标记地点")
 
     assert events == []
+
+
+def _short_android_note_source(body_xml):
+    # Reduced from the physical-device hierarchy: detail and stale feed coexist.
+    return f'''<hierarchy>
+      <android.view.ViewGroup resource-id="post-detail-page">
+        <android.widget.ScrollView resource-id="post-detail-scroll-view">
+          <android.view.ViewGroup><android.view.ViewGroup>
+            <android.view.ViewGroup resource-id="post-detail-video-surface" />
+            <android.view.ViewGroup>
+              <android.widget.TextView text="测试" />
+              {body_xml}
+              <android.view.ViewGroup><android.widget.TextView text="地点" />
+                <android.widget.TextView text="这是一个很长的地点名称" /></android.view.ViewGroup>
+              <android.widget.TextView text="1 天前" />
+            </android.view.ViewGroup>
+            <android.view.ViewGroup><android.widget.TextView text="共 0 条评论" /></android.view.ViewGroup>
+          </android.view.ViewGroup></android.view.ViewGroup>
+        </android.widget.ScrollView>
+        <android.widget.TextView text="Nancy" />
+        <android.widget.TextView text="1" bounds="[751,2585][835,2657]" />
+        <android.widget.TextView text="1" bounds="[953,2585][1037,2657]" />
+        <android.widget.TextView text="0" bounds="[1154,2585][1238,2657]" />
+      </android.view.ViewGroup>
+      <android.view.ViewGroup resource-id="post-home-feed-page">
+        <android.widget.TextView text="这段首页卡片内容不能冒充笔记正文" />
+        <android.widget.TextView text="共 9 条评论" />
+        <android.widget.TextView text="9" bounds="[751,2690][835,2710]" />
+        <android.widget.TextView text="9" bounds="[953,2690][1037,2710]" />
+        <android.widget.TextView text="9" bounds="[1154,2690][1238,2710]" />
+      </android.view.ViewGroup>
+    </hierarchy>'''
+
+
+def test_android_detail_reads_short_equal_title_and_body_from_content_panel():
+    snapshot = parse_detail_snapshot(_short_android_note_source('<android.widget.TextView text="测试" />'))
+    assert snapshot.title == snapshot.body == "测试"
+    assert snapshot.comment_count == "0"
+    assert snapshot.bottom_action_counts == ["1", "1", "0"]
+
+
+@pytest.mark.parametrize('body_xml', ['', '<android.widget.TextView text="测试" displayed="false" />'])
+def test_android_detail_never_borrows_body_from_author_location_or_background_feed(body_xml):
+    snapshot = parse_detail_snapshot(_short_android_note_source(body_xml))
+    assert snapshot.title == "测试"
+    assert snapshot.body is None
+
+
+def test_browse_android_note_scrolls_for_missing_body_even_with_zero_comments(monkeypatch):
+    source = _short_android_note_source('')
+    scrolled = _short_android_note_source('<android.widget.TextView text="测试" />')
+    class Driver:
+        capabilities = {"platformName": "Android"}
+    events = []
+    monkeypatch.setattr(message_detail, 'read_message_detail_snapshot', lambda driver, timeout: parse_detail_snapshot(source))
+    monkeypatch.setattr(message_detail, 'swipe_vertical', lambda driver, direction: events.append(direction))
+    # One loading snapshot must not be mistaken for a complete body.
+    sources = iter([source, scrolled])
+    monkeypatch.setattr(message_detail, '_safe_page_source', lambda driver: next(sources))
+    monkeypatch.setattr(message_detail.time, 'sleep', lambda seconds: None)
+    snapshot = message_detail.browse_note_detail(Driver(), timeout=1)
+    assert snapshot.title == snapshot.body == '测试'
+    assert events == ['up']

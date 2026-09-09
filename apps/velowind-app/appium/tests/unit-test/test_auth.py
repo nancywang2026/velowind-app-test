@@ -1,3 +1,6 @@
+import pytest
+from appium.webdriver.common.appiumby import AppiumBy
+
 from selenium.common.exceptions import NoSuchElementException
 
 from velowind_appium import auth
@@ -327,3 +330,115 @@ def test_perform_password_login_retries_submit_when_login_page_persists(monkeypa
     auth._perform_password_login(object(), "13300000000", "secret")
 
     assert events.count("submit") >= 2
+
+
+@pytest.mark.parametrize("platform", ["Android", "iOS"])
+@pytest.mark.parametrize("helper,identifier", [
+    (auth._find_phone_input, "login-phone-input"),
+    (auth._find_password_input, "login-password-input"),
+    (auth._has_password_input, "login-password-input"),
+    (auth._tap_agreement, "login-agreement-checkbox"),
+    (auth._tap_login_submit, "login-primary-button"),
+    (auth._dismiss_login_agreement_sheet, "agreement-popup-confirm"),
+    (auth._tap_home_tab, "bottom-nav-home"),
+])
+def test_login_helpers_skip_fallback_when_accessibility_id_exists(platform, helper, identifier):
+    calls = []
+
+    class Element:
+        def click(self):
+            calls.append("click")
+
+    class Driver:
+        capabilities = {"platformName": platform}
+
+        def find_element(self, by, value):
+            assert (by, value) == (AppiumBy.ACCESSIBILITY_ID, identifier)
+            calls.append((by, value))
+            return Element()
+
+    helper(Driver())
+    assert calls[0] == (AppiumBy.ACCESSIBILITY_ID, identifier)
+
+
+
+
+@pytest.mark.parametrize("attribute", ["name", "content-desc"])
+def test_login_page_detected_from_ids_without_localized_copy(attribute):
+    source = f'<node {attribute}="login-phone-input"/><node {attribute}="login-primary-button"/>'
+    assert login_required_from_page_source(source) is True
+
+
+@pytest.mark.parametrize("platform", ["Android", "iOS"])
+@pytest.mark.parametrize("helper,identifier", [
+    (auth._find_phone_input, "login-phone-input"),
+    (auth._find_password_input, "login-password-input"),
+    (auth._has_password_input, "login-password-input"),
+])
+def test_missing_id_falls_back_to_original_xpath(platform, helper, identifier):
+    calls = []
+
+    class Element:
+        def click(self):
+            pass
+
+    class Driver:
+        capabilities = {"platformName": platform}
+
+        def find_element(self, by, value):
+            calls.append((by, value))
+            if by == AppiumBy.ACCESSIBILITY_ID:
+                raise NoSuchElementException()
+            assert by == AppiumBy.XPATH
+            return Element()
+
+    helper(Driver())
+    assert calls[0] == (AppiumBy.ACCESSIBILITY_ID, identifier)
+    assert calls[1][0] == AppiumBy.XPATH
+
+
+@pytest.mark.parametrize("helper,identifier,texts", [
+    (auth._dismiss_login_agreement_sheet, "agreement-popup-confirm", ["同意并继续", "同意"]),
+    (auth._save_password_if_prompted, "保存", ["保存"]),
+    (auth._tap_login_submit, "login-primary-button", ["登录"]),
+])
+def test_optional_actions_try_id_before_original_text(monkeypatch, helper, identifier, texts):
+    calls = []
+
+    class Driver:
+        capabilities = {"platformName": "Android"}
+
+        def find_element(self, by, value):
+            calls.append((by, value))
+            raise NoSuchElementException()
+
+    monkeypatch.setattr(auth, "tap_text_if_present", lambda driver, text, timeout: calls.append(text) or True)
+    helper(Driver())
+    assert calls == [(AppiumBy.ACCESSIBILITY_ID, identifier), *texts]
+
+
+@pytest.mark.parametrize("platform", ["Android", "iOS"])
+def test_password_switch_id_success_skips_legacy_locators(monkeypatch, platform):
+    calls = []
+
+    class Element:
+        def click(self):
+            calls.append("click")
+
+    class Driver:
+        capabilities = {"platformName": platform}
+
+        def find_element(self, by, value):
+            assert by == AppiumBy.ACCESSIBILITY_ID
+            calls.append(value)
+            if value == "login-password-input":
+                raise NoSuchElementException()
+            assert value == "login-switch-password-mode"
+            return Element()
+
+    monkeypatch.setattr(auth, "_safe_page_source", lambda driver: "")
+    monkeypatch.setattr(auth, "_tap_agreement", lambda driver: None)
+    monkeypatch.setattr(auth, "_password_form_visible", lambda driver, baseline: True)
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    auth._open_password_login_form(Driver())
+    assert calls == ["login-password-input", "login-switch-password-mode", "click"]

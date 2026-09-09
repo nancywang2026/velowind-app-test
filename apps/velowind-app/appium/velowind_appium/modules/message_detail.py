@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import html
+import json
 import os
 from pathlib import Path
 import re
@@ -91,15 +92,6 @@ PUBLISH_ENTRY_IDS = [
 ]
 PUBLISH_ENTRY_TEXTS = ["发布", "创建", "+", "＋"]
 
-PUBLISH_ENTRY_CANDIDATES = [
-    locator_accessibility_id(PUBLISH_ENTRY_PRIMARY_ID),
-    locator_accessibility_id("bottom-nav-publish"),
-    locator_accessibility_id("bottom-nav-plus"),
-    locator_accessibility_id("bottom-nav-add"),
-    locator_accessibility_id("home-publish-entry"),
-    locator_accessibility_id("home-create-entry"),
-    *[locator_ios_predicate(f'name == "{value}" OR label == "{value}" OR value == "{value}"') for value in PUBLISH_ENTRY_TEXTS],
-]
 NOTE_TYPE_CANDIDATES = [
     locator_accessibility_id("publish-type-note"),
     locator_accessibility_id("note-publish-type"),
@@ -844,9 +836,10 @@ def message_note_publish_error_signal(page_source: str) -> str | None:
 
 
 def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
+    page_source, content = _android_detail_source_and_content(page_source)
     texts = _extract_strings(page_source)
-    title = _extract_title(texts)
-    body = _extract_body(texts, title)
+    title = content[0] if content is not None else _extract_title(texts)
+    body = content[1] if content is not None else _extract_body(texts, title)
     view_count = _extract_count(page_source, texts, VIEW_COUNT_PATTERN, "浏览")
     comment_count = _extract_count(page_source, texts, COMMENT_COUNT_PATTERN, "评论")
     comments = _dedupe_preserve_order([*_extract_comments(texts), *_extract_android_comments(page_source)])
@@ -863,6 +856,48 @@ def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
         empty_comment_hint=empty_comment_hint,
         bottom_action_counts=bottom_action_counts,
     )
+
+
+def _android_detail_source_and_content(page_source: str) -> tuple[str, tuple[str | None, str | None] | None]:
+    if "<android." not in page_source:
+        return page_source, None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return page_source, None
+    detail = next((node for node in root.iter() if node.get("resource-id") == "post-detail-page"), None)
+    if detail is not None:
+        # Android can retain the underlying feed in the same hierarchy.
+        # Its card titles, authors and counters are not detail content.
+        root = detail
+        page_source = ElementTree.tostring(detail, encoding="unicode")
+    scroll = next((node for node in root.iter() if node.get("resource-id") == "post-detail-scroll-view"), None)
+    if scroll is None:
+        return page_source, None
+    layout = scroll
+    while len(layout) == 1 and layout[0].tag != "android.widget.TextView":
+        layout = layout[0]
+    panels = [layout] if len(layout) and layout[0].tag == "android.widget.TextView" else list(layout)
+    for panel in panels:
+        children = list(panel)
+        if not children or children[0].tag != "android.widget.TextView":
+            continue
+        title_node = children[0]
+        title = title_node.get("text", "").strip()
+        if (not title or title_node.get("displayed") == "false"
+                or title in GENERIC_DETAIL_TEXTS or _contains_detail_meta(title)
+                or ANDROID_COMMENT_TIME_PATTERN.fullmatch(title)):
+            continue
+        # The content panel starts with title then body; location and comments
+        # live in separate groups. Preserve short/equal title and body strings.
+        body = None
+        if len(children) > 1 and children[1].tag == "android.widget.TextView":
+            body_node = children[1]
+            text = body_node.get("text", "").strip()
+            if body_node.get("displayed") != "false" and text and not ANDROID_COMMENT_TIME_PATTERN.fullmatch(text):
+                body = text
+        return page_source, (title, body)
+    return page_source, (None, None)
 
 
 def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> MessageDetailSnapshot:
@@ -1034,6 +1069,13 @@ def message_detail_is_visible(driver: WebDriver) -> bool:
     page_source = _safe_page_source(driver)
     if _detail_shell_is_visible(page_source):
         return True
+    # Feed cards contain titles and numeric badges that can look like detail
+    # metadata. Only use the legacy text fallback outside known list pages.
+    capabilities = getattr(driver, "capabilities", {}) or {}
+    if str(capabilities.get("platformName", "")).lower() == "android" and any(
+        marker in page_source for marker in ("my-posts-scroll-notes", "post-home-feed-page")
+    ):
+        return False
     snapshot = parse_detail_snapshot(page_source)
     return _snapshot_is_detail_ready(snapshot)
 
@@ -1043,7 +1085,8 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
     if is_android and (
-        not _android_detail_interaction_metadata_visible(snapshot)
+        not snapshot.body
+        or not _android_detail_interaction_metadata_visible(snapshot)
         or _android_detail_needs_comment_probe(snapshot)
     ):
         swipe_vertical(driver, direction="up")
@@ -1052,7 +1095,8 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
         while time.monotonic() < end_at:
             latest = _merge_detail_snapshots(snapshot, parse_detail_snapshot(_safe_page_source(driver)))
             if (
-                _android_detail_interaction_metadata_visible(latest)
+                latest.title and latest.body
+                and _android_detail_interaction_metadata_visible(latest)
                 and not _android_detail_needs_comment_probe(latest)
             ):
                 return latest
@@ -1139,6 +1183,31 @@ def share_note_to_moments(driver: WebDriver, timeout: int = 20) -> str:
 def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
+    if platform == "ios":
+        try:
+            entry = driver.find_element(AppiumBy.ACCESSIBILITY_ID, PUBLISH_ENTRY_PRIMARY_ID)
+        except NoSuchElementException:
+            return False
+        entry.click()
+
+        def _entry_or_login_opened() -> bool:
+            page_source = driver.page_source
+            return _publish_entry_opened(page_source) or login_required_from_page_source(page_source)
+
+        if _wait_until(_entry_or_login_opened, timeout=10):
+            return True
+        raise AssertionError(
+            f"Clicked accessibilityId={PUBLISH_ENTRY_PRIMARY_ID}, but no publish sheet, "
+            "note form or login page appeared within 10 seconds"
+        )
+
+    for accessibility_id in PUBLISH_ENTRY_IDS:
+        if _tap_publish_trigger_and_verify(
+            driver,
+            lambda accessibility_id=accessibility_id: _tap_accessibility_id_now(driver, accessibility_id),
+        ):
+            return True
+
     if _tap_publish_trigger_and_verify(
         driver,
         lambda: _tap_test_id_now(driver, PUBLISH_ENTRY_PRIMARY_ID),
@@ -1159,24 +1228,8 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
         if _tap_publish_entry_by_coordinate(driver, y_ratios=(0.948,)):
             return True
 
-    if platform == "ios":
-        if tap_first(
-            driver,
-            PUBLISH_ENTRY_CANDIDATES,
-            logical_name="publish entry",
-            timeout=0.8,
-            required=False,
-        ):
-            if _wait_until(lambda: _publish_entry_opened(_safe_page_source(driver)), timeout=1):
-                return True
     if _tap_publish_entry_by_coordinate(driver):
         return True
-    for accessibility_id in PUBLISH_ENTRY_IDS:
-        if _tap_publish_trigger_and_verify(
-            driver,
-            lambda accessibility_id=accessibility_id: _tap_accessibility_id_now(driver, accessibility_id),
-        ):
-            return True
     for text in PUBLISH_ENTRY_TEXTS:
         if _tap_publish_trigger_and_verify(
             driver,
@@ -1966,18 +2019,33 @@ def _tap_accessibility_id_now(driver: WebDriver, accessibility_id: str) -> bool:
 
 def _tap_resource_id_now(driver: WebDriver, resource_id: str) -> bool:
     try:
-        driver.find_element(AppiumBy.ID, resource_id).click()
+        element = driver.find_element(AppiumBy.ID, resource_id)
+    except NoSuchElementException:
+        # React Native testIDs may be raw resource IDs without a package prefix.
+        # UiSelector preserves that value instead of Appium's ID autocompletion.
+        try:
+            element = driver.find_element(
+                AppiumBy.ANDROID_UIAUTOMATOR,
+                f"new UiSelector().resourceId({json.dumps(resource_id)})",
+            )
+        except (NoSuchElementException, WebDriverException):
+            return False
+    except WebDriverException:
+        return False
+    try:
+        element.click()
         return True
-    except (NoSuchElementException, WebDriverException):
+    except WebDriverException:
         return False
 
 
 def _tap_test_id_now(driver: WebDriver, test_id: str) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
-    locator = AppiumBy.ID if platform == "android" else AppiumBy.ACCESSIBILITY_ID
     try:
-        driver.find_element(locator, test_id).click()
+        if platform == "android":
+            return _tap_resource_id_now(driver, test_id)
+        driver.find_element(AppiumBy.ACCESSIBILITY_ID, test_id).click()
         return True
     except (AttributeError, NoSuchElementException, WebDriverException):
         return False

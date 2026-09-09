@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time as datetime_time, timedelta
+from datetime import date, datetime, timedelta
 import os
 import re
 import subprocess
@@ -17,6 +17,7 @@ from velowind_appium.config import IosAppiumConfig
 import velowind_appium.modules.activity as activity
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 from velowind_appium.timing import profile_section
+from velowind_appium.android_settings import android_idle_wait
 
 
 ACTIVITY_SESSION_NAVIGATION_TIMEOUT_SECONDS = 15
@@ -40,9 +41,9 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     base_date = today or date.today()
     return ActivitySessionDraft(
         title=f"测试 - 场次 {base_date:%m%d}",
-        signup_deadline=_format_datetime(base_date, datetime_time(18, 0)),
-        start_time=_format_datetime(base_date + timedelta(days=1), datetime_time(9, 0)),
-        end_time=_format_datetime(base_date + timedelta(days=6), datetime_time(18, 0)),
+        signup_deadline=(base_date + timedelta(days=5)).isoformat(),
+        start_time=(base_date + timedelta(days=10)).isoformat(),
+        end_time=(base_date + timedelta(days=15)).isoformat(),
         meeting_point="张家界景区",
         max_participants="20",
         fee="0.01",
@@ -52,11 +53,15 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     )
 
 
-def _format_datetime(day: date, clock: datetime_time) -> str:
-    return datetime.combine(day, clock).strftime("%Y-%m-%d %H:%M")
-
-
 def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
+    # Physical-device comparison did not show a benefit from the shorter
+    # session-wide idle wait in this form flow. Keep its original native wait
+    # and restore the caller's setting, including when form interaction fails.
+    with android_idle_wait(driver, 10000):
+        return _add_activity_session(driver, draft, config, timeout=timeout)
+
+
+def _add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
     navigation_timeout = min(timeout, ACTIVITY_SESSION_NAVIGATION_TIMEOUT_SECONDS)
     with profile_section("activity-session.dismiss-alerts"):
         dismiss_common_system_alerts(driver)
@@ -460,14 +465,25 @@ def _tap_session_location_container(driver: WebDriver, keyword: str) -> bool:
     return False
 
 
-def _choose_session_location(driver: WebDriver, value: str) -> bool:
+def _choose_session_location(driver: WebDriver, value: str, *, timeout: float = 30) -> bool:
     with profile_section("activity-session.location.search"):
         searched = _search_session_location(driver, value)
     if searched:
         with profile_section("activity-session.location.wait-results"):
-            results_visible = _wait_until(lambda: _session_location_results_visible(_safe_page_source(driver)), timeout=5)
+            last_source = ""
+
+            def results_ready() -> bool:
+                nonlocal last_source
+                last_source = _safe_page_source(driver)
+                return _session_location_results_visible(last_source, value)
+
+            results_visible = _wait_until(results_ready, timeout=timeout)
         if not results_visible:
-            return False
+            state = "searching" if "搜索中" in last_source else "no matching visible result"
+            raise AssertionError(
+                f"Activity session location search timed out after {timeout:g}s "
+                f"for {value!r}: {state}"
+            )
         with profile_section("activity-session.location.tap-result"):
             tapped_result = _tap_session_location_result(driver, value)
         if tapped_result:
@@ -591,8 +607,8 @@ def _paste_android_text(driver: WebDriver, value: str) -> bool:
 
 
 def _tap_session_location_result(driver: WebDriver, value: str) -> bool:
-    if _is_ios_driver(driver) and _tap_ios_session_location_result(driver, value):
-        return True
+    if _is_ios_driver(driver):
+        return _tap_ios_session_location_result(driver, value)
 
     try:
         second_row_titles = driver.find_elements(
@@ -1010,16 +1026,40 @@ def _session_location_selected(page_source: str) -> bool:
     )
 
 
-def _session_location_results_visible(page_source: str) -> bool:
-    return _session_location_modal_visible(page_source) and not any(
-        token in page_source
-        for token in [
-            "正在获取当前位置",
-            "获取当前位置...",
-            "获取当前位置…",
-            "未获取到当前位置",
-            "请输入关键词搜索地点",
-        ]
+def _session_location_results_visible(page_source: str, value: str = "") -> bool:
+    if not _session_location_modal_visible(page_source):
+        return False
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+
+    # Inspect visible leaves only: iOS container labels can include hidden screens,
+    # and the search input itself contains the query before any result arrives.
+    visible_leaves = []
+
+    def collect(element, in_results=False):
+        if element.get("visible") == "false" or element.get("displayed") == "false":
+            return
+        tag = element.tag.rsplit("}", 1)[-1]
+        in_results = in_results or tag in {
+            "XCUIElementTypeScrollView", "XCUIElementTypeTable",
+            "android.widget.ScrollView", "androidx.recyclerview.widget.RecyclerView",
+        }
+        if len(element) == 0 and tag in {"XCUIElementTypeStaticText", "android.widget.TextView"}:
+            text = element.get("label") or element.get("text") or element.get("value") or element.get("name", "")
+            visible_leaves.append((in_results, text))
+        for child in element:
+            collect(child, in_results)
+
+    collect(root)
+    pending = ("搜索中", "正在获取当前位置", "获取当前位置", "请输入关键词搜索地点")
+    if any(any(token in text for token in pending) for _, text in visible_leaves):
+        return False
+    terms = _session_location_search_terms(value)
+    return any(
+        in_results and text.strip() and (not terms or any(term in text for term in terms))
+        for in_results, text in visible_leaves
     )
 
 
@@ -1374,15 +1414,26 @@ def _ios_datetime_picker_visible(page_source: str) -> bool:
 
 
 def _ios_datetime_picker_current_parts_from_source(page_source: str) -> dict[str, str] | None:
-    match = re.search(r"(\d{1,2})月(\d{1,2})日\s*(\d{1,2})点", page_source)
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        selected_text = page_source
+    else:
+        # Container labels also include stale, hidden screens underneath the modal.
+        selected_text = " ".join(
+            element.get("label") or element.get("value") or element.get("name", "")
+            for element in root.iter()
+            if len(element) == 0 and element.get("visible") == "true"
+        )
+    match = re.search(r"(\d{1,2})月(\d{1,2})日\s*(\d{1,2})点(?:\s*(\d{1,2})分)?", selected_text)
     if not match:
         return None
-    month, day, hour = match.groups()
+    month, day, hour, minute = match.groups()
     return {
         "month": f"{int(month):02d}",
         "day": f"{int(day):02d}",
         "hour": f"{int(hour):02d}",
-        "minute": "00",
+        "minute": f"{int(minute or 0):02d}",
     }
 
 
@@ -1465,11 +1516,12 @@ def _write_ios_datetime_picker_value(driver: WebDriver, keyword: str, value: str
         return False
     if not _wait_until(lambda: _ios_datetime_picker_visible(_safe_page_source(driver)), timeout=3):
         return False
-    return _fill_ios_datetime_picker_fields(driver, _ios_datetime_picker_field_order(keyword), parts)
+    field_order = [field for field in _ios_datetime_picker_field_order(keyword) if field in parts]
+    return _fill_ios_datetime_picker_fields(driver, field_order, parts)
 
 
 def _ios_datetime_picker_field_order(keyword: str) -> list[str]:
-    return ["month", "day"]
+    return ["month", "day", "hour", "minute"]
 
 
 def _fill_ios_datetime_picker_fields(driver: WebDriver, field_order: list[str], parts: dict[str, str]) -> bool:
@@ -1534,12 +1586,14 @@ def _tap_ios_datetime_picker_value(driver: WebDriver, field: str, value: str) ->
     candidates = []
     for element in elements:
         try:
+            if not element.is_displayed():
+                continue
             element_rect = element.rect
             center_x = element_rect["x"] + element_rect["width"] / 2
             center_y = element_rect["y"] + element_rect["height"] / 2
         except (WebDriverException, KeyError, TypeError, AttributeError):
             continue
-        if not min_y <= center_y <= max_y:
+        if not min_y <= center_y <= max_y or abs(center_x - expected_x) > 45:
             continue
         candidates.append((abs(center_x - expected_x), element))
 
@@ -1590,6 +1644,9 @@ def _tap_ios_datetime_picker_wheel_step(driver: WebDriver, field: str, direction
 
 
 def _ios_datetime_picker_wheel_center(driver: WebDriver, rect: dict, field: str) -> tuple[int, int]:
+    source_center = _ios_datetime_picker_column_center(_safe_page_source(driver), field)
+    if source_center is not None:
+        return source_center
     element_center = _ios_datetime_picker_wheel_element_center(driver, field)
     if element_center is not None:
         return element_center
@@ -1599,6 +1656,40 @@ def _ios_datetime_picker_wheel_center(driver: WebDriver, rect: dict, field: str)
         "hour": (0.786, 0.774),
     }.get(field, (0.500, 0.774))
     return int(rect["width"] * x_ratio), int(rect["height"] * y_ratio)
+
+
+def _ios_datetime_picker_column_center(page_source: str, field: str) -> tuple[int, int] | None:
+    label = {"month": "月", "day": "日", "hour": "时", "minute": "分"}.get(field)
+    if label is None:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    leaves = []
+    for element in root.iter():
+        if len(element) or element.get("visible") != "true":
+            continue
+        text = element.get("label") or element.get("value") or element.get("name", "")
+        try:
+            x, y, width, height = (float(element.get(key, "")) for key in ("x", "y", "width", "height"))
+        except ValueError:
+            continue
+        if width > 0 and height > 0:
+            leaves.append((text, x + width / 2, y + height / 2))
+    for text, x, y in leaves:
+        if text != label:
+            continue
+        rows = [(number, row_y) for number, row_x, row_y in leaves
+                if re.fullmatch(r"\d{1,2}", number) and abs(row_x - x) < 5 and row_y > y]
+        current = (_ios_datetime_picker_current_parts_from_source(page_source) or {}).get(field)
+        for number, row_y in rows:
+            if current is not None and int(number) == int(current):
+                return int(x), int(row_y)
+        if len(rows) >= 3:
+            positions = sorted(row_y for _, row_y in rows)
+            return int(x), int(positions[len(positions) // 2])
+    return None
 
 
 def _ios_datetime_picker_wheel_element_center(driver: WebDriver, field: str) -> tuple[int, int] | None:
@@ -1665,7 +1756,7 @@ def _ios_datetime_picker_wheel_element(driver: WebDriver, field: str):
         if width <= 0 or height <= 0:
             continue
         positioned.append((x + int(width / 2), y, element))
-    field_index = {"month": 0, "day": 1, "hour": 2}.get(field)
+    field_index = {"month": 0, "day": 1, "hour": 2, "minute": 3}.get(field)
     if field_index is None:
         return None
     sorted_wheels = [element for _x, _y, element in sorted(positioned)]
@@ -1694,6 +1785,8 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
     }.get(keyword)
     if field_order is None:
         return False
+    # Date-only drafts intentionally keep the picker's existing hour/minute.
+    field_order = [field for field in field_order if field in parts]
 
     wheel_id_prefix = _android_datetime_picker_wheel_id_prefix(keyword)
     if wheel_id_prefix is None:
@@ -2113,17 +2206,14 @@ def _android_datetime_picker_visible(page_source: str, keyword: str) -> bool:
 
 def _parse_session_datetime(value: str) -> dict[str, str] | None:
     try:
-        date_part, time_part = value.split(" ", 1)
-        month, day = date_part.split("-", 2)[1:]
-        hour, minute = time_part.split(":", 1)
+        date_only = " " not in value.strip()
+        parsed = datetime.strptime(value.strip(), "%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
     except ValueError:
         return None
-    return {
-        "month": f"{int(month):02d}",
-        "day": f"{int(day):02d}",
-        "hour": f"{int(hour):02d}",
-        "minute": f"{int(minute):02d}",
-    }
+    parts = {"month": f"{parsed.month:02d}", "day": f"{parsed.day:02d}"}
+    if not date_only:
+        parts.update(hour=f"{parsed.hour:02d}", minute=f"{parsed.minute:02d}")
+    return parts
 
 
 def _session_datetime_target_rect(keyword: str) -> dict[str, int]:
@@ -2527,7 +2617,7 @@ def _bounds_rect_from_attrs(attrs: dict[str, str]) -> tuple[int, int, int, int] 
 
 
 def _tap_submit(driver: WebDriver) -> bool:
-    for text in ["保存", "确定", "提交", "新增", "创建"]:
+    for text in ["确认创建", "保存", "确定", "提交", "新增", "创建"]:
         if tap_text_if_present(driver, text, timeout=0.5):
             return True
     try:

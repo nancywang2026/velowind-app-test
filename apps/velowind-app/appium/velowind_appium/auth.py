@@ -17,6 +17,8 @@ def login_required_from_page_source(page_source: str) -> bool:
 
 
 def _login_form_visible_from_page_source(page_source: str) -> bool:
+    if all(identifier in page_source for identifier in ("login-phone-input", "login-primary-button")):
+        return True
     phone_login_tokens = ["手机号登录", "请输入手机号", "登录"]
     password_login_tokens = ["密码登录", "请输入手机号和密码完成登录", "登录"]
     return all(token in page_source for token in phone_login_tokens) or all(
@@ -36,7 +38,8 @@ def ensure_logged_in_if_needed(driver: WebDriver, config: IosAppiumConfig) -> bo
         return False
 
     if not login_required_from_page_source(_safe_page_source(driver)):
-        tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=3)
+        if not _tap_accessibility_id_if_present(driver, "bottom-nav-me"):
+            tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=3)
         time.sleep(1)
 
     if not login_required_from_page_source(_safe_page_source(driver)):
@@ -101,7 +104,26 @@ def _perform_password_login(driver: WebDriver, username: str, password: str) -> 
     raise AssertionError("Login page remained visible after submitting credentials")
 
 
+def _tap_accessibility_id_if_present(
+    driver: WebDriver, accessibility_id: str, timeout: float = 0
+) -> bool:
+    """Use the native accessibility-id strategy on both platforms, without fallback."""
+    end_at = time.monotonic() + timeout
+    while True:
+        try:
+            driver.find_element(AppiumBy.ACCESSIBILITY_ID, accessibility_id).click()
+            return True
+        except NoSuchElementException:
+            if time.monotonic() >= end_at:
+                return False
+            time.sleep(0.2)
+
+
 def _find_phone_input(driver: WebDriver):
+    try:
+        return driver.find_element(AppiumBy.ACCESSIBILITY_ID, "login-phone-input")
+    except NoSuchElementException:
+        pass
     if _is_android(driver):
         return driver.find_element(AppiumBy.XPATH, "(//android.widget.EditText)[1]")
     return driver.find_element(AppiumBy.XPATH, "//XCUIElementTypeTextField[1]")
@@ -111,6 +133,10 @@ def _find_password_input(driver: WebDriver):
     end_at = time.monotonic() + 10
     retried_password_tab = False
     while time.monotonic() < end_at:
+        try:
+            return driver.find_element(AppiumBy.ACCESSIBILITY_ID, "login-password-input")
+        except NoSuchElementException:
+            pass
         xpaths = (
             ['(//android.widget.EditText[@password="true"])[1]', "(//android.widget.EditText)[2]"]
             if _is_android(driver)
@@ -129,7 +155,19 @@ def _find_password_input(driver: WebDriver):
 
 
 def _open_password_login_form(driver: WebDriver) -> None:
+    # A stable ID can identify the password form independently of localized copy.
+    try:
+        driver.find_element(AppiumBy.ACCESSIBILITY_ID, "login-password-input")
+        return
+    except NoSuchElementException:
+        pass
     baseline = _safe_page_source(driver)
+    if _tap_accessibility_id_if_present(driver, "login-switch-password-mode"):
+        _tap_agreement(driver)
+        time.sleep(1)
+        if _password_form_visible(driver, baseline):
+            return
+        raise AssertionError("Password-login mode did not appear after switching")
     if _has_password_input(driver) and "请输入手机号和密码完成登录" in baseline:
         return
 
@@ -170,6 +208,8 @@ def _password_form_visible(driver: WebDriver, baseline: str) -> bool:
 
 
 def _tap_home_tab(driver: WebDriver, timeout: int = 3) -> bool:
+    if _tap_accessibility_id_if_present(driver, "bottom-nav-home"):
+        return True
     return (
         tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=timeout)
         or tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "首页", timeout=1)
@@ -177,6 +217,11 @@ def _tap_home_tab(driver: WebDriver, timeout: int = 3) -> bool:
 
 
 def _has_password_input(driver: WebDriver) -> bool:
+    try:
+        driver.find_element(AppiumBy.ACCESSIBILITY_ID, "login-password-input")
+        return True
+    except NoSuchElementException:
+        pass
     xpaths = (
         ['(//android.widget.EditText[@password="true"])[1]', "(//android.widget.EditText)[2]"]
         if _is_android(driver)
@@ -256,15 +301,21 @@ def _tap_element_leading_checkbox(driver: WebDriver, element) -> None:
 
 
 def _dismiss_login_agreement_sheet(driver: WebDriver) -> None:
+    if _tap_accessibility_id_if_present(driver, "agreement-popup-confirm"):
+        return
     tap_text_if_present(driver, "同意并继续", timeout=1)
     tap_text_if_present(driver, "同意", timeout=1)
 
 
 def _save_password_if_prompted(driver: WebDriver) -> None:
+    if _tap_accessibility_id_if_present(driver, "保存"):
+        return
     tap_text_if_present(driver, "保存", timeout=2)
 
 
 def _tap_login_submit(driver: WebDriver) -> bool:
+    if _tap_accessibility_id_if_present(driver, "login-primary-button"):
+        return True
     if _is_android(driver):
         return tap_text_if_present(driver, "登录", timeout=1) or tap_text_if_present(
             driver,

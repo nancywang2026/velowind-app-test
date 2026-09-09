@@ -11,10 +11,12 @@ from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, WebDriverException
 
 from velowind_appium.actions import safe_back, swipe_vertical, tap_text_if_present
+from velowind_appium.android_settings import without_android_idle_wait
 from velowind_appium.cleanup_config import CleanupConfig, matches_test_data
 from velowind_appium.modules.activity import _tap_element_center
 from velowind_appium.modules.activity_sessions import open_my_activity_publish_list
 from velowind_appium.session import ensure_logged_in_on_home
+from velowind_appium.timing import profile_section
 
 
 NOTE_ACTION_TEXTS = ["删除", "确认删除"]
@@ -48,17 +50,26 @@ def cleanup_notes(driver: WebDriver, config: CleanupConfig, app_config, *, dry_r
 
 
 def cleanup_published_note(driver: WebDriver, title: str, app_config) -> CleanupReport:
-    ensure_logged_in_on_home(driver, app_config)
-    _open_me_entry(driver, "我的笔记")
-    try:
-        return cleanup_exact_visible_item(
-            driver,
-            item_type="note",
-            title=title,
-            action_texts=NOTE_ACTION_TEXTS,
-        )
-    finally:
-        safe_back(driver)
+    # A playing video continuously emits accessibility events. Waiting for
+    # global idleness adds ~10s to each query before navigation can even begin.
+    # Keep the existing explicit waits and title checks; restore the setting
+    # before the next test or any unrelated workflow uses this shared session.
+    with without_android_idle_wait(driver):
+        with profile_section("cleanup.prepare-home"):
+            ensure_logged_in_on_home(driver, app_config)
+        with profile_section("cleanup.open-my-notes"):
+            _open_me_entry(driver, "我的笔记")
+        try:
+            with profile_section("cleanup.delete-exact-note"):
+                return cleanup_exact_visible_item(
+                    driver,
+                    item_type="note",
+                    title=title,
+                    action_texts=NOTE_ACTION_TEXTS,
+                )
+        finally:
+            with profile_section("cleanup.leave-note-list"):
+                safe_back(driver)
 
 
 def cleanup_activities(driver: WebDriver, config: CleanupConfig, app_config, *, dry_run: bool = False) -> CleanupReport:

@@ -382,3 +382,56 @@ apps/velowind-app/appium/test-suites/
 | `VW_IOS_SKIP_WDA_PREFLIGHT` | `true` | 是否跳过 preflight 阶段的 WDA build 检查；设为 `false` 可显式验证 WDA 签名 |
 | `VW_IOS_USE_NEW_WDA` | `false` | 是否每次重装 WebDriverAgent |
 | `VW_IOS_NO_RESET` | `true` | 是否保留 App 状态 |
+
+## 用例与步骤耗时基线
+
+pytest 默认将耗时保存到当前 run 的 `timing/<worker>-<pid>-<timestamp>/`，也支持通过
+`VW_APPIUM_TIMING_DIR` 指定父目录。每次执行（包括重试）使用独立目录，避免覆盖基线。
+
+- `events.jsonl`：每个用例、Allure 步骤、内部 `profile_section` 的开始/结束事件，逐条刷新；卡住时可直接查看最后一条 `step_start`。
+- `timings.json`：用例结果、setup/call/teardown、用例总耗时、步骤耗时、运行参数、设备信息与 Python 源码摘要。
+- `timings.csv`：同一份数据的表格形式，时间单位为秒；`kind` 区分 case、phase、step、profile。
+
+计时使用单调时钟。步骤包含其内部截图等操作；嵌套步骤和 profile 与父步骤重叠，不能相加当作用例总时间。
+用例总耗时包含准备、执行、清理及报告钩子；会话级 driver 创建/退出计入实际承担它的首条/末条用例。
+失败、跳过及未完成步骤保留原状态，不能把它们当作有效提速样本。
+
+已有 Allure 结果也可以导出为基线：
+
+```bash
+PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.timing_report \
+  --allure-results .tmp/appium-android/runs/<run-id>/allure-results \
+  --output benchmarks/appium/<experiment>/baseline
+```
+
+历史导出只提供 Allure 的执行阶段和步骤时间，不推算缺失的 setup/teardown；总耗时留空。
+对比时使用相同真机、App、用例参数、执行顺序和计时口径，并同时检查测试结果。
+Android 笔记清理会临时关闭 UiAutomator2 的 `waitForIdleTimeout`，避免播放视频时反复等待界面空闲；
+离开清理流程（包括异常路径）后恢复原值，原有显式等待和断言保持不变。
+
+生成同口径对比（例如前后两轮均从 Allure 导出）：
+
+```bash
+PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.timing_report \
+  --baseline benchmarks/appium/<experiment>/baseline/timings.json \
+  --candidate benchmarks/appium/<experiment>/optimized/timings.json \
+  --output benchmarks/appium/<experiment>/comparison
+```
+
+对比输出 `comparison.json` 和 `comparison.csv`，保留缺失、跳过和失败用例，但只为前后均通过且步骤可对应的记录计算提升百分比。
+历史 fixture 记录单独列出；共享 fixture 会关联多个用例，不能重复累加。
+
+Android 会话默认将原生 `waitForIdleTimeout` 上限设为 1000 ms，减少持续视频/动画造成的逐次 10 秒等待；
+可用 `VW_ANDROID_WAIT_FOR_IDLE_TIMEOUT_MS` 调整（非负整数，单位毫秒）。此设置不改变隐式等待 0、
+业务显式等待超时或用例断言。笔记清理完成后恢复到该会话实际的原值。
+
+新增活动场次流程在真机对照中未证实能从 1000 ms 空闲等待获益，因此该流程保留 10000 ms，
+成功或异常退出后恢复调用方的设置。不要把视频页的提速经验直接推广到所有表单流程；
+发现变慢时应记录反向样本、做同条件对照，并回退或缩小没有收益的改动。
+
+场次测试默认只选择日期：报名截止为当天后 5 天、开始为后 10 天、结束为后 15 天。
+小时和分钟保留选择器当前值，不点击或滑动对应滚轮。日期草稿使用 `YYYY-MM-DD`；
+日期选择器仍兼容显式传入的 `YYYY-MM-DD HH:MM`，供确有精确时间要求的调用使用。
+
+本轮真机逐用例、逐步骤的基线、正反向对照与保留范围见
+[Android P1 优化记录](../../../benchmarks/appium/20260909-android-p1/README.md)。
