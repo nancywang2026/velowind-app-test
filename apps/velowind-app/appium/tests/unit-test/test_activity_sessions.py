@@ -10,6 +10,13 @@ class FakeDriver:
         self.height = height
         self.scripts = []
         self.capabilities = {"platformName": "Android"}
+        self.settings = {"waitForIdleTimeout": 1000}
+
+    def get_settings(self):
+        return self.settings.copy()
+
+    def update_settings(self, settings):
+        self.settings.update(settings)
 
     def get_window_rect(self):
         return {"width": self.width, "height": self.height}
@@ -1208,9 +1215,9 @@ def test_drag_android_datetime_picker_wheel_to_target_does_not_use_generic_drag_
 def test_build_activity_session_draft_uses_required_relative_dates():
     draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 17))
 
-    assert draft.signup_deadline == "2026-07-17 18:00"
-    assert draft.start_time == "2026-07-18 09:00"
-    assert draft.end_time == "2026-07-23 18:00"
+    assert draft.signup_deadline == "2026-07-22"
+    assert draft.start_time == "2026-07-27"
+    assert draft.end_time == "2026-08-01"
     assert draft.meeting_point == "张家界景区"
     assert draft.max_participants == "20"
     assert draft.fee == "0.01"
@@ -2304,3 +2311,57 @@ def test_ios_datetime_column_center_handles_zero_minute_boundary():
       <XCUIElementTypeStaticText visible="true" label="05" x="301" y="698" width="84" height="32" />
     </root>'''
     assert activity_sessions._ios_datetime_picker_column_center(source, "minute") == (343, 676)
+
+
+def test_activity_session_keeps_original_idle_wait_and_restores_caller_on_error(monkeypatch):
+    import pytest
+    driver = FakeDriver()
+    def fail_form(*args, **kwargs):
+        assert driver.settings['waitForIdleTimeout'] == 10000
+        raise RuntimeError('form failed')
+    monkeypatch.setattr(activity_sessions, '_add_activity_session', fail_form)
+    with pytest.raises(RuntimeError, match='form failed'):
+        activity_sessions.add_activity_session(driver, object(), object())
+    assert driver.settings['waitForIdleTimeout'] == 1000
+
+
+def test_activity_session_restores_caller_after_success(monkeypatch):
+    driver = FakeDriver()
+    def submit(*args, **kwargs):
+        assert driver.settings['waitForIdleTimeout'] == 10000
+        return '创建成功'
+    monkeypatch.setattr(activity_sessions, '_add_activity_session', submit)
+    assert activity_sessions.add_activity_session(driver, object(), object()) == '创建成功'
+    assert driver.settings['waitForIdleTimeout'] == 1000
+
+
+def test_activity_session_date_offsets_cross_year():
+    draft = activity_sessions.build_activity_session_draft(today=date(2026, 12, 28))
+    assert (draft.signup_deadline, draft.start_time, draft.end_time) == ('2027-01-02', '2027-01-07', '2027-01-12')
+
+
+def test_android_date_only_picker_never_requests_hour_or_minute(monkeypatch):
+    driver = FakeDriver('已选择时间 09.09 11:47 取消 确认 月 日 时 分 报名截止时间')
+    calls = []
+    def fill(received, ids, fields, parts):
+        calls.append((fields, parts))
+        assert fields == ['month', 'day']
+        assert 'hour' not in parts and 'minute' not in parts
+        return True
+    monkeypatch.setattr(activity_sessions, '_fill_android_datetime_picker_wheels', fill)
+    monkeypatch.setattr(activity_sessions, '_confirm_session_picker', lambda driver: True)
+    assert activity_sessions._write_android_datetime_picker_value(driver, '报名截止时间', '2026-09-14')
+    assert calls == [(['month', 'day'], {'month': '09', 'day': '14'})]
+
+
+def test_ios_date_only_picker_never_requests_hour_or_minute(monkeypatch):
+    driver = FakeDriver()
+    driver.capabilities = {'platformName': 'iOS'}
+    calls = []
+    monkeypatch.setattr(activity_sessions, '_wait_until', lambda predicate, timeout: True)
+    def fill(received, fields, parts):
+        calls.append((fields, parts))
+        return True
+    monkeypatch.setattr(activity_sessions, '_fill_ios_datetime_picker_fields', fill)
+    assert activity_sessions._write_ios_datetime_picker_value(driver, '结束时间', '2026-09-24')
+    assert calls == [(['month', 'day'], {'month': '09', 'day': '24'})]

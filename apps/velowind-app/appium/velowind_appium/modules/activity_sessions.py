@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time as datetime_time, timedelta
+from datetime import date, datetime, timedelta
 import os
 import re
 import subprocess
@@ -17,6 +17,7 @@ from velowind_appium.config import IosAppiumConfig
 import velowind_appium.modules.activity as activity
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 from velowind_appium.timing import profile_section
+from velowind_appium.android_settings import android_idle_wait
 
 
 ACTIVITY_SESSION_NAVIGATION_TIMEOUT_SECONDS = 15
@@ -40,9 +41,9 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     base_date = today or date.today()
     return ActivitySessionDraft(
         title=f"测试 - 场次 {base_date:%m%d}",
-        signup_deadline=_format_datetime(base_date, datetime_time(18, 0)),
-        start_time=_format_datetime(base_date + timedelta(days=1), datetime_time(9, 0)),
-        end_time=_format_datetime(base_date + timedelta(days=6), datetime_time(18, 0)),
+        signup_deadline=(base_date + timedelta(days=5)).isoformat(),
+        start_time=(base_date + timedelta(days=10)).isoformat(),
+        end_time=(base_date + timedelta(days=15)).isoformat(),
         meeting_point="张家界景区",
         max_participants="20",
         fee="0.01",
@@ -52,11 +53,15 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     )
 
 
-def _format_datetime(day: date, clock: datetime_time) -> str:
-    return datetime.combine(day, clock).strftime("%Y-%m-%d %H:%M")
-
-
 def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
+    # Physical-device comparison did not show a benefit from the shorter
+    # session-wide idle wait in this form flow. Keep its original native wait
+    # and restore the caller's setting, including when form interaction fails.
+    with android_idle_wait(driver, 10000):
+        return _add_activity_session(driver, draft, config, timeout=timeout)
+
+
+def _add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
     navigation_timeout = min(timeout, ACTIVITY_SESSION_NAVIGATION_TIMEOUT_SECONDS)
     with profile_section("activity-session.dismiss-alerts"):
         dismiss_common_system_alerts(driver)
@@ -1511,7 +1516,8 @@ def _write_ios_datetime_picker_value(driver: WebDriver, keyword: str, value: str
         return False
     if not _wait_until(lambda: _ios_datetime_picker_visible(_safe_page_source(driver)), timeout=3):
         return False
-    return _fill_ios_datetime_picker_fields(driver, _ios_datetime_picker_field_order(keyword), parts)
+    field_order = [field for field in _ios_datetime_picker_field_order(keyword) if field in parts]
+    return _fill_ios_datetime_picker_fields(driver, field_order, parts)
 
 
 def _ios_datetime_picker_field_order(keyword: str) -> list[str]:
@@ -1779,6 +1785,8 @@ def _write_android_datetime_picker_value(driver: WebDriver, keyword: str, value:
     }.get(keyword)
     if field_order is None:
         return False
+    # Date-only drafts intentionally keep the picker's existing hour/minute.
+    field_order = [field for field in field_order if field in parts]
 
     wheel_id_prefix = _android_datetime_picker_wheel_id_prefix(keyword)
     if wheel_id_prefix is None:
@@ -2198,17 +2206,14 @@ def _android_datetime_picker_visible(page_source: str, keyword: str) -> bool:
 
 def _parse_session_datetime(value: str) -> dict[str, str] | None:
     try:
-        date_part, time_part = value.split(" ", 1)
-        month, day = date_part.split("-", 2)[1:]
-        hour, minute = time_part.split(":", 1)
+        date_only = " " not in value.strip()
+        parsed = datetime.strptime(value.strip(), "%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
     except ValueError:
         return None
-    return {
-        "month": f"{int(month):02d}",
-        "day": f"{int(day):02d}",
-        "hour": f"{int(hour):02d}",
-        "minute": f"{int(minute):02d}",
-    }
+    parts = {"month": f"{parsed.month:02d}", "day": f"{parsed.day:02d}"}
+    if not date_only:
+        parts.update(hour=f"{parsed.hour:02d}", minute=f"{parsed.minute:02d}")
+    return parts
 
 
 def _session_datetime_target_rect(keyword: str) -> dict[str, int]:

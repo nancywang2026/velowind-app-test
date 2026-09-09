@@ -4620,3 +4620,66 @@ def test_fill_note_location_skips_when_configured_to_not_mark_location(monkeypat
     message_detail._fill_note_location(object(), "不标记地点")
 
     assert events == []
+
+
+def _short_android_note_source(body_xml):
+    # Reduced from the physical-device hierarchy: detail and stale feed coexist.
+    return f'''<hierarchy>
+      <android.view.ViewGroup resource-id="post-detail-page">
+        <android.widget.ScrollView resource-id="post-detail-scroll-view">
+          <android.view.ViewGroup><android.view.ViewGroup>
+            <android.view.ViewGroup resource-id="post-detail-video-surface" />
+            <android.view.ViewGroup>
+              <android.widget.TextView text="测试" />
+              {body_xml}
+              <android.view.ViewGroup><android.widget.TextView text="地点" />
+                <android.widget.TextView text="这是一个很长的地点名称" /></android.view.ViewGroup>
+              <android.widget.TextView text="1 天前" />
+            </android.view.ViewGroup>
+            <android.view.ViewGroup><android.widget.TextView text="共 0 条评论" /></android.view.ViewGroup>
+          </android.view.ViewGroup></android.view.ViewGroup>
+        </android.widget.ScrollView>
+        <android.widget.TextView text="Nancy" />
+        <android.widget.TextView text="1" bounds="[751,2585][835,2657]" />
+        <android.widget.TextView text="1" bounds="[953,2585][1037,2657]" />
+        <android.widget.TextView text="0" bounds="[1154,2585][1238,2657]" />
+      </android.view.ViewGroup>
+      <android.view.ViewGroup resource-id="post-home-feed-page">
+        <android.widget.TextView text="这段首页卡片内容不能冒充笔记正文" />
+        <android.widget.TextView text="共 9 条评论" />
+        <android.widget.TextView text="9" bounds="[751,2690][835,2710]" />
+        <android.widget.TextView text="9" bounds="[953,2690][1037,2710]" />
+        <android.widget.TextView text="9" bounds="[1154,2690][1238,2710]" />
+      </android.view.ViewGroup>
+    </hierarchy>'''
+
+
+def test_android_detail_reads_short_equal_title_and_body_from_content_panel():
+    snapshot = parse_detail_snapshot(_short_android_note_source('<android.widget.TextView text="测试" />'))
+    assert snapshot.title == snapshot.body == "测试"
+    assert snapshot.comment_count == "0"
+    assert snapshot.bottom_action_counts == ["1", "1", "0"]
+
+
+@pytest.mark.parametrize('body_xml', ['', '<android.widget.TextView text="测试" displayed="false" />'])
+def test_android_detail_never_borrows_body_from_author_location_or_background_feed(body_xml):
+    snapshot = parse_detail_snapshot(_short_android_note_source(body_xml))
+    assert snapshot.title == "测试"
+    assert snapshot.body is None
+
+
+def test_browse_android_note_scrolls_for_missing_body_even_with_zero_comments(monkeypatch):
+    source = _short_android_note_source('')
+    scrolled = _short_android_note_source('<android.widget.TextView text="测试" />')
+    class Driver:
+        capabilities = {"platformName": "Android"}
+    events = []
+    monkeypatch.setattr(message_detail, 'read_message_detail_snapshot', lambda driver, timeout: parse_detail_snapshot(source))
+    monkeypatch.setattr(message_detail, 'swipe_vertical', lambda driver, direction: events.append(direction))
+    # One loading snapshot must not be mistaken for a complete body.
+    sources = iter([source, scrolled])
+    monkeypatch.setattr(message_detail, '_safe_page_source', lambda driver: next(sources))
+    monkeypatch.setattr(message_detail.time, 'sleep', lambda seconds: None)
+    snapshot = message_detail.browse_note_detail(Driver(), timeout=1)
+    assert snapshot.title == snapshot.body == '测试'
+    assert events == ['up']

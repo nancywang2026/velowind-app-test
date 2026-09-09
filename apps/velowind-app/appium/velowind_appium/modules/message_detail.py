@@ -836,9 +836,10 @@ def message_note_publish_error_signal(page_source: str) -> str | None:
 
 
 def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
+    page_source, content = _android_detail_source_and_content(page_source)
     texts = _extract_strings(page_source)
-    title = _extract_title(texts)
-    body = _extract_body(texts, title)
+    title = content[0] if content is not None else _extract_title(texts)
+    body = content[1] if content is not None else _extract_body(texts, title)
     view_count = _extract_count(page_source, texts, VIEW_COUNT_PATTERN, "浏览")
     comment_count = _extract_count(page_source, texts, COMMENT_COUNT_PATTERN, "评论")
     comments = _dedupe_preserve_order([*_extract_comments(texts), *_extract_android_comments(page_source)])
@@ -855,6 +856,48 @@ def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
         empty_comment_hint=empty_comment_hint,
         bottom_action_counts=bottom_action_counts,
     )
+
+
+def _android_detail_source_and_content(page_source: str) -> tuple[str, tuple[str | None, str | None] | None]:
+    if "<android." not in page_source:
+        return page_source, None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return page_source, None
+    detail = next((node for node in root.iter() if node.get("resource-id") == "post-detail-page"), None)
+    if detail is not None:
+        # Android can retain the underlying feed in the same hierarchy.
+        # Its card titles, authors and counters are not detail content.
+        root = detail
+        page_source = ElementTree.tostring(detail, encoding="unicode")
+    scroll = next((node for node in root.iter() if node.get("resource-id") == "post-detail-scroll-view"), None)
+    if scroll is None:
+        return page_source, None
+    layout = scroll
+    while len(layout) == 1 and layout[0].tag != "android.widget.TextView":
+        layout = layout[0]
+    panels = [layout] if len(layout) and layout[0].tag == "android.widget.TextView" else list(layout)
+    for panel in panels:
+        children = list(panel)
+        if not children or children[0].tag != "android.widget.TextView":
+            continue
+        title_node = children[0]
+        title = title_node.get("text", "").strip()
+        if (not title or title_node.get("displayed") == "false"
+                or title in GENERIC_DETAIL_TEXTS or _contains_detail_meta(title)
+                or ANDROID_COMMENT_TIME_PATTERN.fullmatch(title)):
+            continue
+        # The content panel starts with title then body; location and comments
+        # live in separate groups. Preserve short/equal title and body strings.
+        body = None
+        if len(children) > 1 and children[1].tag == "android.widget.TextView":
+            body_node = children[1]
+            text = body_node.get("text", "").strip()
+            if body_node.get("displayed") != "false" and text and not ANDROID_COMMENT_TIME_PATTERN.fullmatch(text):
+                body = text
+        return page_source, (title, body)
+    return page_source, (None, None)
 
 
 def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> MessageDetailSnapshot:
@@ -1042,7 +1085,8 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
     if is_android and (
-        not _android_detail_interaction_metadata_visible(snapshot)
+        not snapshot.body
+        or not _android_detail_interaction_metadata_visible(snapshot)
         or _android_detail_needs_comment_probe(snapshot)
     ):
         swipe_vertical(driver, direction="up")
@@ -1051,7 +1095,8 @@ def browse_note_detail(driver: WebDriver, timeout: int = 20) -> MessageDetailSna
         while time.monotonic() < end_at:
             latest = _merge_detail_snapshots(snapshot, parse_detail_snapshot(_safe_page_source(driver)))
             if (
-                _android_detail_interaction_metadata_visible(latest)
+                latest.title and latest.body
+                and _android_detail_interaction_metadata_visible(latest)
                 and not _android_detail_needs_comment_probe(latest)
             ):
                 return latest

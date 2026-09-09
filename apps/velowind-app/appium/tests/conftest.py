@@ -16,6 +16,9 @@ from velowind_appium.session import ensure_logged_in_from_me_then_home, ensure_l
 from velowind_appium.timing import env_flag_enabled, profile_section
 
 
+pytest_plugins = ["velowind_appium.pytest_timing"]
+
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WALKTHROUGH_TEST_FILE = "smoke/test_ios_feature_walkthrough.py"
 

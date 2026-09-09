@@ -106,7 +106,6 @@ def test_ios_feature_walkthrough(driver, ios_config, step):
     ROOT_TABS,
 )
 @pytest.mark.full
-@pytest.mark.skipif(os.environ.get("VW_IOS_RUN_FULL") != "true", reason="Set VW_IOS_RUN_FULL=true to run full tab cases")
 def test_bottom_tabs_are_reachable(driver, step, tab_id, tab_text, expected_ids, expected_texts):
     step("tap-home-before-tab", lambda: tap_accessibility_id_or_text_if_present(driver, "bottom-nav-home", "笔记", timeout=3))
     step(
