@@ -14,6 +14,7 @@ from appium.webdriver.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException, WebDriverException
 
 from velowind_appium.actions import swipe_vertical, tap_text_if_present
+from velowind_appium.ios_source import visible_ios_name
 
 
 RetrySheetOption = Callable[[WebDriver], bool]
@@ -2028,6 +2029,9 @@ def _ios_photo_picker_selection_active(driver: WebDriver) -> bool:
 
 def _photo_picker_done_button_enabled(driver: WebDriver, *, page_source: str | None = None) -> bool:
     source = page_source if page_source is not None else _safe_page_source(driver)
+    ios_state = visible_ios_name(source, {"Add", "完成", "添加"})
+    if ios_state is not None:
+        return ios_state
     enabled_patterns = [
         'name="Add" label="完成" enabled="true"',
         'name="Add" enabled="true"',
@@ -2449,6 +2453,10 @@ def _cropper_visible(
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
     patterns = ANDROID_CROPPER_VISIBLE_PATTERNS if is_android else IOS_CROPPER_VISIBLE_PATTERNS
+    if not is_android:
+        ios_state = visible_ios_name(page_source, {"确认裁剪", "裁剪图片"})
+        if ios_state is not None:
+            return ios_state
     if any(pattern in page_source for pattern in patterns):
         return True
     if allow_generic_text_fallback and not is_android:

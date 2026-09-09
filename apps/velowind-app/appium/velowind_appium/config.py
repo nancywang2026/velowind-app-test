@@ -39,6 +39,7 @@ class IosAppiumConfig:
     should_use_singleton_test_manager: Optional[bool]
     login_username: Optional[str]
     login_password: Optional[str]
+    use_json_source: bool = True
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -213,6 +214,7 @@ def load_ios_config() -> IosAppiumConfig:
         ),
         login_username=_env_text("VW_LOGIN_USERNAME") or _yaml_text(yaml_config, "login", "username"),
         login_password=_env_text("VW_LOGIN_PASSWORD") or _yaml_text(yaml_config, "login", "password"),
+        use_json_source=_env_bool("VW_IOS_USE_JSON_SOURCE", True),
     )
 
 
@@ -235,6 +237,9 @@ def build_ios_capabilities(config: IosAppiumConfig) -> Dict[str, object]:
         "appium:useNewWDA": config.use_new_wda,
         "appium:waitForIdleTimeout": config.wait_for_idle_timeout,
         "appium:reduceMotion": config.reduce_motion,
+        # Fetch the native tree as JSON and let Appium serialize XML on the Mac.
+        # This preserves the XML interface and visibility/accessibility fields.
+        "appium:useJSONSource": config.use_json_source,
     }
     if config.use_preinstalled_wda is not None:
         capabilities["appium:usePreinstalledWDA"] = config.use_preinstalled_wda

@@ -14,6 +14,7 @@ from selenium.common.exceptions import NoSuchElementException, WebDriverExceptio
 
 from velowind_appium.actions import swipe_vertical, tap_text_if_present
 from velowind_appium.config import IosAppiumConfig
+from velowind_appium.ios_source import visible_ios_name
 import velowind_appium.modules.activity as activity
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 from velowind_appium.timing import profile_section
@@ -123,6 +124,8 @@ def open_my_activity_publish_list(driver: WebDriver, timeout: int = 30) -> None:
 
 
 def open_manage_sessions_for_approved_activity(driver: WebDriver, timeout: int = 30) -> None:
+    if _is_ios_driver(driver):
+        return _open_ios_manage_sessions(driver, timeout=timeout)
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         with profile_section("activity-session.manage.read-page-source"):
@@ -153,6 +156,111 @@ def open_manage_sessions_for_approved_activity(driver: WebDriver, timeout: int =
             _scroll_my_activity_list_toward_approved_activity(driver)
         time.sleep(0.5)
     raise AssertionError("Unable to open Manage Sessions for an approved activity")
+
+
+def _open_ios_manage_sessions(driver: WebDriver, *, timeout: int) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with profile_section("activity-session.manage.read-page-source"):
+            source = _safe_page_source(driver)
+        if _session_form_visible(source):
+            return
+        if _activity_detail_preview_visible(source):
+            _leave_activity_detail_preview(driver)
+            continue
+        if "管理场次" in source and tap_text_if_present(driver, "管理场次", timeout=0):
+            return
+        with profile_section("activity-session.manage.tap-more-approved"):
+            point = _ios_approved_more_point(source)
+            if point is not None:
+                driver.execute_script("mobile: tap", {"x": point[0], "y": point[1]})
+        if point is not None:
+            # Native text lookup avoids serializing the full activity list again.
+            remaining = max(0, deadline - time.monotonic())
+            if tap_text_if_present(driver, "管理场次", timeout=min(3, remaining)):
+                return
+            continue
+        if time.monotonic() >= deadline:
+            break
+        with profile_section("activity-session.manage.scroll-list"):
+            if not _swipe_ios_activity_list_from_source(driver, source):
+                raise AssertionError("Visible My Activity scroll view was not found")
+    raise AssertionError("Unable to open Manage Sessions for an approved activity")
+
+
+def _ios_approved_more_point(source: str) -> tuple[float, float] | None:
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return None
+    parents = {child: parent for parent in root.iter() for child in parent}
+    for card in root.iter("XCUIElementTypeOther"):
+        groups = [child for child in card if child.tag == "XCUIElementTypeOther"]
+        if card.get("visible") != "true" or len(groups) != 3:
+            continue
+        # Both exact badges must belong to this card's content group. Never
+        # combine states from different cards or tap a pending/delisted card.
+        states = {
+            node.get(attr) for node in groups[1].iter()
+            if node.get("visible") == "true"
+            for attr in ("name", "label", "value")
+        }
+        if not {"通过", "上架"} <= states:
+            continue
+        more = next(iter(groups[2]), None)
+        if more is None or more.get("visible") != "true" or more.get("enabled") == "false":
+            continue
+        rect = _ios_source_rect(more)
+        card_rect = _ios_source_rect(card)
+        if rect is None or card_rect is None:
+            continue
+        x, y, width, height = rect
+        point = (x + width / 2, y + height / 2)
+        ancestor = card
+        usable = True
+        while ancestor is not None:
+            if ancestor.get("visible") == "false":
+                usable = False
+                break
+            if ancestor.tag in {"XCUIElementTypeWindow", "XCUIElementTypeScrollView"}:
+                clip = _ios_source_rect(ancestor)
+                if clip and not (clip[0] <= point[0] <= clip[0] + clip[2]
+                                 and clip[1] <= point[1] <= clip[1] + clip[3]):
+                    usable = False
+                    break
+            ancestor = parents.get(ancestor)
+        if not usable:
+            continue
+        if (card_rect[0] <= point[0] <= card_rect[0] + card_rect[2]
+                and card_rect[1] <= point[1] <= card_rect[1] + card_rect[3]):
+            return point
+    return None
+
+
+def _ios_source_rect(node) -> tuple[float, float, float, float] | None:
+    try:
+        rect = tuple(float(node.get(attr, "")) for attr in ("x", "y", "width", "height"))
+        return rect if rect[2] > 0 and rect[3] > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _swipe_ios_activity_list_from_source(driver: WebDriver, source: str) -> bool:
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return False
+    for node in root.iter("XCUIElementTypeScrollView"):
+        rect = _ios_source_rect(node)
+        if node.get("visible") != "true" or rect is None:
+            continue
+        x, y, width, height = rect
+        driver.execute_script("mobile: dragFromToForDuration", {
+            "duration": 0.3, "fromX": x + width / 2, "toX": x + width / 2,
+            "fromY": y + height * 0.85, "toY": y + height * 0.2,
+        })
+        return True
+    return False
 
 
 def open_create_session_form(driver: WebDriver, timeout: int = 20) -> None:
@@ -1068,6 +1176,10 @@ def _session_location_value_present(page_source: str, value: str) -> bool:
 
 
 def _session_location_modal_visible(page_source: str) -> bool:
+    # The entered query replaces the search placeholder in JSON source.
+    # The drawer header keeps its identifier throughout searching/selection.
+    if visible_ios_name(page_source, {"activity-session-create-poi-search-drawer-header"}):
+        return True
     return any(
         token in page_source
         for token in ["搜索地点", 'hint="搜索地点"', "搜索中", "地址搜索"]
