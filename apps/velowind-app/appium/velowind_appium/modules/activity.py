@@ -24,6 +24,7 @@ from velowind_appium.actions import (
 )
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.config import IosAppiumConfig
+from velowind_appium.ios_keyboard import hide_ios_keyboard_if_possible
 import velowind_appium.modules.photo_picker as photo_picker
 
 
@@ -1483,6 +1484,10 @@ def _replace_text(element, value: str) -> None:
 
 
 def _hide_keyboard(driver: WebDriver) -> None:
+    if str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios":
+        if not hide_ios_keyboard_if_possible(driver):
+            _dismiss_keyboard_with_safe_tap(driver)
+        return
     for kwargs in [
         {},
         {"key_name": "Done"},
@@ -1798,12 +1803,30 @@ def _find_add_itinerary_segment_button(driver: WebDriver):
 def _count_itinerary_editor_sections(page_source: str) -> int:
     if not page_source:
         return 0
-    ios_count = len(
-        re.findall(
-            r'<XCUIElementTypeTextField[^>]*visible="true"[^>]*placeholderValue="标题"',
-            page_source,
-        )
-    )
+    ios_count = 0
+    if "<XCUIElementType" in page_source:
+        try:
+            root = ET.fromstring(page_source)
+        except ET.ParseError:
+            root = None
+        if root is not None:
+            # JSON source omits placeholderValue, and value changes after input.
+            # Count each title/subtitle/body group, including scrolled-off
+            # sections, so scrolling cannot look like adding/removing a section.
+            for node in root.iter("XCUIElementTypeOther"):
+                children = list(node)
+                if len(children) != 3:
+                    continue
+                if (len(list(children[0].iter("XCUIElementTypeTextField"))) == 1
+                        and len(list(children[1].iter("XCUIElementTypeTextField"))) == 1
+                        and len(list(children[2].iter("XCUIElementTypeTextView"))) == 1):
+                    ios_count += 1
+            if not ios_count:
+                ios_count = sum(
+                    node.get("visible") == "true"
+                    and any(node.get(attr) == "标题" for attr in ("placeholderValue", "value", "name"))
+                    for node in root.iter("XCUIElementTypeTextField")
+                )
     android_count = len(
         re.findall(
             r'<node\b(?=[^>]*\bclass="android\.widget\.EditText")(?=[^>]*\btext="标题")[^>]*>',

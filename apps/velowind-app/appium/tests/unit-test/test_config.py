@@ -148,6 +148,7 @@ def test_build_ios_capabilities_prefers_installed_bundle(monkeypatch):
     assert capabilities["appium:bundleId"] == "com.example.demo"
     assert capabilities["appium:waitForIdleTimeout"] == 1.0
     assert capabilities["appium:reduceMotion"] is True
+    assert capabilities["appium:useJSONSource"] is True
     assert "appium:app" not in capabilities
 
 
@@ -160,6 +161,14 @@ def test_build_ios_capabilities_allows_idle_wait_overrides(monkeypatch):
 
     assert capabilities["appium:waitForIdleTimeout"] == 0.0
     assert capabilities["appium:reduceMotion"] is False
+
+
+def test_ios_json_source_can_be_disabled_without_changing_idle_wait(monkeypatch):
+    monkeypatch.setenv("VW_IOS_UDID", "device-001")
+    monkeypatch.setenv("VW_IOS_USE_JSON_SOURCE", "false")
+    capabilities = build_ios_capabilities(load_ios_config())
+    assert capabilities["appium:useJSONSource"] is False
+    assert capabilities["appium:waitForIdleTimeout"] == 1.0
 
 
 def test_build_ios_capabilities_uses_app_path_when_provided(monkeypatch):

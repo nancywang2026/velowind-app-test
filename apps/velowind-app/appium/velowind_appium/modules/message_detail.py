@@ -33,6 +33,8 @@ from velowind_appium.actions import (
 from velowind_appium.auth import ensure_logged_in_if_needed, login_required_from_page_source
 from velowind_appium.android_media_sync import prepare_video_fixture
 from velowind_appium.config import IosAppiumConfig
+from velowind_appium.ios_keyboard import hide_ios_keyboard_if_possible
+from velowind_appium.ios_source import visible_ios_name
 from velowind_appium.image_validation import (
     compare_images_for_publish_note,
     crop_image_from_screenshot,
@@ -844,7 +846,11 @@ def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
     comment_count = _extract_count(page_source, texts, COMMENT_COUNT_PATTERN, "评论")
     comments = _dedupe_preserve_order([*_extract_comments(texts), *_extract_android_comments(page_source)])
     empty_comment_hint = next((text for text in texts if "还没有评论" in text), None)
-    bottom_action_counts = _extract_android_bottom_action_counts(page_source) or _extract_bottom_action_counts(texts)
+    bottom_action_counts = (
+        _extract_android_bottom_action_counts(page_source)
+        or [entry[0] for entry in _ios_bottom_action_entries(page_source)]
+        or _extract_bottom_action_counts(texts)
+    )
     if comment_count is None and len(bottom_action_counts) >= 3:
         comment_count = bottom_action_counts[2]
     return MessageDetailSnapshot(
@@ -3832,6 +3838,9 @@ def _confirm_system_photo_picker_selection(driver: WebDriver, timeout: int = 10)
 
 
 def _cropper_visible(page_source: str) -> bool:
+    ios_state = visible_ios_name(page_source, {"publish-note-image-picker-cropper-viewport", "确认裁剪", "裁剪图片"})
+    if ios_state is not None:
+        return ios_state
     return any(pattern in page_source for pattern in CROPPER_VISIBLE_PATTERNS)
 
 
@@ -4018,6 +4027,9 @@ def _prepare_note_location_section(driver: WebDriver) -> None:
 
 
 def _location_section_visible(page_source: str) -> bool:
+    ios_state = visible_ios_name(page_source, {"标记地点"})
+    if ios_state is not None:
+        return ios_state
     return any(pattern in page_source for pattern in LOCATION_SECTION_VISIBLE_PATTERNS)
 
 
@@ -4038,6 +4050,9 @@ def _choose_note_location_option(driver: WebDriver, location: str) -> bool:
 
 
 def _location_picker_visible(page_source: str) -> bool:
+    ios_state = visible_ios_name(page_source, {"搜索地点"})
+    if ios_state is not None:
+        return ios_state
     if "android.widget.EditText" in page_source and "搜索地点" in page_source:
         return True
     return any(pattern in page_source for pattern in LOCATION_PICKER_VISIBLE_PATTERNS)
@@ -4634,6 +4649,10 @@ def _replace_text(element, value: str) -> None:
 
 
 def _hide_keyboard(driver: WebDriver) -> None:
+    if str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios":
+        if not hide_ios_keyboard_if_possible(driver):
+            _dismiss_keyboard_with_safe_tap(driver)
+        return
     for kwargs in [
         {},
         {"key_name": "Done"},
@@ -5240,10 +5259,14 @@ def _toggle_bottom_action_and_wait_for_change(
     action_index: int,
     timeout: int,
 ) -> tuple[list[str], list[str]]:
-    before_counts = parse_detail_snapshot(_safe_page_source(driver)).bottom_action_counts
+    source = _safe_page_source(driver)
+    before_counts = parse_detail_snapshot(source).bottom_action_counts
     if len(before_counts) <= action_index:
         raise AssertionError(f"Bottom action counts did not expose index {action_index}: {before_counts}")
-    if not _tap_bottom_action_at_index(driver, action_index):
+    is_ios = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios"
+    tapped = (_tap_ios_bottom_action_by_source(driver, action_index, page_source=source)
+              if is_ios else _tap_bottom_action_at_index(driver, action_index))
+    if not tapped:
         raise AssertionError(f"Unable to tap bottom action at index {action_index}")
 
     after_counts = _wait_for_bottom_action_count_change(driver, action_index, before_counts, timeout)
@@ -5279,6 +5302,8 @@ def _tap_bottom_action_at_index(driver: WebDriver, action_index: int) -> bool:
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "android":
         return _tap_android_bottom_action_by_source(driver, action_index)
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        return _tap_ios_bottom_action_by_source(driver, action_index)
     if _tap_ios_bottom_action_by_source(driver, action_index):
         return True
     candidates = _find_bottom_action_elements(driver)
@@ -5291,6 +5316,8 @@ def _tap_bottom_action_element_center_at_index(driver: WebDriver, action_index: 
     capabilities = getattr(driver, "capabilities", {}) or {}
     if str(capabilities.get("platformName", "")).lower() == "android":
         return _tap_android_bottom_action_by_source(driver, action_index, tap_count=True)
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        return _tap_ios_bottom_action_by_source(driver, action_index, tap_count=True)
     candidates = _find_bottom_action_elements(driver)
     if len(candidates) <= action_index:
         return False
@@ -5399,16 +5426,18 @@ def _tap_android_bottom_action_by_source(
         return False
 
 
-def _tap_ios_bottom_action_by_source(driver: WebDriver, action_index: int) -> bool:
-    entries = _ios_bottom_action_entries(_safe_page_source(driver))
+def _tap_ios_bottom_action_by_source(
+    driver: WebDriver, action_index: int, *, page_source: str | None = None, tap_count: bool = False,
+) -> bool:
+    entries = _ios_bottom_action_entries(page_source if page_source is not None else _safe_page_source(driver))
     if len(entries) <= action_index:
         return False
-    _, left, top, _right, bottom = entries[action_index]
+    _, left, top, right, bottom = entries[action_index]
     icon_size = max(1, bottom - top)
     try:
         driver.execute_script(
             "mobile: tap",
-            {"x": left + icon_size // 2, "y": top + icon_size // 2},
+            {"x": (left + right) // 2 if tap_count else left + icon_size // 2, "y": top + icon_size // 2},
         )
         return True
     except (AttributeError, WebDriverException):
@@ -5422,6 +5451,11 @@ def _ios_bottom_action_entries(page_source: str) -> list[tuple[str, int, int, in
         root = ElementTree.fromstring(page_source)
     except ElementTree.ParseError:
         return []
+
+    detail = next((node for node in root.iter() if node.get("name") == "post-detail-page"
+                   and node.get("visible") != "false"), None)
+    if detail is not None:
+        root = detail
 
     rows: dict[int, list[tuple[str, int, int, int, int]]] = {}
     for element in root.iter():
