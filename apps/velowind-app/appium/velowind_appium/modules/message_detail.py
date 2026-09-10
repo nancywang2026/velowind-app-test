@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+
+from velowind_appium.timing import profile_section
 from dataclasses import dataclass, replace
 import html
 import json
@@ -3173,8 +3175,41 @@ def _append_note_topics_to_body(driver: WebDriver, topics: list[str]) -> None:
     raise AssertionError("Unable to append topics to the note body")
 
 
+def _find_unique_visible_ios_note_body(driver: WebDriver):
+    # After typing, the placeholder disappears. Only use an unambiguous body
+    # on the publisher; otherwise preserve the existing locator fallbacks.
+    source = _safe_page_source(driver)
+    if not message_note_form_is_visible(source):
+        return None
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return None
+    fields = []
+
+    def visit(node):
+        if node.get("visible") == "false" or node.get("enabled") == "false":
+            return
+        if node.tag == "XCUIElementTypeTextView" and node.get("visible") == "true":
+            rect = {key: node.get(key) for key in ("x", "y", "width", "height")}
+            if all(value is not None for value in rect.values()) and _source_element_rect(node.attrib):
+                fields.append(rect)
+        for child in node:
+            visit(child)
+
+    visit(root)
+    if len(fields) != 1:
+        return None
+    try:
+        return driver.find_element(AppiumBy.XPATH, _ios_element_xpath_for_rect("XCUIElementTypeTextView", fields[0]))
+    except (NoSuchElementException, WebDriverException, AttributeError):
+        return None
+
+
 def _append_note_topics_to_ios_body_by_source(driver: WebDriver, topics: list[str]) -> bool:
     element = _find_ios_input_from_page_source_geometry(driver, "正文", prefer_text_view=True)
+    if element is None:
+        element = _find_unique_visible_ios_note_body(driver)
     if element is None:
         return False
     existing_body = _text_input_current_value(element)
@@ -5184,7 +5219,8 @@ def _note_profile_enabled() -> bool:
 @contextmanager
 def _note_profile(label: str):
     started_at = time.monotonic()
-    yield
+    with profile_section(f"note.{label}"):
+        yield
     if _note_profile_enabled():
         elapsed = time.monotonic() - started_at
         print(f"[note-profile] {label}: {elapsed:.2f}s", flush=True)

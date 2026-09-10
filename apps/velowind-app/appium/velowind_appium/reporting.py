@@ -5,6 +5,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from .allure_history import prepare_history
+
 
 try:
     import allure as _allure
@@ -77,6 +79,7 @@ def generate_and_open_allure_report(
     if allure_bin is None or not allure_results.exists():
         return False
 
+    prepare_history(allure_results, allure_report)
     generate_result = subprocess.run(
         [
             allure_bin,

@@ -310,6 +310,10 @@ HTML 报告会生成到同一轮运行目录下：
 .tmp/appium-<platform>/runs/<run-id>/allure-report/
 ```
 
+自动生成和手动生成都会继承同平台上一轮报告的 Allure 2 `history`。在用例详情的 **History** 中查看近期执行状态和时间；Allure 默认保留最近 20 轮历史。重新生成同一 run 时复用原始历史输入，避免重复计入自身。
+
+历史从接入后的报告逐轮积累，旧报告不会自动回填。请保留 `.tmp/appium-<platform>/runs/` 中的报告；删除这些目录会丢失历史来源。用例名称和参数应保持稳定，修改测试路径或参数可能产生新的历史标识。当前历史用于查看状态和时间，旧报告的截图及附件仍需打开对应 run 的完整报告查看。
+
 打开最近一次报告：
 
 ```bash
@@ -435,3 +439,9 @@ Android 会话默认将原生 `waitForIdleTimeout` 上限设为 1000 ms，减少
 
 本轮真机逐用例、逐步骤的基线、正反向对照与保留范围见
 [Android P1 优化记录](../../../benchmarks/appium/20260909-android-p1/README.md)。
+
+
+笔记发布、选图和活动模块的旧 profile 现在也进入统一计时文件，未开启控制台 profiling 时仍保存阶段耗时，异常会保留失败状态。
+iOS P1 的 13 条用例基线、笔记正文定位优化、两轮真机验证及失败/中断边界见
+[iOS P1 优化记录](../../../benchmarks/appium/20260910-ios-p1/README.md)。本轮只保留已验证的笔记定位优化，没有宣称整套 P1 全部通过。
+可通过个人 skill `$appium-test-efficiency` 复用“先基线、再对照、通过且有收益才保留”的流程。

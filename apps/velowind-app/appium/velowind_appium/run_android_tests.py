@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from . import android_media_sync
+from .allure_history import prepare_history
 from .allure_artifacts import allure_artifacts as _resolve_allure_artifacts
 
 
@@ -58,6 +59,7 @@ def _generate_and_open_report() -> None:
         print(f"Allure results not found: {artifacts.results}")
         return
 
+    prepare_history(artifacts.results, artifacts.report, artifacts.latest_report)
     generate_result = _run(
         [
             allure_bin,

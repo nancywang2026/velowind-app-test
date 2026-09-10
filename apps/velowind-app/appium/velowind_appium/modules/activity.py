@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+
+from velowind_appium.timing import profile_section
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import html
@@ -2600,7 +2602,8 @@ def _activity_profile_enabled() -> bool:
 @contextmanager
 def _activity_profile(label: str):
     started_at = time.monotonic()
-    yield
+    with profile_section(f"activity.{label}"):
+        yield
     if _activity_profile_enabled():
         elapsed = time.monotonic() - started_at
         print(f"[activity-profile] {label}: {elapsed:.2f}s", flush=True)
