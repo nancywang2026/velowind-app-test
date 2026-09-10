@@ -310,6 +310,10 @@ HTML 报告会生成到同一轮运行目录下：
 .tmp/appium-<platform>/runs/<run-id>/allure-report/
 ```
 
+自动生成和手动生成都会继承同平台上一轮报告的 Allure 2 `history`。在用例详情的 **History** 中查看近期执行状态和时间；Allure 默认保留最近 20 轮历史。重新生成同一 run 时复用原始历史输入，避免重复计入自身。
+
+历史从接入后的报告逐轮积累，旧报告不会自动回填。请保留 `.tmp/appium-<platform>/runs/` 中的报告；删除这些目录会丢失历史来源。用例名称和参数应保持稳定，修改测试路径或参数可能产生新的历史标识。当前历史用于查看状态和时间，旧报告的截图及附件仍需打开对应 run 的完整报告查看。
+
 打开最近一次报告：
 
 ```bash
@@ -435,3 +439,18 @@ Android 会话默认将原生 `waitForIdleTimeout` 上限设为 1000 ms，减少
 
 本轮真机逐用例、逐步骤的基线、正反向对照与保留范围见
 [Android P1 优化记录](../../../benchmarks/appium/20260909-android-p1/README.md)。
+
+
+笔记发布、选图和活动模块的旧 profile 现在也进入统一计时文件，未开启控制台 profiling 时仍保存阶段耗时，异常会保留失败状态。
+iOS P1 的 13 条用例基线、笔记正文定位优化、两轮真机验证及失败/中断边界见
+[iOS P1 优化记录](../../../benchmarks/appium/20260910-ios-p1/README.md)。本轮只保留已验证的笔记定位优化，没有宣称整套 P1 全部通过。
+可通过个人 skill `$appium-test-efficiency` 复用“先基线、再对照、通过且有收益才保留”的流程。
+
+- iOS 场次日期滚轮第二轮优化：复用单次 XML 快照，真机两轮正文减少 17.6%–19.3%；逐用例/逐步骤基线与对照见 [`20260910-ios-p1-round2`](../../../benchmarks/appium/20260910-ios-p1-round2/README.md)。本轮仅验证受影响场次，未重测整套总时长。
+
+### iOS P1 执行效率
+
+iOS 默认 `waitForIdleTimeout=0.2` 秒、`animationCoolOffTimeout=0.2` 秒。
+笔记提交及图片/视频校验阶段临时使用至少 1 秒空闲等待，并在成功或异常后恢复原值；业务轮询、媒体比对、测试内容与清理逻辑保持原配置。
+可通过 `VW_IOS_WAIT_FOR_IDLE_TIMEOUT=1.0 VW_IOS_ANIMATION_COOL_OFF_TIMEOUT=2.0` 恢复本轮优化前的驱动等待参数。
+完整 13 条真机 P1 的耗时、逐步骤基线、失败候选及默认命令复跑结果见 [少于 30 分钟优化记录](../../../benchmarks/appium/20260910-ios-under30/README.md)。

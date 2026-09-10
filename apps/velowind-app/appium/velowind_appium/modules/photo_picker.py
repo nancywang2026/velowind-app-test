@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+
+from velowind_appium.timing import profile_section
 import os
 from pathlib import Path
 import re
@@ -2521,7 +2523,8 @@ def _photo_picker_debug(message: str) -> None:
 @contextmanager
 def _photo_picker_profile(label: str):
     started_at = time.monotonic()
-    yield
+    with profile_section(f"photo-picker.{label}"):
+        yield
     if _photo_picker_profile_enabled():
         elapsed = time.monotonic() - started_at
         print(f"[photo-picker-profile] {label}: {elapsed:.2f}s", flush=True)

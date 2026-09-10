@@ -40,6 +40,7 @@ class IosAppiumConfig:
     login_username: Optional[str]
     login_password: Optional[str]
     use_json_source: bool = True
+    animation_cool_off_timeout: float = 0.2
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -201,7 +202,8 @@ def load_ios_config() -> IosAppiumConfig:
         wda_launch_timeout=_env_int("VW_IOS_WDA_LAUNCH_TIMEOUT")
         or _yaml_int(yaml_config, target, "wda_launch_timeout"),
         no_reset=_env_bool("VW_IOS_NO_RESET", _yaml_bool(yaml_config, "no_reset", True)),
-        wait_for_idle_timeout=_env_float("VW_IOS_WAIT_FOR_IDLE_TIMEOUT", 1.0),
+        wait_for_idle_timeout=_env_float("VW_IOS_WAIT_FOR_IDLE_TIMEOUT", 0.2),
+        animation_cool_off_timeout=_env_float("VW_IOS_ANIMATION_COOL_OFF_TIMEOUT", 0.2),
         reduce_motion=_env_bool("VW_IOS_REDUCE_MOTION", True),
         should_use_singleton_test_manager=_env_optional_bool("VW_IOS_SHOULD_USE_SINGLETON_TEST_MANAGER")
         if _env_optional_bool("VW_IOS_SHOULD_USE_SINGLETON_TEST_MANAGER") is not None
@@ -237,6 +239,7 @@ def build_ios_capabilities(config: IosAppiumConfig) -> Dict[str, object]:
         "appium:useNewWDA": config.use_new_wda,
         "appium:waitForIdleTimeout": config.wait_for_idle_timeout,
         "appium:reduceMotion": config.reduce_motion,
+        "appium:settings[animationCoolOffTimeout]": config.animation_cool_off_timeout,
         # Fetch the native tree as JSON and let Appium serialize XML on the Mac.
         # This preserves the XML interface and visibility/accessibility fields.
         "appium:useJSONSource": config.use_json_source,
