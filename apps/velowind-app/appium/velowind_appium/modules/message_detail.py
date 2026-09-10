@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from velowind_appium.timing import profile_section
+from velowind_appium.ios_settings import ios_media_idle_wait
 from dataclasses import dataclass, replace
 import html
 import json
@@ -438,37 +439,38 @@ def publish_message_note(
         open_message_note_publisher(driver, ios_config=ios_config, timeout=timeout)
     with _note_profile("fill-form"):
         fill_message_note_form(driver, draft, timeout=timeout)
-    with _note_profile("submit-note"):
-        success_signal = submit_message_note(
-            driver,
-            timeout=timeout,
-            allow_video_upload_progress=draft.media_type == "video",
-            published_title=draft.title,
-        )
-    if draft.media_type == "video" and success_signal == "视频上传中":
-        with _note_profile("hold-video-upload-progress"):
-            success_signal = wait_for_video_upload_completion(
+    with ios_media_idle_wait(driver):
+        with _note_profile("submit-note"):
+            success_signal = submit_message_note(
                 driver,
                 timeout=timeout,
-                observed_signal=success_signal,
+                allow_video_upload_progress=draft.media_type == "video",
+                published_title=draft.title,
             )
-    if draft.media_type == "image":
-        with _note_profile("validate-published-image"):
-            _validate_published_note_image_matches_uploaded_preview(
-                driver,
-                timeout=min(timeout, 20),
-                title=draft.title,
-            )
-    elif draft.media_type == "video" and (
-        effective_video_source_path is not None or getattr(driver, "_publish_note_source_video_path", None)
-    ):
-        with _note_profile("validate-published-video"):
-            _validate_published_note_video_matches_source(
-                driver,
-                source_path=effective_video_source_path,
-                title=draft.title,
-                timeout=min(timeout, 30),
-            )
+        if draft.media_type == "video" and success_signal == "视频上传中":
+            with _note_profile("hold-video-upload-progress"):
+                success_signal = wait_for_video_upload_completion(
+                    driver,
+                    timeout=timeout,
+                    observed_signal=success_signal,
+                )
+        if draft.media_type == "image":
+            with _note_profile("validate-published-image"):
+                _validate_published_note_image_matches_uploaded_preview(
+                    driver,
+                    timeout=min(timeout, 20),
+                    title=draft.title,
+                )
+        elif draft.media_type == "video" and (
+            effective_video_source_path is not None or getattr(driver, "_publish_note_source_video_path", None)
+        ):
+            with _note_profile("validate-published-video"):
+                _validate_published_note_video_matches_source(
+                    driver,
+                    source_path=effective_video_source_path,
+                    title=draft.title,
+                    timeout=min(timeout, 30),
+                )
     return success_signal
 
 

@@ -52,7 +52,7 @@ def test_load_ios_config_uses_safe_defaults(monkeypatch):
     assert config.udid is None
     assert config.bundle_id == "com.velowind.rider"
     assert config.artifact_dir == Path(".tmp/appium-ios")
-    assert config.wait_for_idle_timeout == 1.0
+    assert config.wait_for_idle_timeout == 0.2
     assert config.reduce_motion is True
     assert config.target == "device"
     assert config.login_username is None
@@ -146,7 +146,7 @@ def test_build_ios_capabilities_prefers_installed_bundle(monkeypatch):
     assert capabilities["appium:automationName"] == "XCUITest"
     assert capabilities["appium:udid"] == "device-001"
     assert capabilities["appium:bundleId"] == "com.example.demo"
-    assert capabilities["appium:waitForIdleTimeout"] == 1.0
+    assert capabilities["appium:waitForIdleTimeout"] == 0.2
     assert capabilities["appium:reduceMotion"] is True
     assert capabilities["appium:useJSONSource"] is True
     assert "appium:app" not in capabilities
@@ -168,7 +168,7 @@ def test_ios_json_source_can_be_disabled_without_changing_idle_wait(monkeypatch)
     monkeypatch.setenv("VW_IOS_USE_JSON_SOURCE", "false")
     capabilities = build_ios_capabilities(load_ios_config())
     assert capabilities["appium:useJSONSource"] is False
-    assert capabilities["appium:waitForIdleTimeout"] == 1.0
+    assert capabilities["appium:waitForIdleTimeout"] == 0.2
 
 
 def test_build_ios_capabilities_uses_app_path_when_provided(monkeypatch):
@@ -313,3 +313,17 @@ Zhigang的iPhone (26.2.1) (00008150-0006799C2693401C)
 """
 
     assert discover_first_online_ios_udid(output) is None
+
+
+def test_ios_animation_cool_off_can_restore_wda_default(monkeypatch):
+    monkeypatch.setenv("VW_IOS_UDID", "test-device")
+    monkeypatch.delenv("VW_IOS_WAIT_FOR_IDLE_TIMEOUT", raising=False)
+    monkeypatch.setattr("velowind_appium.config.auto_detect_online_ios_udid", lambda: None)
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/non-existent-appium-config.yaml")
+    monkeypatch.delenv("VW_IOS_ANIMATION_COOL_OFF_TIMEOUT", raising=False)
+    config = load_ios_config()
+    assert build_ios_capabilities(config)["appium:settings[animationCoolOffTimeout]"] == 0.2
+    monkeypatch.setenv("VW_IOS_ANIMATION_COOL_OFF_TIMEOUT", "2.0")
+    config = load_ios_config()
+    assert build_ios_capabilities(config)["appium:settings[animationCoolOffTimeout]"] == 2.0
+    assert config.wait_for_idle_timeout == 0.2

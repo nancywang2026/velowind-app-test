@@ -2365,3 +2365,45 @@ def test_ios_date_only_picker_never_requests_hour_or_minute(monkeypatch):
     monkeypatch.setattr(activity_sessions, '_fill_ios_datetime_picker_fields', fill)
     assert activity_sessions._write_ios_datetime_picker_value(driver, '结束时间', '2026-09-24')
     assert calls == [(['month', 'day'], {'month': '09', 'day': '24'})]
+
+
+def test_ios_wheel_rechecks_selected_date_after_each_swipe(monkeypatch):
+    class MovingWheel(FakeDriver):
+        def __init__(self):
+            self.day = 10
+            self.reads = 0
+            self.rect_reads = 0
+            self.scripts = []
+
+        @property
+        def page_source(self):
+            self.reads += 1
+            return f'''<root>
+              <XCUIElementTypeStaticText visible="true" label="9月{self.day}日9点00分" />
+              <XCUIElementTypeStaticText visible="true" label="日" x="111" y="575" width="84" height="20" />
+              <XCUIElementTypeStaticText visible="true" label="{self.day}" x="111" y="654" width="84" height="44" />
+            </root>'''
+
+        def get_window_rect(self):
+            self.rect_reads += 1
+            return {"width": 402, "height": 874}
+
+        def swipe(self, *args, **kwargs):
+            # Overshoot once: the next fresh reading must reverse direction.
+            self.scripts.append(args)
+            self.day += 2 if args[1] > args[3] else -1
+
+    driver = MovingWheel()
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda _: None)
+    assert activity_sessions._tap_ios_datetime_picker_wheel_to_target(driver, "day", "11")
+    assert driver.day == 11
+    assert len(driver.scripts) == 2
+    assert driver.reads == 3
+    assert driver.rect_reads == 1
+
+
+def test_ios_wheel_missing_selected_date_fails_without_swiping(monkeypatch):
+    driver = FakeDriver('<root />')
+    monkeypatch.setattr(activity_sessions.time, "sleep", lambda _: None)
+    assert not activity_sessions._tap_ios_datetime_picker_wheel_to_target(driver, "day", "11")
+    assert driver.scripts == []

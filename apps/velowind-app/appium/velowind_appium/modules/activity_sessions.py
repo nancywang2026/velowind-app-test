@@ -1719,8 +1719,13 @@ def _tap_ios_datetime_picker_value(driver: WebDriver, field: str, value: str) ->
 
 
 def _tap_ios_datetime_picker_wheel_to_target(driver: WebDriver, field: str, target: str) -> bool:
+    try:
+        rect = driver.get_window_rect()
+    except (WebDriverException, KeyError, TypeError, AttributeError):
+        return False
     for _ in range(36):
-        current = _ios_datetime_picker_current_parts(driver)
+        source = _safe_page_source(driver)
+        current = _ios_datetime_picker_current_parts_from_source(source)
         if current is None:
             return False
         current_value = current.get(field)
@@ -1729,7 +1734,12 @@ def _tap_ios_datetime_picker_wheel_to_target(driver: WebDriver, field: str, targ
         direction = _android_datetime_picker_step_direction(field, current_value, target)
         if direction is None:
             return False
-        _tap_ios_datetime_picker_wheel_step(driver, field, direction)
+        # The selected value and wheel geometry come from the same fresh snapshot.
+        center = _ios_datetime_picker_column_center(source, field)
+        if center is None:
+            _tap_ios_datetime_picker_wheel_step(driver, field, direction)
+        else:
+            _swipe_ios_datetime_picker_wheel(driver, rect, center, direction)
         time.sleep(0.1)
     current = _ios_datetime_picker_current_parts(driver)
     return bool(current and current.get(field) == target)
@@ -1740,7 +1750,14 @@ def _tap_ios_datetime_picker_wheel_step(driver: WebDriver, field: str, direction
         rect = driver.get_window_rect()
     except (WebDriverException, KeyError, TypeError, AttributeError):
         return
-    center_x, center_y = _ios_datetime_picker_wheel_center(driver, rect, field)
+    center = _ios_datetime_picker_wheel_center(driver, rect, field)
+    _swipe_ios_datetime_picker_wheel(driver, rect, center, direction)
+
+
+def _swipe_ios_datetime_picker_wheel(
+    driver: WebDriver, rect: dict, center: tuple[int, int], direction: str
+) -> None:
+    center_x, center_y = center
     offset = max(30, int(rect["height"] * 0.0435))
     start_y = center_y + offset if direction == "next" else center_y - offset
     end_y = center_y - offset if direction == "next" else center_y + offset

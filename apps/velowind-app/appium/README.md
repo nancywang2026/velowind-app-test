@@ -445,3 +445,12 @@ Android 会话默认将原生 `waitForIdleTimeout` 上限设为 1000 ms，减少
 iOS P1 的 13 条用例基线、笔记正文定位优化、两轮真机验证及失败/中断边界见
 [iOS P1 优化记录](../../../benchmarks/appium/20260910-ios-p1/README.md)。本轮只保留已验证的笔记定位优化，没有宣称整套 P1 全部通过。
 可通过个人 skill `$appium-test-efficiency` 复用“先基线、再对照、通过且有收益才保留”的流程。
+
+- iOS 场次日期滚轮第二轮优化：复用单次 XML 快照，真机两轮正文减少 17.6%–19.3%；逐用例/逐步骤基线与对照见 [`20260910-ios-p1-round2`](../../../benchmarks/appium/20260910-ios-p1-round2/README.md)。本轮仅验证受影响场次，未重测整套总时长。
+
+### iOS P1 执行效率
+
+iOS 默认 `waitForIdleTimeout=0.2` 秒、`animationCoolOffTimeout=0.2` 秒。
+笔记提交及图片/视频校验阶段临时使用至少 1 秒空闲等待，并在成功或异常后恢复原值；业务轮询、媒体比对、测试内容与清理逻辑保持原配置。
+可通过 `VW_IOS_WAIT_FOR_IDLE_TIMEOUT=1.0 VW_IOS_ANIMATION_COOL_OFF_TIMEOUT=2.0` 恢复本轮优化前的驱动等待参数。
+完整 13 条真机 P1 的耗时、逐步骤基线、失败候选及默认命令复跑结果见 [少于 30 分钟优化记录](../../../benchmarks/appium/20260910-ios-under30/README.md)。
