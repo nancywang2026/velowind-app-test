@@ -5848,6 +5848,8 @@ def _enter_comment_text(driver: WebDriver, input_box, comment_text: str) -> None
         for enter_method in (
             lambda: input_box.set_value(comment_text),
             lambda: input_box.send_keys(comment_text),
+            lambda: _type_ios_comment_text(driver, comment_text),
+            lambda: _paste_ios_comment_text(driver, input_box, comment_text),
         ):
             try:
                 enter_method()
@@ -5862,6 +5864,42 @@ def _enter_comment_text(driver: WebDriver, input_box, comment_text: str) -> None
         raise AssertionError(f"Unable to enter the full comment text on iOS: {comment_text}")
 
     input_box.send_keys(comment_text)
+
+
+def _type_ios_comment_text(driver: WebDriver, comment_text: str) -> None:
+    for script, payload in (
+        ("mobile: type", {"text": comment_text}),
+        ("mobile: keys", {"keys": list(comment_text)}),
+    ):
+        try:
+            driver.execute_script(script, payload)
+            return
+        except WebDriverException:
+            continue
+    raise WebDriverException("Unable to type comment text with iOS mobile commands")
+
+
+def _paste_ios_comment_text(driver: WebDriver, input_box, comment_text: str) -> None:
+    try:
+        driver.set_clipboard_text(comment_text)
+    except (AttributeError, WebDriverException):
+        raise WebDriverException("Unable to set iOS clipboard text")
+
+    try:
+        input_box.click()
+    except (AttributeError, WebDriverException):
+        pass
+
+    for script, payload in (
+        ("mobile: paste", {}),
+        ("mobile: paste", {"elementId": getattr(input_box, "id", None)}),
+    ):
+        try:
+            driver.execute_script(script, payload)
+            return
+        except WebDriverException:
+            continue
+    raise WebDriverException("Unable to paste comment text with iOS mobile command")
 
 
 def _comment_input_contains(input_box, expected_text: str) -> bool:
