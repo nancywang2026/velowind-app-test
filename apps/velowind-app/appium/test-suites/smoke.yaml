@@ -1,4 +1,5 @@
 tests:
+  - message/test_home_video_playback.py
   - smoke/test_ios_feature_walkthrough.py
 markers:
   - smoke

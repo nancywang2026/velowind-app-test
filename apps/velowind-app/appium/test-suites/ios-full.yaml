@@ -1,4 +1,8 @@
 tests:
+  # 首页连续验证 4 个不同视频，累计 2 个失败立即终止
+  - file: message/test_home_video_playback.py
+    methods:
+      - test_four_home_videos_play_normally
    # 基础功能巡检
   - file: smoke/test_ios_feature_walkthrough.py
     methods:
