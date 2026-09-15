@@ -80,7 +80,7 @@ def xiaodai_source_video_path(use_case_id: str) -> Path:
 def run_xiaodai_video_upload_case(app_driver, app_config, step, use_case_id: str) -> None:
     draft = load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH)
     source_video = xiaodai_source_video_path(use_case_id)
-    if str((getattr(app_driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android":
+    if str((getattr(app_driver, "capabilities", {}) or {}).get("platformName", "")).lower() in {"android", "ios"}:
         # Detail lookup and cleanup must target this run, even when a previous
         # failed run left a note with the same fixture title behind.
         draft = replace(draft, title=f"{draft.title[:11]}-{uuid4().hex[:8]}")

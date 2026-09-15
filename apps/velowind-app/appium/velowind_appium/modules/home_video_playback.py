@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 import re
 import time
@@ -11,6 +12,7 @@ from PIL import Image, ImageChops, ImageStat
 from velowind_appium.actions import safe_back, swipe_vertical
 from velowind_appium.image_validation import crop_image_from_screenshot
 from velowind_appium.modules.home_feed import _home_ready_text_present, wait_for_home_feed
+from velowind_appium.modules.home_camera_badge import camera_outline_position
 from velowind_appium.modules.message_detail import _tap_ios_detail_back_button_from_source
 from velowind_appium.reporting import allure, attach_file_if_present, attach_text
 from velowind_appium.video_validation import VideoBounds, _element_bounds, find_note_detail_video_bounds
@@ -24,14 +26,13 @@ BLOCKERS = ("post-detail-video-loading", "正在缓冲视频", "post-detail-vide
 class HomeVideo:
     post_id: str
     bounds: VideoBounds
-    confirmed_video: bool = True
 
 
-def visible_home_videos(source: str, window: dict) -> list[HomeVideo]:
-    """Use video badges and post IDs, never titles or list positions, as identity."""
+def visible_home_videos(source: str, window: dict, screenshot_png: bytes | None = None) -> list[HomeVideo]:
+    """Only cards with a visible camera badge are video candidates."""
     root = ElementTree.fromstring(source)
     videos: dict[str, HomeVideo] = {}
-    cards: dict[str, HomeVideo] = {}
+    cards: dict[str, VideoBounds] = {}
 
     def visit(node, hidden=False):
         hidden = hidden or node.get("visible") == "false" or node.get("displayed") == "false"
@@ -39,15 +40,15 @@ def visible_home_videos(source: str, window: dict) -> list[HomeVideo]:
             return
         for key in ("resource-id", "name", "label", "content-desc", "testID"):
             value = node.get(key, "")
-            card_match = re.fullmatch(r"(?:[^\s]+:id/)?post-home-feed-note-card-([^\s]+)", value)
-            if card_match:
+            card = re.fullmatch(r"(?:[^\s]+:id/)?post-home-feed-note-card-([^\s]+)", value)
+            if card:
                 bounds = _element_bounds(node.attrib)
-                if (
-                    bounds and bounds.y >= 120 and bounds.x >= 0
-                    and bounds.x + bounds.width <= window["width"]
-                    and bounds.y + bounds.height <= window["height"] - 75
-                ):
-                    cards[card_match.group(1)] = HomeVideo(card_match.group(1), bounds, False)
+                # Only the corner needs to be visible, not the whole card.
+                # Keep it clear of the fixed category header and bottom tabbar.
+                if (bounds and bounds.width >= 80 and bounds.height >= 44
+                        and bounds.x >= 0 and bounds.x + bounds.width <= window["width"]
+                        and bounds.y >= 120 and bounds.y + 44 <= window["height"] - 100):
+                    cards[card.group(1)] = bounds
             match = re.fullmatch(r"(?:[^\s]+:id/)?post-home-feed-note-video-badge-([^\s]+)", value)
             if match is None:
                 continue
@@ -68,23 +69,19 @@ def visible_home_videos(source: str, window: dict) -> list[HomeVideo]:
             visit(child, hidden)
 
     visit(root)
-    candidates = {**cards, **videos}
-    return sorted(candidates.values(), key=lambda video: (video.bounds.y, video.bounds.x))
-
-
-def _detail_is_video(driver, *, timeout: float = 15) -> bool:
-    """iOS may merge the badge into an accessible card; classify its detail."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        visible = _visible_source(driver.page_source)
-        if any(marker in visible for marker in ("post-detail-video-", "post-detail-aliyun-video-", "正在缓冲视频", "视频暂时不可")):
-            return True
-        if "post-detail-banner-pager" in visible and "写留言" in visible:
-            return False
-        if any(marker in visible for marker in ("详情加载失败", "加载失败")):
-            raise AssertionError("无法确认笔记媒体类型：详情加载失败")
-        time.sleep(.5)
-    raise AssertionError("无法确认笔记媒体类型：详情未加载或未暴露媒体标识")
+    if screenshot_png is not None:
+        with Image.open(BytesIO(screenshot_png)) as screenshot:
+            scale_x, scale_y = screenshot.width / window["width"], screenshot.height / window["height"]
+            for post_id, bounds in cards.items():
+                if post_id in videos:
+                    continue
+                left, top = bounds.x + bounds.width - 44, bounds.y + 2
+                corner = screenshot.crop((round(left * scale_x), round(top * scale_y), round((left + 42) * scale_x), round((top + 42) * scale_y)))
+                position = camera_outline_position(corner)
+                if position is not None:
+                    x, y = position
+                    videos[post_id] = HomeVideo(post_id, VideoBounds(round(left + x * 42) - 8, round(top + y * 42) - 8, 16, 16))
+    return sorted(videos.values(), key=lambda video: (video.bounds.y, video.bounds.x))
 
 
 def _return_to_feed(driver) -> None:
@@ -104,6 +101,33 @@ def _visible_source(source: str) -> str:
         return " ".join([*node.attrib.values(), *(visit(child) for child in node)])
 
     return visit(root)
+
+
+def _playback_state_source(source: str) -> str:
+    """Use concrete visible controls/text, not ancestor accessibility summaries.
+
+    iOS can leave an error message in a visible parent's aggregated label even
+    while the error child is hidden or has already been removed.
+    """
+    states: list[str] = []
+    markers = (*ERRORS, *BLOCKERS, "视频错误，请稍后再试。")
+
+    def visit(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return
+        for key in ("name", "resource-id", "testID", "content-desc", "label", "text", "value"):
+            value = node.get(key, "").split(":id/")[-1].strip()
+            if value not in markers:
+                continue
+            # Explicit state IDs are valid on containers. Human-readable
+            # messages must come from a leaf, never a parent's merged label.
+            if value.startswith("post-detail-") or len(node) == 0:
+                states.append(value)
+        for child in node:
+            visit(child)
+
+    visit(ElementTree.fromstring(source))
+    return " ".join(states)
 
 
 def _content_frame(frame: Image.Image) -> Image.Image:
@@ -146,13 +170,26 @@ def check_video_playback(driver, artifact_dir: Path, *, timeout: float = 30, obs
     last_reason = "播放器未出现"
     while time.monotonic() < deadline:
         source = driver.page_source
-        visible = _visible_source(source)
+        visible = _playback_state_source(source)
         error = next((marker for marker in ERRORS if marker in visible), None)
         if error:
-            path = artifact_dir / "playback-error.png"
-            path.write_bytes(driver.get_screenshot_as_png())
+            png = driver.get_screenshot_as_png()
+            after_source = driver.page_source
+            confirmed = error in _playback_state_source(after_source)
+            prefix = "playback-error" if confirmed else f"transient-state-{time.time_ns()}"
+            path = artifact_dir / f"{prefix}.png"
+            path.write_bytes(png)
             attach_file_if_present(path, attachment_type=allure.attachment_type.PNG)
-            return _playback_error_reason(visible, error)
+            for suffix, xml in (("before", source), ("after", after_source)):
+                xml_path = artifact_dir / f"{prefix}-{suffix}.xml"
+                xml_path.write_text(xml, encoding="utf-8")
+                attach_file_if_present(xml_path, attachment_type=allure.attachment_type.XML)
+            if confirmed:
+                return _playback_error_reason(visible, error)
+            attach_text("未确认的瞬时错误状态", f"{error}：截图后的页面快照已无该可见错误节点，继续检查实际播放。")
+            previous, started, changes, last_change = None, None, 0, None
+            time.sleep(.2)
+            continue
         bounds = find_note_detail_video_bounds(source)
         blocker = next((marker for marker in BLOCKERS if marker in visible), None)
         if bounds is None or blocker:
@@ -162,7 +199,7 @@ def check_video_playback(driver, artifact_dir: Path, *, timeout: float = 30, obs
             png = driver.get_screenshot_as_png()
             frame = _content_frame(crop_image_from_screenshot(png, bounds, window_size=(window["width"], window["height"])))
             # Check after capture too: spinner/cover transitions aren't playback.
-            after = _visible_source(driver.page_source)
+            after = _playback_state_source(driver.page_source)
             if any(marker in after for marker in (*ERRORS, *BLOCKERS)) or not _has_content(frame):
                 previous, started, changes, last_change = None, None, 0, None
                 last_reason = "视频仍在缓冲、显示封面、暂停或黑屏"
@@ -187,6 +224,10 @@ def check_video_playback(driver, artifact_dir: Path, *, timeout: float = 30, obs
     return f"播放验证超时（{timeout:g} 秒）：{last_reason}"
 
 
+class _RecordedPlaybackFailure(AssertionError):
+    """Mark this Allure video step failed before aggregating all four results."""
+
+
 def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20) -> None:
     seen: set[str] = set()
     results: list[tuple[str, str | None]] = []
@@ -197,37 +238,47 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
             # Refresh coordinates after every return; feed virtualization may
             # move cards. Repeated post IDs never count as another sample.
             while True:
-                videos = visible_home_videos(driver.page_source, driver.get_window_size())
+                source, window = driver.page_source, driver.get_window_size()
+                is_ios = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios"
+                screenshot_png = driver.get_screenshot_as_png() if is_ios else None
+                videos = visible_home_videos(source, window, screenshot_png)
                 video = next((video for video in videos if video.post_id not in seen), None)
                 if video is None:
                     break
                 seen.add(video.post_id)
-                with allure.step(f"检查首页视频 {len(results) + 1}/4：{video.post_id}"):
-                    bounds = video.bounds
-                    driver.execute_script("mobile: tap", {"x": bounds.x + bounds.width // 2, "y": bounds.y + bounds.height // 2})
-                    if not video.confirmed_video and not _detail_is_video(driver):
-                        _return_to_feed(driver)
-                        continue
-                    print(f"[home-video] CHECK {len(results) + 1}/4 post_id={video.post_id}", flush=True)
-                    reason = check_video_playback(driver, run_dir / f"video-{len(results) + 1}")
-                    print(f"[home-video] {'FAIL: ' + reason if reason else 'PASS'} post_id={video.post_id}", flush=True)
-                    results.append((video.post_id, reason))
-                    if sum(reason is not None for _, reason in results) >= 2:
-                        details = "；".join(
-                            f"第 {index} 个视频 {post_id}：{failure}"
-                            for index, (post_id, failure) in enumerate(results, 1) if failure
-                        )
-                        raise AssertionError(f"视频播放失败：已有 2 个视频不能正常播放，立即终止。{details}")
-                    if len(results) == 4:
-                        failures = [(post_id, reason) for post_id, reason in results if reason]
-                        assert not failures, f"视频播放失败：4 个视频中 {len(failures)} 个失败；{failures}"
-                        _return_to_feed(driver)
-                        return
-                    # If the card never opened, do not back out of the home tab.
-                    if not _home_ready_text_present(_visible_source(driver.page_source)):
-                        _return_to_feed(driver)
-                    else:
-                        wait_for_home_feed(driver, timeout=20)
+                try:
+                    with allure.step(f"检查首页视频 {len(results) + 1}/4：{video.post_id}"):
+                        if screenshot_png is not None:
+                            run_dir.mkdir(parents=True, exist_ok=True)
+                            selected = run_dir / f"selected-video-{len(results) + 1}.png"
+                            selected.write_bytes(screenshot_png)
+                            attach_file_if_present(selected, attachment_type=allure.attachment_type.PNG)
+                        bounds = video.bounds
+                        driver.execute_script("mobile: tap", {"x": bounds.x + bounds.width // 2, "y": bounds.y + bounds.height // 2})
+                        print(f"[home-video] CHECK {len(results) + 1}/4 post_id={video.post_id}", flush=True)
+                        reason = check_video_playback(driver, run_dir / f"video-{len(results) + 1}")
+                        print(f"[home-video] {'FAIL: ' + reason if reason else 'PASS'} post_id={video.post_id}", flush=True)
+                        results.append((video.post_id, reason))
+                        if reason is not None:
+                            raise _RecordedPlaybackFailure(reason)
+                except _RecordedPlaybackFailure:
+                    pass
+                if sum(reason is not None for _, reason in results) >= 2:
+                    details = "；".join(
+                        f"第 {index} 个视频 {post_id}：{failure}"
+                        for index, (post_id, failure) in enumerate(results, 1) if failure
+                    )
+                    raise AssertionError(f"视频播放失败：已有 2 个视频不能正常播放，立即终止。{details}")
+                if len(results) == 4:
+                    failures = [(post_id, reason) for post_id, reason in results if reason]
+                    assert not failures, f"视频播放失败：4 个视频中 {len(failures)} 个失败；{failures}"
+                    _return_to_feed(driver)
+                    return
+                # If the card never opened, do not back out of the home tab.
+                if not _home_ready_text_present(_visible_source(driver.page_source)):
+                    _return_to_feed(driver)
+                else:
+                    wait_for_home_feed(driver, timeout=20)
             if page < max_swipes:
                 swipe_vertical(driver, direction="up")
                 time.sleep(.5)

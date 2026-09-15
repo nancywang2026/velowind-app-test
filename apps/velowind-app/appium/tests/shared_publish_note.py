@@ -92,8 +92,9 @@ def cleanup_published_note_after_success(
     retry_interval: float = 2,
 ) -> Optional[CleanupReport]:
     capabilities = getattr(app_driver, "capabilities", {}) or {}
-    if str(capabilities.get("platformName", "")).lower() == "android":
-        requested, submitted = getattr(app_driver, "_android_note_submitted_title", (title, title))
+    platform = str(capabilities.get("platformName", "")).lower()
+    if platform in {"android", "ios"}:
+        requested, submitted = getattr(app_driver, f"_{platform}_note_submitted_title", (title, title))
         if requested == title:
             title = submitted
     end_at = time.monotonic() + max(0, timeout)
@@ -126,6 +127,11 @@ def cleanup_published_note_after_success(
         # publish flow into a product-test failure.
         attach_text(
             "publish-note-cleanup-pending",
+            f"title={title}\ndeleted={report.deleted}\nskipped={report.skipped}",
+        )
+    elif report is not None:
+        attach_text(
+            "publish-note-cleanup-result",
             f"title={title}\ndeleted={report.deleted}\nskipped={report.skipped}",
         )
     return report

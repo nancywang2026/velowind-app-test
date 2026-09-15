@@ -1,9 +1,12 @@
 from io import BytesIO
+from contextlib import contextmanager
+from pathlib import Path
 
 from PIL import Image, ImageDraw
 import pytest
 
 from velowind_appium.modules import home_video_playback as playback
+from velowind_appium.modules.home_camera_badge import camera_outline_position
 
 
 HOME = '<root name="post-home-feed-category-pager" />'
@@ -38,6 +41,17 @@ def test_aggregated_card_text_does_not_identify_a_video():
     ([None, None, 'broken', 'broken'], 4, True),
 ])
 def test_four_video_thresholds(monkeypatch, tmp_path, outcomes, expected_calls, failed):
+    step_statuses = []
+    @contextmanager
+    def record_step(name):
+        try:
+            yield
+        except AssertionError:
+            step_statuses.append('failed')
+            raise
+        else:
+            step_statuses.append('passed')
+    monkeypatch.setattr(playback.allure, 'step', record_step)
     class Driver:
         page_source = HOME
         def get_window_size(self):
@@ -60,6 +74,7 @@ def test_four_video_thresholds(monkeypatch, tmp_path, outcomes, expected_calls, 
     else:
         playback.verify_four_home_videos(driver, tmp_path)
     assert len(calls) == expected_calls
+    assert step_statuses == ['failed' if result else 'passed' for result in outcomes[:expected_calls]]
 
 
 def test_repeated_video_does_not_fill_four_samples(monkeypatch, tmp_path):
@@ -149,22 +164,110 @@ def test_loading_overlay_appearing_during_capture_cannot_pass(monkeypatch, tmp_p
     assert playback.check_video_playback(Driver(), tmp_path, timeout=12) is not None
 
 
-def test_ios_merged_badge_falls_back_to_card_id():
-    source = '<root><XCUIElementTypeButton name="post-home-feed-note-card-pst-123" label="测试 Nancy 1" visible="true" x="4" y="130" width="195" height="308" /></root>'
-    cards = playback.visible_home_videos(source, {'width': 402, 'height': 874})
-    assert len(cards) == 1
-    assert cards[0].post_id == 'pst-123'
-    assert cards[0].confirmed_video is False
-
-
 @pytest.mark.parametrize('source,expected', [
-    (DETAIL.format('<node name="post-detail-banner-pager" label="写留言" />'), True),
-    ('<root><node name="post-detail-banner-pager" label="写留言" /></root>', False),
+    ('<root label="寻风集 视频暂时不可播放"><node name="视频暂时不可播放" visible="false" /></root>', ''),
+    ('<root label="视频暂时不可播放"><node name="视频暂时不可播放" visible="false" /></root>', ''),
+    ('<root><node visible="false"><node name="post-detail-video-error" visible="true" /></node></root>', ''),
+    ('<root><node name="视频暂时不可播放" visible="true" /></root>', '视频暂时不可播放'),
+    ('<root><node resource-id="com.app:id/post-detail-video-error"><node name="视频暂时不可播放" visible="false" /></node></root>', 'post-detail-video-error'),
 ])
-def test_detail_classification_precedes_counting(source, expected):
+def test_error_detection_ignores_stale_ancestor_labels(source, expected):
+    assert playback._playback_state_source(source) == expected
+
+
+def test_error_disappearing_during_screenshot_requires_actual_playback_check(monkeypatch, tmp_path):
+    clock = [0.0]
+    monkeypatch.setattr(playback.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(playback.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     class Driver:
-        page_source = source
-    assert playback._detail_is_video(Driver()) is expected
+        reads = 0
+        frames = 0
+        @property
+        def page_source(self):
+            self.reads += 1
+            return DETAIL.format('<node name="视频暂时不可播放" />' if self.reads == 1 else '')
+        def get_window_size(self):
+            return {'width': 200, 'height': 200}
+        def get_screenshot_as_png(self):
+            self.frames += 1
+            return frame_png(self.frames, 'moving')
+    driver = Driver()
+    assert playback.check_video_playback(driver, tmp_path, timeout=15) is None
+    assert clock[0] >= 8
+    assert list(tmp_path.glob('transient-state-*-before.xml'))
+    assert list(tmp_path.glob('transient-state-*-after.xml'))
+    assert not (tmp_path / 'playback-error.png').exists()
+
+
+def test_unmarked_photo_card_is_not_a_video_candidate():
+    source = '<root><XCUIElementTypeButton name="post-home-feed-note-card-pst-123" label="测试 Nancy 1" visible="true" x="4" y="130" width="195" height="308" /></root>'
+    assert playback.visible_home_videos(source, {'width': 402, 'height': 874}) == []
+
+
+def test_only_camera_marked_card_is_selected_from_mixed_feed():
+    source = '<root><node name="post-home-feed-note-card-photo" x="4" y="130" width="195" height="308" /><node name="post-home-feed-note-card-video" x="204" y="130" width="195" height="308">' + badge('video') + '</node></root>'
+    assert [video.post_id for video in playback.visible_home_videos(source, {'width': 402, 'height': 874})] == ['video']
+
+
+@pytest.mark.parametrize('name,expected', [('video', True), ('video_occluded', False), ('photo_group', False), ('photo_bus', False)])
+def test_camera_recognition_from_real_device_corners(name, expected):
+    with Image.open(Path(__file__).parent / 'fixtures/home_camera' / f'{name}.png') as corner:
+        assert (camera_outline_position(corner) is not None) is expected
+
+
+@pytest.mark.parametrize('color', ['white', 'black', '#777777'])
+def test_solid_corner_is_not_camera(color):
+    assert camera_outline_position(Image.new('RGB', (126, 126), color)) is None
+
+
+@pytest.mark.parametrize('scale', [2, 3])
+def test_screenshot_camera_selects_video_without_accessibility_badge(scale):
+    screenshot = Image.new('RGB', (402 * scale, 874 * scale), '#777777')
+    with Image.open(Path(__file__).parent / 'fixtures/home_camera/video.png') as corner:
+        screenshot.paste(corner.resize((42 * scale, 42 * scale)), (155 * scale, 606 * scale))
+    output = BytesIO()
+    screenshot.save(output, format='PNG')
+    # The video card extends below the screen, but its corner is visible.
+    source = '<root><node name="post-home-feed-note-card-video" x="4" y="604" width="195" height="308" /><node name="post-home-feed-note-card-photo" x="203" y="347" width="195" height="328" /></root>'
+    videos = playback.visible_home_videos(source, {'width': 402, 'height': 874}, output.getvalue())
+    assert [video.post_id for video in videos] == ['video']
+    assert 165 < videos[0].bounds.x < 185
+    assert 610 < videos[0].bounds.y < 635
+
+
+def test_photo_only_feed_never_opens_detail_or_counts_as_video(monkeypatch, tmp_path):
+    class Driver:
+        page_source = '<root><node name="post-home-feed-note-card-photo" x="4" y="130" width="195" height="308" /></root>'
+        def get_window_size(self):
+            return {'width': 402, 'height': 874}
+        def execute_script(self, *args):
+            pytest.fail('Unmarked photo must not be opened')
+    monkeypatch.setattr(playback, 'wait_for_home_feed', lambda *a, **k: None)
+    with pytest.raises(AssertionError, match='0/4'):
+        playback.verify_four_home_videos(Driver(), tmp_path, max_swipes=0)
+
+
+def test_first_four_photos_are_skipped_then_four_videos_checked(monkeypatch, tmp_path):
+    photos = '<root>' + ''.join(f'<node name="post-home-feed-note-card-photo-{i}" x="4" y="130" width="195" height="308" />' for i in range(4)) + '</root>'
+    videos = '<root>' + ''.join(badge(str(i)) for i in range(4)) + '</root>'
+    class Driver:
+        page_source = photos
+        taps = 0
+        def get_window_size(self):
+            return {'width': 402, 'height': 874}
+        def execute_script(self, *args):
+            assert self.page_source == videos
+            self.taps += 1
+            self.page_source = DETAIL.format('')
+    driver = Driver()
+    checks = []
+    monkeypatch.setattr(playback, 'wait_for_home_feed', lambda *a, **k: None)
+    monkeypatch.setattr(playback, '_return_to_feed', lambda d: setattr(d, 'page_source', videos))
+    monkeypatch.setattr(playback, 'swipe_vertical', lambda d, **k: setattr(d, 'page_source', videos))
+    monkeypatch.setattr(playback.time, 'sleep', lambda *a: None)
+    monkeypatch.setattr(playback, 'check_video_playback', lambda *a: checks.append(True))
+    playback.verify_four_home_videos(driver, tmp_path, max_swipes=1)
+    assert driver.taps == len(checks) == 4
 
 
 def test_error_description_includes_visible_message_without_inventing_root_cause():
