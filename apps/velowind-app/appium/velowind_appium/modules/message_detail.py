@@ -410,6 +410,16 @@ def publish_message_note(
     timeout: int = 60,
     video_source_path: Path | None = None,
 ) -> str:
+    from uuid import uuid4
+    from velowind_appium.note_api_cleanup import api_cleanup_enabled
+    if hasattr(driver, "_api_note_publication"):
+        driver._api_note_publication = None
+    if api_cleanup_enabled():
+        requested_title = draft.title
+        draft = replace(draft, title=f"{uuid4().hex[:8]}-{draft.title[:11]}")
+        driver._api_note_publication = {
+            "requested_title": requested_title, "published_title": draft.title, "post_id": None,
+        }
     if draft.media_type == "video" and draft.media_source == "camera":
         # A session-scoped driver can retain the source path recorded by a
         # previous album-video case. A newly recorded camera clip has no such
@@ -472,6 +482,13 @@ def publish_message_note(
                     timeout=min(timeout, 30),
                     publication_timeout=timeout,
                 )
+    if api_cleanup_enabled() and not driver._api_note_publication.get("post_id"):
+        from velowind_appium.note_api_cleanup import remember_published_post_id, NoteCleanupApiError
+        remember_published_post_id(driver, _safe_page_source(driver), draft.title)
+        if not driver._api_note_publication.get("post_id"):
+            _open_published_note_detail_from_my_notes(driver, draft.title, timeout=timeout)
+        if not driver._api_note_publication.get("post_id"):
+            raise NoteCleanupApiError("Publish succeeded but XML did not expose this publication's postId")
     return success_signal
 
 
@@ -2840,6 +2857,8 @@ def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str
     page_source = page_source or _safe_page_source(driver)
     if not page_source:
         return False
+    from velowind_appium.note_api_cleanup import remember_published_post_id
+    remember_published_post_id(driver, page_source, title)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
     if str(capabilities.get("platformName", "")).lower() == "ios":

@@ -13,11 +13,12 @@ from selenium.common.exceptions import NoSuchElementException, WebDriverExceptio
 
 from velowind_appium.actions import safe_back, swipe_vertical, tap_text_if_present
 from velowind_appium.android_settings import without_android_idle_wait
-from velowind_appium.cleanup_config import CleanupConfig, matches_test_data
+from velowind_appium.cleanup_config import CleanupConfig, matches_test_data, note_cleanup_mode
 from velowind_appium.modules.activity import _tap_element_center
 from velowind_appium.modules.activity_sessions import open_my_activity_publish_list
 from velowind_appium.session import ensure_logged_in_on_home
 from velowind_appium.timing import profile_section
+from velowind_appium.reporting import attach_text
 
 
 NOTE_ACTION_TEXTS = ["删除", "确认删除"]
@@ -51,9 +52,13 @@ def cleanup_notes(driver: WebDriver, config: CleanupConfig, app_config, *, dry_r
 
 
 def cleanup_published_note(driver: WebDriver, title: str, app_config) -> CleanupReport:
-    mode = os.environ.get("VW_NOTE_CLEANUP_MODE", "ui").strip().lower()
+    mode = note_cleanup_mode()
     if mode not in {"ui", "api"}:
         raise ValueError("VW_NOTE_CLEANUP_MODE must be ui or api")
+    attach_text("note-cleanup-mode", f"mode={mode}\nVW_NOTE_CLEANUP_MODE={os.environ.get('VW_NOTE_CLEANUP_MODE', '<unset>')}\nmodule={__file__}")
+    print(f"[note-cleanup] mode={mode}", flush=True)
+    if mode == "api":
+        return cleanup_published_note_via_api(driver, title, app_config)
     # A playing video continuously emits accessibility events. Waiting for
     # global idleness adds ~10s to each query before navigation can even begin.
     # Keep the existing explicit waits and title checks; restore the setting
@@ -65,8 +70,6 @@ def cleanup_published_note(driver: WebDriver, title: str, app_config) -> Cleanup
             _open_me_entry(driver, "我的笔记")
         try:
             with profile_section("cleanup.delete-exact-note"):
-                if mode == "api":
-                    return cleanup_published_note_via_api(driver, title, app_config)
                 return cleanup_exact_visible_item(
                     driver,
                     item_type="note",
@@ -79,18 +82,18 @@ def cleanup_published_note(driver: WebDriver, title: str, app_config) -> Cleanup
 
 
 def cleanup_published_note_via_api(driver, title: str, app_config) -> CleanupReport:
-    """Delete one uniquely matched visible note from the already-open My Notes page."""
-    from velowind_appium.note_api_cleanup import delete_note_via_api, note_post_ids_from_xml
+    """Delete the saved publication ID without reading or navigating the UI."""
+    from velowind_appium.note_api_cleanup import delete_note_via_api, NoteCleanupApiError
 
-    deadline = time.monotonic() + 8
-    while True:
-        post_ids = note_post_ids_from_xml(_safe_page_source(driver), title)
-        if len(post_ids) == 1:
-            delete_note_via_api(post_ids[0], app_config.login_username, app_config.login_password)
-            return CleanupReport("note", [title], [])
-        if len(post_ids) > 1 or time.monotonic() >= deadline:
-            return CleanupReport("note", [], [title])
-        time.sleep(.3)
+    publication = getattr(driver, "_api_note_publication", None)
+    if not publication or not publication.get("post_id"):
+        raise NoteCleanupApiError("Current publication has no saved postId; refusing title lookup")
+    if title not in (publication["requested_title"], publication["published_title"]):
+        raise NoteCleanupApiError("Saved postId belongs to a different publication")
+    if not publication.get("deleted"):
+        delete_note_via_api(publication["post_id"], app_config.login_username, app_config.login_password)
+        publication["deleted"] = True
+    return CleanupReport("note", [title], [])
 
 
 def cleanup_activities(driver: WebDriver, config: CleanupConfig, app_config, *, dry_run: bool = False) -> CleanupReport:

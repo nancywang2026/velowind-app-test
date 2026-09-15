@@ -12,6 +12,7 @@ from velowind_appium.modules import (
     publish_message_note,
 )
 from velowind_appium.reporting import attach_text
+from velowind_appium.note_api_cleanup import api_cleanup_enabled
 from velowind_appium.session import ensure_logged_in_for_publish_entry
 
 
@@ -93,7 +94,7 @@ def cleanup_published_note_after_success(
 ) -> Optional[CleanupReport]:
     capabilities = getattr(app_driver, "capabilities", {}) or {}
     platform = str(capabilities.get("platformName", "")).lower()
-    if platform in {"android", "ios"}:
+    if platform in {"android", "ios"} and not api_cleanup_enabled():
         requested, submitted = getattr(app_driver, f"_{platform}_note_submitted_title", (title, title))
         if requested == title:
             title = submitted

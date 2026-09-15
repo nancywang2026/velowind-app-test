@@ -1,4 +1,6 @@
 cleanup:
+  # Persistent mode for post-publication note cleanup; environment variable overrides it.
+  note_cleanup_mode: api
   # Keep publish cases isolated: after all assertions pass, wait for the note
   # to become deletable and remove the exact title created by that case.
   delete_published_note_after_success: true
