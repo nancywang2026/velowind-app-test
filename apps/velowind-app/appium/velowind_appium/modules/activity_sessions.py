@@ -54,15 +54,15 @@ def build_activity_session_draft(*, today: date | None = None) -> ActivitySessio
     )
 
 
-def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
+def add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60, manage_timeout: int | None = None) -> str:
     # Physical-device comparison did not show a benefit from the shorter
     # session-wide idle wait in this form flow. Keep its original native wait
     # and restore the caller's setting, including when form interaction fails.
     with android_idle_wait(driver, 10000):
-        return _add_activity_session(driver, draft, config, timeout=timeout)
+        return _add_activity_session(driver, draft, config, timeout=timeout, manage_timeout=manage_timeout)
 
 
-def _add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60) -> str:
+def _add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config: IosAppiumConfig, *, timeout: int = 60, manage_timeout: int | None = None) -> str:
     navigation_timeout = min(timeout, ACTIVITY_SESSION_NAVIGATION_TIMEOUT_SECONDS)
     with profile_section("activity-session.dismiss-alerts"):
         dismiss_common_system_alerts(driver)
@@ -88,7 +88,7 @@ def _add_activity_session(driver: WebDriver, draft: ActivitySessionDraft, config
             with profile_section("activity-session.open-my-activity-after-home-recovery"):
                 open_my_activity_publish_list(driver, timeout=navigation_timeout)
     with profile_section("activity-session.open-manage-sessions"):
-        open_manage_sessions_for_approved_activity(driver, timeout=timeout)
+        open_manage_sessions_for_approved_activity(driver, timeout=timeout if manage_timeout is None else manage_timeout)
     with profile_section("activity-session.open-create-session-form"):
         open_create_session_form(driver, timeout=timeout)
     with profile_section("activity-session.fill-session-form"):
@@ -160,13 +160,17 @@ def open_manage_sessions_for_approved_activity(driver: WebDriver, timeout: int =
 
 def _open_ios_manage_sessions(driver: WebDriver, *, timeout: int) -> None:
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    # Inspect the result of every scroll, including one that crosses the
+    # deadline. Otherwise a newly revealed approved card is never considered.
+    while True:
         with profile_section("activity-session.manage.read-page-source"):
             source = _safe_page_source(driver)
         if _session_form_visible(source):
             return
         if _activity_detail_preview_visible(source):
             _leave_activity_detail_preview(driver)
+            if time.monotonic() >= deadline:
+                break
             continue
         if "管理场次" in source and tap_text_if_present(driver, "管理场次", timeout=0):
             return
@@ -179,6 +183,8 @@ def _open_ios_manage_sessions(driver: WebDriver, *, timeout: int) -> None:
             remaining = max(0, deadline - time.monotonic())
             if tap_text_if_present(driver, "管理场次", timeout=min(3, remaining)):
                 return
+            if time.monotonic() >= deadline:
+                break
             continue
         if time.monotonic() >= deadline:
             break

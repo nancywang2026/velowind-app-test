@@ -288,3 +288,14 @@ def test_build_android_capabilities_requires_activity_without_apk(monkeypatch):
 
     with pytest.raises(RuntimeError, match="VW_ANDROID_APP_ACTIVITY"):
         build_android_capabilities(load_android_config())
+
+
+@pytest.mark.parametrize("value, enabled", [(None, False), ("0", False), ("1", True)])
+def test_hidden_api_policy_compatibility_requires_explicit_opt_in(monkeypatch, value, enabled):
+    monkeypatch.setenv("VW_ANDROID_UDID", "test-device")
+    monkeypatch.setenv("VW_ANDROID_APP_ACTIVITY", ".MainActivity")
+    monkeypatch.delenv("VW_ANDROID_IGNORE_HIDDEN_API_POLICY_ERROR", raising=False)
+    if value is not None:
+        monkeypatch.setenv("VW_ANDROID_IGNORE_HIDDEN_API_POLICY_ERROR", value)
+    capabilities = build_android_capabilities(load_android_config())
+    assert capabilities.get("appium:ignoreHiddenApiPolicyError", False) is enabled

@@ -225,3 +225,36 @@ def test_ios_location_results_remain_detectable_after_query_replaces_placeholder
     assert activity_sessions._session_location_modal_visible(source)
     assert activity_sessions._session_location_results_visible(source, "张家界景区")
     assert not activity_sessions._session_location_results_visible(source.replace('value="张家界国家森林公园"', 'value="搜索中"'), "张家界景区")
+
+
+def test_ios_manage_inspects_card_revealed_by_last_scroll(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(activity_sessions.time, "monotonic", lambda: now[0])
+    sources = iter([activity_list(activity_card(approved=False)), activity_list(activity_card())])
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", lambda driver: next(sources))
+    def scroll(driver, source):
+        now[0] = 11.0
+        return True
+    monkeypatch.setattr(activity_sessions, "_swipe_ios_activity_list_from_source", scroll)
+    menu = Mock(return_value=True)
+    monkeypatch.setattr(activity_sessions, "tap_text_if_present", menu)
+    driver = Mock()
+    activity_sessions._open_ios_manage_sessions(driver, timeout=10)
+    driver.execute_script.assert_called_once_with("mobile: tap", {"x": 364, "y": 421})
+    menu.assert_called_once()
+
+
+def test_ios_manage_stops_after_final_snapshot_without_approved_card(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(activity_sessions.time, "monotonic", lambda: now[0])
+    read = Mock(return_value=activity_list(activity_card(approved=False)))
+    monkeypatch.setattr(activity_sessions, "_safe_page_source", read)
+    def scroll(driver, source):
+        now[0] = 11.0
+        return True
+    swipe = Mock(side_effect=scroll)
+    monkeypatch.setattr(activity_sessions, "_swipe_ios_activity_list_from_source", swipe)
+    with pytest.raises(AssertionError, match="Unable to open Manage Sessions"):
+        activity_sessions._open_ios_manage_sessions(Mock(), timeout=10)
+    assert read.call_count == 2
+    swipe.assert_called_once()
