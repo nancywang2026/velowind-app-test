@@ -2389,8 +2389,8 @@ def _upload_note_media(driver: WebDriver, draft: MessageNoteDraft) -> None:
     )
     if not photo_chosen:
         raise AssertionError(
-            "Photo library opened but no selectable photo was found. "
-            "If this is a simulator, seed at least one image into Photos."
+            "Photo selection did not complete: the library may not have opened, "
+            "or the requested album/photo could not be selected. Check the captured page."
         )
     _record_note_selected_album_image_source(driver, draft)
 
@@ -3138,7 +3138,10 @@ def _choose_note_image_from_library(
     if picture_indexes:
         kwargs["picture_indexes"] = picture_indexes
     with _note_profile("upload-choose-photo-library"):
-        return photo_picker.choose_photo_from_library(driver, **kwargs)
+        selected = photo_picker.choose_photo_from_library(driver, **kwargs)
+    if not selected and {"相册/本地图片访问权限", "去开启"} <= _visible_note_control_values(_safe_page_source(driver)):
+        raise AssertionError("相册访问被权限提示阻塞，请在被测 App 的系统照片设置中授权后重试；尚未完成选图。")
+    return selected
 
 
 def _record_note_cropper_image(driver: WebDriver) -> None:
@@ -3766,11 +3769,28 @@ def _wait_for_note_photo_picker_opened(driver: WebDriver, timeout: int = 2) -> b
     return _wait_until(lambda: _note_photo_picker_opened(driver), timeout=timeout)
 
 
+def _visible_note_control_values(page_source: str) -> set[str]:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return set()
+    values: set[str] = set()
+
+    def visit(node) -> None:
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return
+        values.update(node.get(key, "").strip()
+                      for key in ("name", "label", "value", "resource-id", "text", "content-desc"))
+        for child in node:
+            visit(child)
+
+    visit(root)
+    return values - {""}
+
+
 def _note_photo_picker_opened(driver: WebDriver) -> bool:
-    page_source = _safe_page_source(driver)
-    return any(
-        marker in page_source
-        for marker in [
+    # Permission prose and ancestor summaries are not picker controls.
+    return bool(_visible_note_control_values(_safe_page_source(driver)) & {
             "从手机相册选择",
             "手机相册",
             "从相册选择",
@@ -3781,8 +3801,7 @@ def _note_photo_picker_opened(driver: WebDriver) -> bool:
             "选择最多9张照片。",
             "PUPickerContainer",
             "photosView_content_scroll_view",
-        ]
-    )
+    })
 
 
 def _choose_photo_library_source(driver: WebDriver) -> bool:

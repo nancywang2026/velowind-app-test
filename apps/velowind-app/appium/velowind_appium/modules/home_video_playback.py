@@ -232,6 +232,8 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
     seen: set[str] = set()
     results: list[tuple[str, str | None]] = []
     run_dir = artifact_dir / f"home-video-playback-{time.time_ns()}"
+    scanned_pages: set[int] = set()
+    discovery: list[str] = []
     try:
         wait_for_home_feed(driver, timeout=30)
         for page in range(max_swipes + 1):
@@ -242,6 +244,23 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
                 is_ios = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios"
                 screenshot_png = driver.get_screenshot_as_png() if is_ios else None
                 videos = visible_home_videos(source, window, screenshot_png)
+                if page not in scanned_pages:
+                    scanned_pages.add(page)
+                    # Preserve early screens too: a final photo-only screen
+                    # cannot explain whether earlier video cards were missed.
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    xml_path = run_dir / f"feed-page-{page:02d}.xml"
+                    xml_path.write_text(source, encoding="utf-8")
+                    attach_file_if_present(xml_path, attachment_type=allure.attachment_type.XML)
+                    if screenshot_png is not None:
+                        png_path = xml_path.with_suffix(".png")
+                        png_path.write_bytes(screenshot_png)
+                        attach_file_if_present(png_path, attachment_type=allure.attachment_type.PNG)
+                    discovery.append(
+                        f"page={page}: card_ids={'post-home-feed-note-card-' in source}, "
+                        f"badge_ids={'post-home-feed-note-video-badge-' in source}, "
+                        f"candidates={[video.post_id for video in videos]}"
+                    )
                 video = next((video for video in videos if video.post_id not in seen), None)
                 if video is None:
                     break
@@ -288,3 +307,4 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "summary.txt").write_text(summary or "未获得视频播放检查结果", encoding="utf-8")
         attach_text("首页视频播放检查结果", summary or "未获得视频播放检查结果")
+        attach_text("首页视频逐屏筛选诊断", "\n".join(discovery) or "尚未扫描首页")

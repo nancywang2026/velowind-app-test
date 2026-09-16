@@ -2857,7 +2857,7 @@ def test_upload_note_image_reports_when_photo_library_does_not_open(monkeypatch)
     try:
         message_detail._upload_note_image(object(), draft)
     except AssertionError as error:
-        assert "Photo library opened but no selectable photo was found" in str(error)
+        assert "Photo selection did not complete" in str(error)
     else:
         raise AssertionError("Expected upload to fail when the photo library does not open")
 
@@ -4839,3 +4839,28 @@ def test_browse_android_note_scrolls_for_missing_body_even_with_zero_comments(mo
     snapshot = message_detail.browse_note_detail(Driver(), timeout=1)
     assert snapshot.title == snapshot.body == '测试'
     assert events == ['up']
+
+
+@pytest.mark.parametrize('source,expected', [
+    ('<root><node label="申请相册或本地图片访问权限，用于从本机相册选择或从相册选择图片。"/><node label="去开启"/></root>', False),
+    ('<root label="发布笔记 从相册选择"><node label="从相册选择" visible="false"/></root>', False),
+    ('<root><node visible="false"><node label="最近项目" visible="true"/></node></root>', False),
+    ('<root><node label="从相册选择" visible="true"/></root>', True),
+    ('<root><node name="photosView_content_scroll_view"/></root>', True),
+    ('<root><node label="最近项目"/></root>', True),
+])
+def test_note_picker_requires_visible_exact_control(source, expected):
+    class Driver:
+        page_source = source
+    assert message_detail._note_photo_picker_opened(Driver()) is expected
+
+
+
+
+def test_note_selection_reports_permission_block_without_claiming_empty_album(monkeypatch):
+    class Driver:
+        page_source = '<root><node label="相册/本地图片访问权限"/><node label="去开启"/></root>'
+    monkeypatch.setattr(message_detail, '_tap_note_image_plus', lambda d: True)
+    monkeypatch.setattr(message_detail.photo_picker, 'choose_photo_from_library', lambda *a, **k: False)
+    with pytest.raises(AssertionError, match='相册访问被权限提示阻塞'):
+        message_detail._choose_note_image_from_library(Driver(), album_name='长白山', picture_index=1, picture_indexes=(), select_all_from_album=False)

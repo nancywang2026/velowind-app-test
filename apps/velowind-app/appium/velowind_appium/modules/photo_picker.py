@@ -662,6 +662,12 @@ def choose_photo_library_source(driver: WebDriver) -> bool:
 def photo_library_visible(driver: WebDriver, timeout: int = 5) -> bool:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
+        # Settings also has BackButton and images; those aren't a photo picker.
+        source = _safe_page_source(driver)
+        if 'type="XCUIElementTypeApplication"' in source and re.search(
+            r'<XCUIElementTypeApplication\b[^>]*(?:name|label)="(?:设置|Settings)"', source
+        ):
+            return False
         for xpath in [
             '//*[@name="BackButton" or @label="返回"]',
             "(//XCUIElementTypeCell)[1]",
