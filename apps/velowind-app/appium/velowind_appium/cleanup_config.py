@@ -42,6 +42,17 @@ def matches_test_data(text: str, matchers: list[str]) -> bool:
     return any(matcher in text for matcher in matchers)
 
 
+def note_cleanup_mode() -> str:
+    raw = os.environ.get("VW_NOTE_CLEANUP_MODE")
+    if raw is None:
+        cleanup = _read_yaml_config().get("cleanup", {})
+        raw = cleanup.get("note_cleanup_mode", "ui") if isinstance(cleanup, dict) else "ui"
+    mode = str(raw).strip().lower()
+    if mode not in {"ui", "api"}:
+        raise ValueError("note_cleanup_mode / VW_NOTE_CLEANUP_MODE must be ui or api")
+    return mode
+
+
 def _read_yaml_config() -> dict[str, Any]:
     config_path = Path(os.environ.get("VW_APPIUM_CLEANUP_CONFIG_FILE", str(DEFAULT_CONFIG_FILE))).expanduser()
     if not config_path.exists():

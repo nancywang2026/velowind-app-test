@@ -1740,6 +1740,77 @@ def test_message_note_publish_success_signal_rejects_short_published_title_prefi
     )
 
 
+@pytest.mark.parametrize('label', [
+    '0 测试 - 长白山真的有种让人瞬间安静下来 #长白山 我 0',
+    '12 测试 - 长白山真的有种让人瞬间安静下来 我 0',
+])
+def test_publish_success_matches_truncated_title_in_merged_ios_card(label):
+    source = f'<root><XCUIElementTypeStaticText name="我的笔记" /><XCUIElementTypeButton visible="true" name="post-home-feed-note-card-pst-new" label="{label}" /></root>'
+    assert message_note_publish_success_signal(source, published_title='测试 - 长白山真的有种让人瞬间安静下来的魔力') == '我的笔记'
+
+
+def test_published_note_title_rect_uses_merged_card_label():
+    source = '<root><XCUIElementTypeButton visible="true" name="post-home-feed-note-card-pst-new" label="0 测试 - 长白山真的有种让人瞬间安静下来 #长白山 我 0" x="13" y="173" width="186" height="358" /></root>'
+    assert message_detail._visible_ios_published_note_title_rect(source, '测试 - 长白山真的有种让人瞬间安静下来的魔力') == {'x': 13., 'y': 173., 'width': 186., 'height': 358.}
+
+
+def test_ios_published_card_is_tapped_before_aggregate_xpath():
+    title = 'Velowind｜解锁轻松骑行状态 🚲'
+    source = f'<root><XCUIElementTypeOther name="我的笔记 {title}" visible="true" x="0" y="0" width="402" height="874"><XCUIElementTypeButton name="post-home-feed-note-card-new" label="0 {title} #寻风集velowind 我 0" visible="true" x="13" y="173" width="186" height="359" /></XCUIElementTypeOther></root>'
+    class Driver:
+        capabilities = {'platformName': 'iOS'}
+        taps = []
+        def find_element(self, by, value):
+            assert by == message_detail.AppiumBy.ACCESSIBILITY_ID
+            assert value == 'post-home-feed-note-card-new'
+            return type('Element', (), {'click': lambda element: self.taps.append(value)})()
+        def execute_script(self, script, payload):
+            self.taps.append((script, payload))
+    driver = Driver()
+    assert message_detail._tap_published_note_title(driver, title, page_source=source)
+    assert driver.taps == ['post-home-feed-note-card-new']
+
+
+def test_ios_published_title_rect_rejects_full_page_aggregate():
+    source = '<root><XCUIElementTypeOther name="我的笔记 Velowind｜解锁轻松骑行状态 🚲" visible="true" x="0" y="0" width="402" height="874" /></root>'
+    assert message_detail._visible_ios_published_note_title_rect(source, 'Velowind｜解锁轻松骑行状态 🚲') is None
+
+
+@pytest.mark.parametrize('above_viewport', [False, True])
+def test_ios_published_detail_waits_for_new_card_without_scrolling_away(monkeypatch, above_viewport):
+    title = 'Velowind｜解锁-12345678'
+    card = f'<XCUIElementTypeButton visible="true" name="post-home-feed-note-card-new" label="{title} #话题 我 0" x="13" y="173" width="186" height="338" />'
+    def page(content):
+        return f'<root><XCUIElementTypeOther name="我的笔记 笔记 收藏 点赞">{content}</XCUIElementTypeOther></root>'
+    initial = card.replace('visible="true"', 'visible="false"').replace('y="173"', 'y="-954"') if above_viewport else '<node name="上传中" />'
+    sources = iter([page(initial), page(card), f'<root><node name="post-detail-page"><XCUIElementTypeStaticText label="{title}" /></node></root>'])
+    opened = []
+    swipes = []
+    class Driver:
+        capabilities = {'platformName': 'iOS'}
+    monkeypatch.setattr(message_detail, '_safe_page_source', lambda d: next(sources))
+    monkeypatch.setattr(message_detail, 'message_detail_is_visible', lambda d: bool(opened))
+    monkeypatch.setattr(message_detail, '_tap_published_note_title', lambda d, title, **kw: opened.append(title) or True)
+    monkeypatch.setattr(message_detail, '_wait_until', lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, 'swipe_vertical', lambda d, direction: swipes.append(direction))
+    monkeypatch.setattr(message_detail.time, 'sleep', lambda seconds: None)
+    message_detail._open_published_note_detail_from_my_notes(Driver(), title, timeout=2)
+    assert len(opened) == 1
+    assert swipes == (['down'] if above_viewport else [])
+
+
+@pytest.mark.parametrize('card', [
+    '<XCUIElementTypeButton visible="false" name="post-home-feed-note-card-pst-new" label="0 测试 - 长白山真的有种让人瞬间安静下来 #长白山 我 0" />',
+    '<node visible="false"><XCUIElementTypeButton visible="true" name="post-home-feed-note-card-pst-new" label="0 测试 - 长白山真的有种让人瞬间安静下来 #长白山 我 0" /></node>',
+    '<XCUIElementTypeButton name="post-home-feed-note-card-pst-new" label="0 测试 - 长白山 #长白山 我 0" />',
+    '<XCUIElementTypeButton name="post-home-feed-note-card-pst-new" label="0 另一篇笔记 #长白山 我 0" />',
+    '<XCUIElementTypeButton name="unrelated-control" label="0 测试 - 长白山真的有种让人瞬间安静下来 #长白山 我 0" />',
+])
+def test_publish_success_rejects_unconfirmed_merged_cards(card):
+    source = f'<root><XCUIElementTypeStaticText name="我的笔记" />{card}</root>'
+    assert message_note_publish_success_signal(source, published_title='测试 - 长白山真的有种让人瞬间安静下来的魔力') is None
+
+
 def test_wait_for_video_upload_completion_returns_progress_signal_after_grace_period(monkeypatch):
     sources = iter(["我的笔记 进行中"])
     sleeps = []
@@ -2196,6 +2267,64 @@ def test_submit_comment_uses_ios_set_value_and_verifies_full_text(monkeypatch):
         "click-input",
         "clear",
         ("set-value", "自动化测试留言"),
+        ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)),
+        "wait-echo",
+    ]
+
+
+def test_submit_comment_falls_back_to_ios_mobile_type_when_element_input_does_not_stick(monkeypatch):
+    events = []
+    entered = {"value": ""}
+
+    class FakeInput:
+        @staticmethod
+        def click():
+            events.append("click-input")
+
+        @staticmethod
+        def clear():
+            events.append("clear")
+            entered["value"] = ""
+
+        @staticmethod
+        def set_value(value):
+            events.append(("set-value", value))
+
+        @staticmethod
+        def send_keys(value):
+            events.append(("send-keys", value))
+
+        @staticmethod
+        def get_attribute(attribute):
+            return entered["value"] if attribute == "value" else ""
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+
+        @staticmethod
+        def execute_script(script, payload):
+            events.append((script, payload))
+            if script == "mobile: type":
+                entered["value"] = payload["text"]
+
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: "detail")
+    monkeypatch.setattr(message_detail, "parse_detail_snapshot", lambda source: message_detail.MessageDetailSnapshot("标题", "正文", None, None, [], None, ["0", "0", "0"]))
+    monkeypatch.setattr(message_detail, "_tap_candidate", lambda driver, ids, texts: events.append(("tap-candidate", tuple(texts))) or True)
+    monkeypatch.setattr(message_detail, "_find_comment_input", lambda driver, timeout: FakeInput())
+    monkeypatch.setattr(message_detail, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(message_detail, "_wait_for_comment_echo", lambda *args, **kwargs: events.append("wait-echo"))
+
+    message_detail.submit_message_comment(FakeDriver(), "自动化测试留言", timeout=3)
+
+    assert events == [
+        ("tap-candidate", tuple(message_detail.COMMENT_ENTRY_TEXTS)),
+        "click-input",
+        "clear",
+        ("set-value", "自动化测试留言"),
+        "clear",
+        ("send-keys", "自动化测试留言"),
+        "clear",
+        ("mobile: type", {"text": "自动化测试留言"}),
         ("tap-candidate", tuple(message_detail.COMMENT_SUBMIT_TEXTS)),
         "wait-echo",
     ]
@@ -3647,6 +3776,33 @@ def test_android_detail_share_taps_sticky_header_action(monkeypatch):
 
     assert message_detail._tap_detail_share_button(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 1026, "y": 216})]
+
+
+def test_android_detail_share_does_not_tap_video_mute_control(monkeypatch):
+    taps = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        @staticmethod
+        def get_window_rect():
+            return {"width": 1280, "height": 2772}
+
+        @staticmethod
+        def execute_script(script, payload):
+            taps.append((script, payload))
+
+    # Bounds from the failed Android video-note report: the mute control is
+    # farther right and still inside the legacy header candidate region.
+    source = '''<hierarchy>
+        <android.view.ViewGroup bounds="[1115,202][1225,297]" />
+        <android.view.ViewGroup resource-id="post-detail-video-mute-toggle"
+            bounds="[1137,374][1248,485]" />
+    </hierarchy>'''
+    monkeypatch.setattr(message_detail, "_safe_page_source", lambda driver: source)
+
+    assert message_detail._tap_detail_share_button(FakeDriver()) is True
+    assert taps == [("mobile: tap", {"x": 1170, "y": 249})]
 
 
 def test_choose_local_photo_falls_back_to_all_grid_images_when_badges_absent(monkeypatch):

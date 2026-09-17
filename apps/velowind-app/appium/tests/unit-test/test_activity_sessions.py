@@ -1,3 +1,5 @@
+import pytest
+
 from datetime import date
 
 from velowind_appium.modules import activity_sessions
@@ -1232,7 +1234,8 @@ def test_session_flow_does_not_force_home_when_already_on_my_page():
     assert not activity_sessions._session_flow_is_already_open("首页 活动 消息 我的")
 
 
-def test_add_activity_session_prepares_home_before_opening_my_activity(monkeypatch):
+@pytest.mark.parametrize("manage_timeout, expected_timeout", [(None, 60), (180, 180)])
+def test_add_activity_session_prepares_home_before_opening_my_activity(monkeypatch, manage_timeout, expected_timeout):
     driver = object()
     draft = activity_sessions.build_activity_session_draft(today=date(2026, 7, 18))
     config = object()
@@ -1242,20 +1245,20 @@ def test_add_activity_session_prepares_home_before_opening_my_activity(monkeypat
     monkeypatch.setattr(activity_sessions, "_leave_stale_session_form", lambda received: events.append("leave-stale-form"))
     monkeypatch.setattr(activity_sessions, "ensure_logged_in_on_home", lambda *args, **kwargs: events.append("ensure-home") or True)
     monkeypatch.setattr(activity_sessions, "open_my_activity_publish_list", lambda *args, **kwargs: events.append("open"))
-    monkeypatch.setattr(activity_sessions, "open_manage_sessions_for_approved_activity", lambda *args, **kwargs: events.append("manage"))
+    monkeypatch.setattr(activity_sessions, "open_manage_sessions_for_approved_activity", lambda *args, **kwargs: events.append(("manage", kwargs["timeout"])))
     monkeypatch.setattr(activity_sessions, "open_create_session_form", lambda *args, **kwargs: events.append("create"))
     monkeypatch.setattr(activity_sessions, "fill_session_form", lambda *args, **kwargs: events.append("fill"))
     monkeypatch.setattr(activity_sessions, "submit_session_form", lambda *args, **kwargs: "创建成功")
     monkeypatch.setattr(activity_sessions, "publish_visible_activity_session_if_needed", lambda *args, **kwargs: events.append("publish") or True)
 
-    assert activity_sessions.add_activity_session(driver, draft, config) == "创建成功"
+    assert activity_sessions.add_activity_session(driver, draft, config, manage_timeout=manage_timeout) == "创建成功"
 
     assert events == [
         "dismiss",
         "leave-stale-form",
         "ensure-home",
         "open",
-        "manage",
+        ("manage", expected_timeout),
         "create",
         "fill",
         "publish",

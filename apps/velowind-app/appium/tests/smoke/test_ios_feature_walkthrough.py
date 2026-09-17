@@ -1,17 +1,16 @@
 import os
 
 import pytest
-from selenium.common.exceptions import WebDriverException
 
 from velowind_appium.actions import (
     safe_back,
     tap_accessibility_id_or_text_if_present,
     tap_if_present,
     wait_for_accessibility_id,
-    wait_for_any_accessibility_id,
     wait_for_any_accessibility_id_or_text,
 )
 from velowind_appium.session import dismiss_common_system_alerts, ensure_read_session_on_home
+from velowind_appium.modules.rental_store import wait_for_rental_store_page
 
 
 ROOT_TABS = [
@@ -65,29 +64,17 @@ def test_ios_feature_walkthrough(driver, ios_config, step):
 
     visited = []
     for entry_id in OPTIONAL_ENTRY_IDS:
+        if not step(f"tap-entry-{entry_id}", lambda entry_id=entry_id: tap_if_present(driver, entry_id, timeout=1)):
+            continue
         try:
-            if not step(f"tap-entry-{entry_id}", lambda entry_id=entry_id: tap_if_present(driver, entry_id, timeout=1)):
-                continue
-            visited.append(entry_id)
             dismiss_common_system_alerts(driver, step)
             step(
                 f"wait-entry-{entry_id}",
-                lambda: wait_for_any_accessibility_id(
-                    driver,
-                    [
-                        "login-page-title",
-                        "rent-page-shell",
-                        "use-car-tab-page",
-                        "home-page-title",
-                        "home-activity-discovery-browser",
-                        "activity-discovery-v2-page",
-                    ],
-                    timeout=10,
-                ),
+                lambda: wait_for_rental_store_page(driver, timeout=20),
             )
+            visited.append(entry_id)
+        finally:
             step(f"back-from-entry-{entry_id}", lambda: safe_back(driver))
-        except WebDriverException:
-            step(f"recover-back-{entry_id}", lambda: safe_back(driver))
 
     assert visited or step(
         "assert-rent-entry-or-home-present",

@@ -31,6 +31,7 @@ class AndroidAppiumConfig:
     skip_device_initialization: bool
     login_username: Optional[str]
     login_password: Optional[str]
+    ignore_hidden_api_policy_error: bool = False
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -165,6 +166,7 @@ def load_android_config() -> AndroidAppiumConfig:
                 _yaml_bool(yaml_config, "skip_device_initialization", False),
             ),
         ),
+        ignore_hidden_api_policy_error=_env_bool("VW_ANDROID_IGNORE_HIDDEN_API_POLICY_ERROR", False),
         login_username=_env_text("VW_LOGIN_USERNAME") or _yaml_text(yaml_config, "login", "username"),
         login_password=_env_text("VW_LOGIN_PASSWORD") or _yaml_text(yaml_config, "login", "password"),
     )
@@ -187,6 +189,8 @@ def build_android_capabilities(config: AndroidAppiumConfig) -> Dict[str, object]
         "appium:autoGrantPermissions": config.auto_grant_permissions,
         "appium:newCommandTimeout": 180,
     }
+    if config.ignore_hidden_api_policy_error:
+        capabilities["appium:ignoreHiddenApiPolicyError"] = True
     if config.skip_device_initialization:
         capabilities["appium:skipDeviceInitialization"] = True
 

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import html
 import json
+import os
 import re
 import time
 from typing import Optional
@@ -12,11 +13,12 @@ from selenium.common.exceptions import NoSuchElementException, WebDriverExceptio
 
 from velowind_appium.actions import safe_back, swipe_vertical, tap_text_if_present
 from velowind_appium.android_settings import without_android_idle_wait
-from velowind_appium.cleanup_config import CleanupConfig, matches_test_data
+from velowind_appium.cleanup_config import CleanupConfig, matches_test_data, note_cleanup_mode
 from velowind_appium.modules.activity import _tap_element_center
 from velowind_appium.modules.activity_sessions import open_my_activity_publish_list
 from velowind_appium.session import ensure_logged_in_on_home
 from velowind_appium.timing import profile_section
+from velowind_appium.reporting import attach_text
 
 
 NOTE_ACTION_TEXTS = ["删除", "确认删除"]
@@ -50,6 +52,13 @@ def cleanup_notes(driver: WebDriver, config: CleanupConfig, app_config, *, dry_r
 
 
 def cleanup_published_note(driver: WebDriver, title: str, app_config) -> CleanupReport:
+    mode = note_cleanup_mode()
+    if mode not in {"ui", "api"}:
+        raise ValueError("VW_NOTE_CLEANUP_MODE must be ui or api")
+    attach_text("note-cleanup-mode", f"mode={mode}\nVW_NOTE_CLEANUP_MODE={os.environ.get('VW_NOTE_CLEANUP_MODE', '<unset>')}\nmodule={__file__}")
+    print(f"[note-cleanup] mode={mode}", flush=True)
+    if mode == "api":
+        return cleanup_published_note_via_api(driver, title, app_config)
     # A playing video continuously emits accessibility events. Waiting for
     # global idleness adds ~10s to each query before navigation can even begin.
     # Keep the existing explicit waits and title checks; restore the setting
@@ -70,6 +79,21 @@ def cleanup_published_note(driver: WebDriver, title: str, app_config) -> Cleanup
         finally:
             with profile_section("cleanup.leave-note-list"):
                 safe_back(driver)
+
+
+def cleanup_published_note_via_api(driver, title: str, app_config) -> CleanupReport:
+    """Delete the saved publication ID without reading or navigating the UI."""
+    from velowind_appium.note_api_cleanup import delete_note_via_api, NoteCleanupApiError
+
+    publication = getattr(driver, "_api_note_publication", None)
+    if not publication or not publication.get("post_id"):
+        raise NoteCleanupApiError("Current publication has no saved postId; refusing title lookup")
+    if title not in (publication["requested_title"], publication["published_title"]):
+        raise NoteCleanupApiError("Saved postId belongs to a different publication")
+    if not publication.get("deleted"):
+        delete_note_via_api(publication["post_id"], app_config.login_username, app_config.login_password)
+        publication["deleted"] = True
+    return CleanupReport("note", [title], [])
 
 
 def cleanup_activities(driver: WebDriver, config: CleanupConfig, app_config, *, dry_run: bool = False) -> CleanupReport:
@@ -165,6 +189,8 @@ def cleanup_exact_visible_item(
     """Delete a just-created item only when its exact title is visible at the list top."""
     if item_type == "note" and _is_android(driver):
         return _cleanup_exact_android_note(driver, item_type=item_type, title=title, action_texts=action_texts)
+    if item_type == "note" and str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios":
+        return _cleanup_exact_ios_note(driver, title, action_texts)
     if not _tap_exact_visible_title(driver, title):
         return CleanupReport(item_type=item_type, deleted=[], skipped=[])
     time.sleep(0.5)
@@ -179,6 +205,93 @@ def cleanup_exact_visible_item(
 
 def _is_android(driver) -> bool:
     return str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android"
+
+
+def _normalized_note_title(value: str) -> str:
+    return "".join(value.split())
+
+
+def _ios_note_cards(source: str, *, visible_only: bool = True):
+    from velowind_appium.modules.message_detail import _ios_note_card_title, _source_element_rect
+    try:
+        root = ET.fromstring(source)
+    except ET.ParseError:
+        return []
+    root = next((e for e in root.iter() if e.get("name") == "my-posts-scroll-notes"), root)
+    cards = []
+    def visit(node):
+        if visible_only and (node.get("visible") == "false" or node.get("displayed") == "false"):
+            return
+        # Preserve line-break wrapping until title matching, so a break in the
+        # middle of a Chinese title does not become a significant extra space.
+        title = _ios_note_card_title({"type": node.tag, **node.attrib})
+        rect = _source_element_rect(node.attrib)
+        if title and rect:
+            cards.append((node.get("name"), title, rect))
+        for child in node:
+            visit(child)
+    visit(root)
+    return cards
+
+
+def _ios_detail_has_exact_title(source: str, title: str) -> bool:
+    try:
+        root = ET.fromstring(source)
+    except ET.ParseError:
+        return False
+    def visit(node, in_detail=False):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return False
+        in_detail = in_detail or node.get("name") == "post-detail-page"
+        if in_detail and node.get("type", node.tag) == "XCUIElementTypeStaticText":
+            text = node.get("label") or node.get("value") or node.get("name", "")
+            if _normalized_note_title(text) == _normalized_note_title(title):
+                return True
+        return any(visit(child, in_detail) for child in node)
+    return visit(root)
+
+
+def _cleanup_exact_ios_note(driver, title: str, action_texts: list[str]) -> CleanupReport:
+    from velowind_appium.modules.message_detail import _tap_rect_center, _tap_ios_detail_back_button_from_source
+    normalized = _normalized_note_title(title)
+    deadline = time.monotonic() + 8
+    cards = []
+    while not cards:
+        cards = [entry for entry in _ios_note_cards(_safe_page_source(driver))
+                 if _normalized_note_title(entry[1]) == normalized]
+        if cards or time.monotonic() >= deadline:
+            break
+        # Opening My Notes returns before its async cards have been laid out.
+        # Keep this page open long enough for the exact card to become visible.
+        time.sleep(.3)
+    if not cards:
+        return CleanupReport("note", [], [])
+    post_id, _, (left, top, right, bottom) = min(cards, key=lambda c: (c[2][1], c[2][0]))
+    if not _tap_rect_center(driver, {"x": left, "y": top, "width": right-left, "height": bottom-top}):
+        return CleanupReport("note", [], [title])
+    deadline = time.monotonic() + 8
+    revealed_title = False
+    while not _ios_detail_has_exact_title(_safe_page_source(driver), title):
+        source = _safe_page_source(driver)
+        if not revealed_title and "post-detail-page" in source:
+            # Portrait video can cover the title beneath the player.
+            swipe_vertical(driver, direction="up")
+            revealed_title = True
+        if time.monotonic() >= deadline:
+            _tap_ios_detail_back_button_from_source(driver)
+            return CleanupReport("note", [], [title])
+        time.sleep(.2)
+    if not _tap_ios_top_right_more(driver) or not tap_first_available_text(driver, action_texts):
+        return CleanupReport("note", [], [title])
+    confirm_destructive_action(driver)
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        source = _safe_page_source(driver)
+        if "my-posts-scroll-notes" in source and not _ios_detail_has_exact_title(source, title):
+            if post_id not in {entry[0] for entry in _ios_note_cards(source, visible_only=False)}:
+                return CleanupReport("note", [title], [])
+        time.sleep(.2)
+    return CleanupReport("note", [], [title])
 
 
 def _cleanup_exact_android_note(driver, *, item_type, title, action_texts) -> CleanupReport:

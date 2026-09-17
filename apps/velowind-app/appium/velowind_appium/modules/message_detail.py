@@ -410,6 +410,16 @@ def publish_message_note(
     timeout: int = 60,
     video_source_path: Path | None = None,
 ) -> str:
+    from uuid import uuid4
+    from velowind_appium.note_api_cleanup import api_cleanup_enabled
+    if hasattr(driver, "_api_note_publication"):
+        driver._api_note_publication = None
+    if api_cleanup_enabled():
+        requested_title = draft.title
+        draft = replace(draft, title=f"{uuid4().hex[:8]}-{draft.title[:11]}")
+        driver._api_note_publication = {
+            "requested_title": requested_title, "published_title": draft.title, "post_id": None,
+        }
     if draft.media_type == "video" and draft.media_source == "camera":
         # A session-scoped driver can retain the source path recorded by a
         # previous album-video case. A newly recorded camera clip has no such
@@ -470,7 +480,15 @@ def publish_message_note(
                     source_path=effective_video_source_path,
                     title=draft.title,
                     timeout=min(timeout, 30),
+                    publication_timeout=timeout,
                 )
+    if api_cleanup_enabled() and not driver._api_note_publication.get("post_id"):
+        from velowind_appium.note_api_cleanup import remember_published_post_id, NoteCleanupApiError
+        remember_published_post_id(driver, _safe_page_source(driver), draft.title)
+        if not driver._api_note_publication.get("post_id"):
+            _open_published_note_detail_from_my_notes(driver, draft.title, timeout=timeout)
+        if not driver._api_note_publication.get("post_id"):
+            raise NoteCleanupApiError("Publish succeeded but XML did not expose this publication's postId")
     return success_signal
 
 
@@ -736,6 +754,8 @@ def submit_message_note(
     published_title: str | None = None,
 ) -> str:
     _hide_keyboard(driver)
+    if published_title and str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios":
+        _remember_ios_note_submitted_title(driver, published_title)
     if not _tap_note_submit(driver):
         raise AssertionError("Unable to find the publish action on the message note form")
 
@@ -821,7 +841,10 @@ def message_note_publish_success_signal(
         and "我的笔记" in page_source
         and any(
             _published_note_title_matches(text, published_title)
-            for text in _extract_visible_message_texts(page_source) or texts
+            for text in [
+                *(_extract_visible_message_texts(page_source) or texts),
+                *_visible_ios_note_card_titles(page_source),
+            ]
         )
         and not message_note_form_is_visible(page_source)
     ):
@@ -829,6 +852,39 @@ def message_note_publish_success_signal(
     if "审核" in page_source and "成功" in page_source:
         return "审核成功提示"
     return None
+
+
+def _ios_note_card_title(attributes: dict[str, str]) -> str | None:
+    if (attributes.get("type") != "XCUIElementTypeButton"
+            or not attributes.get("name", "").startswith("post-home-feed-note-card-")):
+        return None
+    label = " ".join(attributes.get("label", "").split())
+    # My notes cards read: [views] title [#topic] author likes.
+    label = re.sub(r"^\d+\s+", "", label)
+    if " #" in label:
+        return label.split(" #", 1)[0] or None
+    return re.sub(r"\s+\S+\s+(?:\d+|赞)$", "", label) or None
+
+
+def _visible_ios_note_card_titles(page_source: str) -> list[str]:
+    """Read truncated titles from iOS cards that merge their child labels."""
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return []
+    titles: list[str] = []
+
+    def visit(element):
+        if element.get("visible") == "false" or element.get("displayed") == "false":
+            return
+        title = _ios_note_card_title({"type": element.tag, **element.attrib})
+        if title:
+            titles.append(title)
+        for child in element:
+            visit(child)
+
+    visit(root)
+    return titles
 
 
 def message_note_publish_error_signal(page_source: str) -> str | None:
@@ -2091,6 +2147,7 @@ def _fill_note_title(driver: WebDriver, title: str) -> None:
         # Reset per case so a failed read cannot reuse the previous note title.
         setattr(driver, "_android_note_submitted_title", (title, title))
     if not is_android:
+        setattr(driver, "_ios_note_submitted_title", (title, title))
         element = wait_for_first(
             driver,
             NOTE_TITLE_CANDIDATES,
@@ -2100,6 +2157,7 @@ def _fill_note_title(driver: WebDriver, title: str) -> None:
         )
         if element is not None:
             _replace_text(element, title)
+            _remember_ios_note_submitted_title(driver, title, element)
             _hide_keyboard(driver)
             return
     attempts = 2 if is_android else 1
@@ -2108,6 +2166,8 @@ def _fill_note_title(driver: WebDriver, title: str) -> None:
             if _fill_input_near_label(driver, keyword, title):
                 if is_android:
                     _remember_android_note_submitted_title(driver, title)
+                else:
+                    _remember_ios_note_submitted_title(driver, title)
                 return
         if is_android and attempt + 1 < attempts:
             wait_for_message_note_form(driver, timeout=5)
@@ -2117,12 +2177,38 @@ def _fill_note_title(driver: WebDriver, title: str) -> None:
         "//XCUIElementTypeTextField[1]",
     ]:
         try:
-            _replace_text(driver.find_element(AppiumBy.XPATH, xpath), title)
+            element = driver.find_element(AppiumBy.XPATH, xpath)
+            _replace_text(element, title)
+            _remember_ios_note_submitted_title(driver, title, element)
             _hide_keyboard(driver)
             return
         except (NoSuchElementException, WebDriverException):
             continue
     raise AssertionError("Unable to locate the note title input")
+
+
+def _remember_ios_note_submitted_title(driver, requested_title: str, element=None) -> None:
+    if element is None:
+        try:
+            root = ElementTree.fromstring(_safe_page_source(driver))
+        except ElementTree.ParseError:
+            root = None
+        if root is not None:
+            for node in root.iter():
+                if node.get("name") != "note-title-input" and node.tag != "XCUIElementTypeTextField":
+                    continue
+                actual = (node.get("value") or "").strip()
+                if actual and requested_title.startswith(actual):
+                    setattr(driver, "_ios_note_submitted_title", (requested_title, actual))
+                    return
+    try:
+        if element is None:
+            element = driver.find_element(AppiumBy.XPATH, '//XCUIElementTypeTextField[1]')
+        actual = str(element.get_attribute("value") or "").strip()
+    except (AttributeError, WebDriverException):
+        return
+    if actual and requested_title.startswith(actual):
+        setattr(driver, "_ios_note_submitted_title", (requested_title, actual))
 
 
 def _remember_android_note_submitted_title(driver: WebDriver, requested_title: str) -> None:
@@ -2353,7 +2439,10 @@ def _validate_published_note_image_matches_uploaded_preview(
     source_path = Path(source_path)
     if not source_path.exists():
         raise AssertionError(f"Selected album image source is missing before publishing: {source_path}")
-    if not message_detail_is_visible(driver):
+    is_ios = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios"
+    if is_ios and title:
+        _open_published_note_detail_from_my_notes(driver, title, timeout=timeout)
+    elif not message_detail_is_visible(driver):
         if title:
             _open_published_note_detail_from_my_notes(driver, title, timeout=timeout)
         elif not _wait_until(lambda: message_detail_is_visible(driver), timeout=timeout):
@@ -2382,14 +2471,18 @@ def _validate_published_note_video_matches_source(
     source_path: Path | None,
     title: str | None = None,
     timeout: int = 30,
+    publication_timeout: int | None = None,
 ) -> None:
     selected_source = Path(source_path or getattr(driver, "_publish_note_source_video_path", "")).expanduser()
     if not selected_source.is_file():
         raise AssertionError(f"Selected video source is missing before content validation: {selected_source}")
-    if not message_detail_is_visible(driver):
+    is_ios = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios"
+    if is_ios and title:
+        _open_published_note_detail_from_my_notes(driver, title, timeout=publication_timeout or timeout)
+    elif not message_detail_is_visible(driver):
         if not title:
             raise AssertionError("Published video detail did not become visible for content validation")
-        _open_published_note_detail_from_my_notes(driver, title, timeout=timeout)
+        _open_published_note_detail_from_my_notes(driver, title, timeout=publication_timeout or timeout)
 
     end_at = time.monotonic() + timeout
     bounds = None
@@ -2664,15 +2757,59 @@ def _publish_note_video_validation_summary_path() -> Path:
     return _publish_note_artifact_dir() / f"publish-note-video-validation-{int(time.time())}.txt"
 
 
+def _ios_published_detail_title(source: str, title: str) -> str | None:
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return None
+    for detail in root.iter():
+        if detail.get("name") != "post-detail-page" or detail.get("visible") == "false":
+            continue
+        for node in detail.iter("XCUIElementTypeStaticText"):
+            # The title can sit below a portrait video. Its exact text still
+            # identifies the detail even before scrolling it into view.
+            actual = _source_element_text(node.attrib)
+            if _published_note_title_matches(actual, title):
+                return actual
+    return None
+
+
+def _ios_published_detail_matches_title(source: str, title: str) -> bool:
+    return _ios_published_detail_title(source, title) is not None
+
+
 def _open_published_note_detail_from_my_notes(driver: WebDriver, title: str, *, timeout: int = 20) -> None:
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    is_ios = str(capabilities.get("platformName", "")).lower() == "ios"
+    def verified_ios_detail(source=None):
+        actual = _ios_published_detail_title(source or _safe_page_source(driver), title)
+        if actual is None:
+            return False
+        # Read back the persisted title after confirming the intended detail.
+        setattr(driver, "_ios_note_submitted_title", (title, actual))
+        return True
     reset_android_list_to_top = False
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
         if message_detail_is_visible(driver):
-            return
+            if not is_ios or verified_ios_detail(page_source):
+                return
+            _tap_ios_detail_back_button_from_source(driver)
+            continue
+        if is_ios and _my_notes_list_visible(page_source):
+            # Upload completion inserts the new card at the list top. Do not
+            # scroll away while that card is still being uploaded/inserted.
+            rect = _visible_ios_published_note_title_rect(page_source, title)
+            if rect is not None:
+                _tap_published_note_title(driver, title, page_source=page_source)
+                if _wait_until(verified_ios_detail, timeout=5):
+                    return
+            elif _ios_published_note_is_above_viewport(page_source, title):
+                swipe_vertical(driver, direction="down")
+            time.sleep(.5)
+            continue
         if is_android and _my_notes_list_visible(page_source) and not reset_android_list_to_top:
             reset_android_list_to_top = True
             for _ in range(8):
@@ -2683,7 +2820,7 @@ def _open_published_note_detail_from_my_notes(driver: WebDriver, title: str, *, 
                 time.sleep(0.4)
             continue
         if _tap_published_note_title(driver, title, page_source=page_source):
-            if _wait_until(lambda: message_detail_is_visible(driver), timeout=5):
+            if _wait_until(lambda: verified_ios_detail() if is_ios else message_detail_is_visible(driver), timeout=5):
                 return
         if not _my_notes_list_visible(page_source):
             if tap_text_if_present(driver, "我的笔记", timeout=1):
@@ -2694,6 +2831,19 @@ def _open_published_note_detail_from_my_notes(driver: WebDriver, title: str, *, 
             break
         time.sleep(0.3)
     raise AssertionError(f"Unable to open published note detail from My Notes for title: {title}")
+
+
+def _ios_published_note_is_above_viewport(page_source: str, title: str) -> bool:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+    for element in root.iter():
+        card_title = _ios_note_card_title({"type": element.tag, **element.attrib})
+        rect = _source_element_rect(element.attrib)
+        if card_title and rect and rect[1] < 0 and _published_note_title_matches(card_title, title):
+            return True
+    return False
 
 
 def _my_notes_list_visible(page_source: str) -> bool:
@@ -2707,8 +2857,28 @@ def _tap_published_note_title(driver: WebDriver, title: str, *, page_source: str
     page_source = page_source or _safe_page_source(driver)
     if not page_source:
         return False
+    from velowind_appium.note_api_cleanup import remember_published_post_id
+    remember_published_post_id(driver, page_source, title)
     capabilities = getattr(driver, "capabilities", {}) or {}
     is_android = str(capabilities.get("platformName", "")).lower() == "android"
+    if str(capabilities.get("platformName", "")).lower() == "ios":
+        # A contains() XPath can select a full-page container whose merged
+        # label includes every note. Prefer the actual card/title in this
+        # snapshot before any broad locator can change the current viewport.
+        title_rect = _visible_ios_published_note_title_rect(page_source, title)
+        if title_rect is not None:
+            root = ElementTree.fromstring(page_source)
+            for node in root.iter():
+                card_title = _ios_note_card_title({"type": node.tag, **node.attrib})
+                rect = _source_element_rect(node.attrib)
+                if card_title and rect and rect == (title_rect["x"], title_rect["y"], title_rect["x"] + title_rect["width"], title_rect["y"] + title_rect["height"]):
+                    try:
+                        driver.find_element(AppiumBy.ACCESSIBILITY_ID, node.get("name")).click()
+                        return True
+                    except WebDriverException:
+                        return False
+            return _tap_rect_center(driver, title_rect)
+        return False
     if is_android and _tap_android_published_note_title_prefix(driver, title):
         return True
     escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
@@ -2785,14 +2955,25 @@ def _visible_ios_published_note_title_rect(page_source: str, title: str) -> dict
     except ElementTree.ParseError:
         return None
 
+    root = next((node for node in root.iter() if node.get("name") == "my-posts-scroll-notes"), root)
+    def visible_nodes(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return
+        yield node
+        for child in node:
+            yield from visible_nodes(child)
+
     candidates: list[tuple[int, int, int, dict[str, float]]] = []
-    for element in root.iter():
+    for element in visible_nodes(root):
         attributes = element.attrib
         if attributes.get("visible", "true").lower() == "false":
             continue
         if attributes.get("enabled", "true").lower() == "false":
             continue
-        text = _source_element_text(attributes)
+        card_title = _ios_note_card_title({"type": element.tag, **attributes})
+        if card_title is None and element.tag != "XCUIElementTypeStaticText":
+            continue
+        text = card_title or _source_element_text(attributes)
         if not _published_note_title_matches(text, title):
             continue
         rect = _source_element_rect(attributes)
@@ -2821,8 +3002,8 @@ def _visible_ios_published_note_title_rect(page_source: str, title: str) -> dict
 
 
 def _published_note_title_matches(candidate: str, title: str) -> bool:
-    normalized_candidate = " ".join((candidate or "").split()).strip()
-    normalized_title = " ".join((title or "").split()).strip()
+    normalized_candidate = "".join((candidate or "").split())
+    normalized_title = "".join((title or "").split())
     if not normalized_candidate or not normalized_title:
         return False
     if normalized_candidate == normalized_title:
@@ -5663,6 +5844,10 @@ def _tap_android_detail_share_button_from_source(driver: WebDriver) -> bool:
 
     candidates: list[tuple[int, int, int, int]] = []
     for tag in re.findall(r"<android\.view\.ViewGroup\b[^>]*>", page_source):
+        # Video controls can overlap the header's coordinate search region and
+        # sit farther right than the share action on high-resolution devices.
+        if 'resource-id="post-detail-video-mute-toggle"' in tag:
+            continue
         bounds_match = re.search(r'\bbounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"', tag)
         if not bounds_match:
             continue
@@ -5848,6 +6033,8 @@ def _enter_comment_text(driver: WebDriver, input_box, comment_text: str) -> None
         for enter_method in (
             lambda: input_box.set_value(comment_text),
             lambda: input_box.send_keys(comment_text),
+            lambda: _type_ios_comment_text(driver, comment_text),
+            lambda: _paste_ios_comment_text(driver, input_box, comment_text),
         ):
             try:
                 enter_method()
@@ -5862,6 +6049,42 @@ def _enter_comment_text(driver: WebDriver, input_box, comment_text: str) -> None
         raise AssertionError(f"Unable to enter the full comment text on iOS: {comment_text}")
 
     input_box.send_keys(comment_text)
+
+
+def _type_ios_comment_text(driver: WebDriver, comment_text: str) -> None:
+    for script, payload in (
+        ("mobile: type", {"text": comment_text}),
+        ("mobile: keys", {"keys": list(comment_text)}),
+    ):
+        try:
+            driver.execute_script(script, payload)
+            return
+        except WebDriverException:
+            continue
+    raise WebDriverException("Unable to type comment text with iOS mobile commands")
+
+
+def _paste_ios_comment_text(driver: WebDriver, input_box, comment_text: str) -> None:
+    try:
+        driver.set_clipboard_text(comment_text)
+    except (AttributeError, WebDriverException):
+        raise WebDriverException("Unable to set iOS clipboard text")
+
+    try:
+        input_box.click()
+    except (AttributeError, WebDriverException):
+        pass
+
+    for script, payload in (
+        ("mobile: paste", {}),
+        ("mobile: paste", {"elementId": getattr(input_box, "id", None)}),
+    ):
+        try:
+            driver.execute_script(script, payload)
+            return
+        except WebDriverException:
+            continue
+    raise WebDriverException("Unable to paste comment text with iOS mobile command")
 
 
 def _comment_input_contains(input_box, expected_text: str) -> bool:

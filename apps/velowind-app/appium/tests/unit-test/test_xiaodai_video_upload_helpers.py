@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from velowind_appium.cleanup import CleanupReport
 from velowind_appium import modules
@@ -486,11 +487,12 @@ def test_choose_video_from_library_fails_when_no_video_candidate_was_tapped(monk
     assert photo_picker.choose_video_from_library(object(), video_index=10) is False
 
 
-def test_android_xiaodai_repeated_runs_use_distinct_titles(monkeypatch, tmp_path):
+@pytest.mark.parametrize('platform', ['Android', 'iOS'])
+def test_xiaodai_repeated_runs_use_distinct_titles(monkeypatch, tmp_path, platform):
     draft = modules.MessageNoteDraft(title="Velowind｜解锁轻松骑行状态 🚲", body="正文", topics=[], location="", media_type="video")
     titles = []
     class Driver:
-        capabilities = {"platformName": "Android"}
+        capabilities = {"platformName": platform}
     monkeypatch.setattr(xiaodai_video_upload, "load_message_note_draft", lambda *a, **k: draft)
     monkeypatch.setattr(xiaodai_video_upload, "xiaodai_source_video_path", lambda *a: tmp_path / "video.mp4")
     monkeypatch.setattr(xiaodai_video_upload, "ensure_logged_in_for_publish_entry", lambda *a: None)

@@ -4,6 +4,10 @@
 
 同一套 Appium + pytest 骨架也支持 Android 本地模拟器，Android 用例和报告独立写入 `.tmp/appium-android/`。
 
+## 修复历史
+
+修复测试前先查阅 [测试用例修复记录](docs/test-fixes/README.md)。每次修复按 [记录模板](docs/test-fixes/TEMPLATE.md) 保存分析、修改、失败尝试和实际验证结果，并更新索引；执行约定见仓库根目录 [AGENTS.md](../../../AGENTS.md)。
+
 ## 环境准备
 
 ```bash
