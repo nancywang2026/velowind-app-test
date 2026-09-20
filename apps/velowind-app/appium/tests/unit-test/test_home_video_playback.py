@@ -32,6 +32,8 @@ def test_aggregated_card_text_does_not_identify_a_video():
 
 
 @pytest.mark.parametrize('outcomes,expected_calls,failed', [
+    ([None] * 2, 2, False),
+    (['broken', None], 2, True),
     ([None] * 4, 4, False),
     (['broken', None, None, None], 4, True),
     ([None, 'broken', None, None], 4, True),
@@ -70,9 +72,9 @@ def test_four_video_thresholds(monkeypatch, tmp_path, outcomes, expected_calls, 
     monkeypatch.setattr(playback, 'check_video_playback', check)
     if failed:
         with pytest.raises(AssertionError, match='视频播放失败'):
-            playback.verify_four_home_videos(driver, tmp_path)
+            playback.verify_four_home_videos(driver, tmp_path, video_count=len(outcomes))
     else:
-        playback.verify_four_home_videos(driver, tmp_path)
+        playback.verify_four_home_videos(driver, tmp_path, video_count=len(outcomes))
     assert len(calls) == expected_calls
     assert step_statuses == ['failed' if result else 'passed' for result in outcomes[:expected_calls]]
 

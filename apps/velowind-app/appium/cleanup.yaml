@@ -1,6 +1,10 @@
 cleanup:
   # Persistent mode for post-publication note cleanup; environment variable overrides it.
   note_cleanup_mode: api
+  # Select at runtime with VW_API_ENV=uat|prod; omitted means uat.
+  # Hosts can be overridden with VW_UAT_API_HOST / VW_PROD_API_HOST.
+  # Defaults: https://uat-api.velowind.com / https://prod-api.velowind.com
+  # VW_NOTE_CLEANUP_API_BASE_URL optionally overrides the selected host.
   # Keep publish cases isolated: after all assertions pass, wait for the note
   # to become deletable and remove the exact title created by that case.
   delete_published_note_after_success: true

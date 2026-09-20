@@ -225,10 +225,12 @@ def check_video_playback(driver, artifact_dir: Path, *, timeout: float = 30, obs
 
 
 class _RecordedPlaybackFailure(AssertionError):
-    """Mark this Allure video step failed before aggregating all four results."""
+    """Mark this Allure video step failed before aggregating playback results."""
 
 
-def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20) -> None:
+def verify_four_home_videos(driver, artifact_dir: Path, *, video_count: int = 4, max_swipes: int = 20) -> None:
+    if video_count < 1:
+        raise ValueError("video_count must be a positive integer")
     seen: set[str] = set()
     results: list[tuple[str, str | None]] = []
     run_dir = artifact_dir / f"home-video-playback-{time.time_ns()}"
@@ -266,7 +268,7 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
                     break
                 seen.add(video.post_id)
                 try:
-                    with allure.step(f"检查首页视频 {len(results) + 1}/4：{video.post_id}"):
+                    with allure.step(f"检查首页视频 {len(results) + 1}/{video_count}：{video.post_id}"):
                         if screenshot_png is not None:
                             run_dir.mkdir(parents=True, exist_ok=True)
                             selected = run_dir / f"selected-video-{len(results) + 1}.png"
@@ -274,7 +276,7 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
                             attach_file_if_present(selected, attachment_type=allure.attachment_type.PNG)
                         bounds = video.bounds
                         driver.execute_script("mobile: tap", {"x": bounds.x + bounds.width // 2, "y": bounds.y + bounds.height // 2})
-                        print(f"[home-video] CHECK {len(results) + 1}/4 post_id={video.post_id}", flush=True)
+                        print(f"[home-video] CHECK {len(results) + 1}/{video_count} post_id={video.post_id}", flush=True)
                         reason = check_video_playback(driver, run_dir / f"video-{len(results) + 1}")
                         print(f"[home-video] {'FAIL: ' + reason if reason else 'PASS'} post_id={video.post_id}", flush=True)
                         results.append((video.post_id, reason))
@@ -288,9 +290,9 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
                         for index, (post_id, failure) in enumerate(results, 1) if failure
                     )
                     raise AssertionError(f"视频播放失败：已有 2 个视频不能正常播放，立即终止。{details}")
-                if len(results) == 4:
+                if len(results) == video_count:
                     failures = [(post_id, reason) for post_id, reason in results if reason]
-                    assert not failures, f"视频播放失败：4 个视频中 {len(failures)} 个失败；{failures}"
+                    assert not failures, f"视频播放失败：{video_count} 个视频中 {len(failures)} 个失败；{failures}"
                     _return_to_feed(driver)
                     return
                 # If the card never opened, do not back out of the home tab.
@@ -301,7 +303,7 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
             if page < max_swipes:
                 swipe_vertical(driver, direction="up")
                 time.sleep(.5)
-        raise AssertionError(f"视频播放验证未完成：只找到 {len(results)}/4 个不同视频，不能标记通过")
+        raise AssertionError(f"视频播放验证未完成：只找到 {len(results)}/{video_count} 个不同视频，不能标记通过")
     finally:
         summary = "\n".join(f"{index}. {post_id}: {reason or '正常播放'}" for index, (post_id, reason) in enumerate(results, 1))
         run_dir.mkdir(parents=True, exist_ok=True)
