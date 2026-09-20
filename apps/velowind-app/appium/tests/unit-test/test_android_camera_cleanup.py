@@ -141,3 +141,20 @@ def test_android_cleanup_uses_title_accepted_by_native_input(monkeypatch):
     driver.capabilities = {'platformName': 'iOS'}
     shared_publish_note.cleanup_published_note_after_success(driver, object(), title)
     assert calls[-1] == title
+
+
+@pytest.mark.parametrize('prompt', ['允许“寻风集”拍摄照片或录制视频？', '允许“寻风集”录制音频？'])
+def test_android_camera_permission_accepts_exact_foreground_button(prompt):
+    source = f'<hierarchy><node package="com.android.permissioncontroller" text="{prompt}" /><node package="com.android.permissioncontroller" class="android.widget.Button" text="仅在使用中允许" /></hierarchy>'
+    class Driver:
+        clicked = False
+        def find_element(self, by, value):
+            assert '@text="仅在使用中允许"' in value
+            return self
+        def click(self):
+            self.clicked = True
+    driver = Driver()
+    assert photo_picker._dismiss_android_camera_permission(driver, source)
+    assert driver.clicked
+    assert not photo_picker._dismiss_android_camera_permission(driver, source.replace('com.android.permissioncontroller', 'com.velowind.rider'))
+    assert not photo_picker._dismiss_android_camera_permission(driver, source.replace(prompt, '允许访问位置信息？'))

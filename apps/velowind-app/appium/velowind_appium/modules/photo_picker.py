@@ -292,15 +292,43 @@ def _android_camera_record_rect(page_source: str) -> dict[str, float] | None:
     return None
 
 
+def _dismiss_android_camera_permission(driver: WebDriver, source: str) -> bool:
+    """Accept camera/microphone prompts only on the Android permission dialog."""
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return False
+    packages = {"com.android.permissioncontroller", "com.google.android.permissioncontroller"}
+    nodes = [node for node in root.iter() if node.get("package") in packages
+             and node.get("displayed") != "false"]
+    if not any(any(word in node.get("text", "").lower() for word in
+                   ("拍摄", "录制音频", "录音", "take pictures", "record audio")) for node in nodes):
+        return False
+    for label in ("仅在使用中允许", "使用应用时允许", "仅在使用该应用时允许", "While using the app"):
+        for node in nodes:
+            if node.get("text") != label or node.get("class") != "android.widget.Button":
+                continue
+            xpath = f'//android.widget.Button[@package="{node.get("package")}" and @text="{label}"]'
+            try:
+                driver.find_element(AppiumBy.XPATH, xpath).click()
+                return True
+            except (NoSuchElementException, WebDriverException):
+                return False
+    return False
+
+
 def _record_android_video_from_camera(driver: WebDriver, *, record_seconds: float | None) -> bool:
     rect = None
 
     def controls_ready() -> bool:
         nonlocal rect
-        rect = _android_camera_record_rect(_safe_page_source(driver))
+        source = _safe_page_source(driver)
+        if _dismiss_android_camera_permission(driver, source):
+            return False  # The microphone prompt may follow the camera prompt.
+        rect = _android_camera_record_rect(source)
         return rect is not None
 
-    if not _wait_until(controls_ready, timeout=5):
+    if not _wait_until(controls_ready, timeout=15):
         return False
     # Cache the toolbar position before recording. Native hierarchy queries and
     # text searches can wait for camera idleness while its timer keeps changing.

@@ -28,7 +28,7 @@ class HomeVideo:
     bounds: VideoBounds
 
 
-def visible_home_videos(source: str, window: dict, screenshot_png: bytes | None = None) -> list[HomeVideo]:
+def visible_home_videos(source: str, window: dict, screenshot_png: bytes | None = None, coordinate_scale: float = 1.0) -> list[HomeVideo]:
     """Only cards with a visible camera badge are video candidates."""
     root = ElementTree.fromstring(source)
     videos: dict[str, HomeVideo] = {}
@@ -75,12 +75,13 @@ def visible_home_videos(source: str, window: dict, screenshot_png: bytes | None 
             for post_id, bounds in cards.items():
                 if post_id in videos:
                     continue
-                left, top = bounds.x + bounds.width - 44, bounds.y + 2
-                corner = screenshot.crop((round(left * scale_x), round(top * scale_y), round((left + 42) * scale_x), round((top + 42) * scale_y)))
+                span = 42 * coordinate_scale
+                left, top = bounds.x + bounds.width - 44 * coordinate_scale, bounds.y + 2 * coordinate_scale
+                corner = screenshot.crop((round(left * scale_x), round(top * scale_y), round((left + span) * scale_x), round((top + span) * scale_y)))
                 position = camera_outline_position(corner)
                 if position is not None:
                     x, y = position
-                    videos[post_id] = HomeVideo(post_id, VideoBounds(round(left + x * 42) - 8, round(top + y * 42) - 8, 16, 16))
+                    videos[post_id] = HomeVideo(post_id, VideoBounds(round(left + x * span) - 8, round(top + y * span) - 8, 16, 16))
     return sorted(videos.values(), key=lambda video: (video.bounds.y, video.bounds.x))
 
 
@@ -238,14 +239,16 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, video_count: int = 4,
     discovery: list[str] = []
     try:
         wait_for_home_feed(driver, timeout=30)
+        platform = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower()
+        # Android accessibility coordinates use pixels; iOS uses points.
+        coordinate_scale = driver.get_display_density() / 160 if platform == "android" else 1.0
         for page in range(max_swipes + 1):
             # Refresh coordinates after every return; feed virtualization may
             # move cards. Repeated post IDs never count as another sample.
             while True:
                 source, window = driver.page_source, driver.get_window_size()
-                is_ios = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios"
-                screenshot_png = driver.get_screenshot_as_png() if is_ios else None
-                videos = visible_home_videos(source, window, screenshot_png)
+                screenshot_png = driver.get_screenshot_as_png() if platform in {"ios", "android"} else None
+                videos = visible_home_videos(source, window, screenshot_png, coordinate_scale)
                 if page not in scanned_pages:
                     scanned_pages.add(page)
                     # Preserve early screens too: a final photo-only screen

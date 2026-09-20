@@ -6,6 +6,7 @@
 
 | 问题 / 检索词 | 记录 | 已确认范围 |
 | --- | --- | --- |
+| Android 拍摄视频、相机权限、仅在使用中允许 | [相机授权阻塞](2026-09-20-android-camera-permission.md) | 已补系统媒体授权处理；单元 84 passed，真机 1 passed 且新增笔记删除成功 |
 | 发布后删除、登录 HTTP 400、Incorrect password | [API 清理密码失效](2026-09-20-note-cleanup-login-password.md) | 生产 App 错连 UAT 已修复；默认 UAT、运行时选生产；单元 39 passed，生产真机 1 passed 且删除成功 |
 | 首页视频数量、2 个视频、VW_HOME_VIDEO_COUNT | [视频检查数量可配置](2026-09-20-home-video-count.md) | 默认检查 2 个；单元 43 passed；真机未验证 |
 | 私聊接收侧、clientMessageId mismatch | [接收视角断言](2026-09-18-api-private-chat-recipient-client-id.md) | 已修复，真实B四条/C五条接收核验通过 |
@@ -14,7 +15,7 @@
 | Android 朋友圈分享、Unable to confirm the Moments share | [微信登录前置条件](2026-09-16-android-moments-login.md) | 原报告确认停在微信登录页；登录后复测未执行 |
 | 图片发布、相册权限、无可选照片 | [权限说明误判为相册](2026-09-16-ios-photo-permission-picker.md) | 已修复误判；用户授权后真机 1 passed、实际删除成功；单元 278 passed |
 | iOS 模拟器首页 0/4、卡片 ID 缺失 | [模拟器视频筛选分析](2026-09-16-ios-simulator-video-discovery.md) | 模拟器 1.2.4 与真机 1.2.6 不同；补逐屏诊断，真机四视频 1 passed；旧模拟器未修复 |
-| Android 首页 0/4 视频 | [Android 视频候选不足](2026-09-15-android-video-candidates.md) | 已到首页底部，末屏无视频标识；播放未验证 |
+| Android 首页 0/4、0/2 视频 | [Android 视频候选不足](2026-09-15-android-video-candidates.md) | 已补 Android 截图识别及密度换算；单元 46 passed，真机 1 passed、两个视频播放通过 |
 | Android 初始化、WRITE_SECURE_SETTINGS、hidden_api_policy | [Android 隐藏 API 兼容](2026-09-15-android-hidden-api.md) | 显式兼容开关解除建会话阻塞；17 项单元通过；完整用例因 0/4 视频失败 |
 | 固定日期、场次结束日期断言 | [活动场次日期断言](2026-09-15-activity-session-date-assertion.md) | 已修正；目标真机用例 1 passed |
 | 活动场次、管理场次超时、最后滚动后目标出现 | [活动场次入口边界](2026-09-15-ios-activity-session.md) | 相关单元通过；目标真机 1 passed，入口实测 106.79 秒；场次未清理 |
