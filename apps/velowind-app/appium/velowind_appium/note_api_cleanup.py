@@ -167,7 +167,14 @@ def _reported_request_data(method, url, *, body=None, token=None):
         raise
     finally:
         record["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
-        attach_text("api-call", json.dumps(_redact(record, secrets), ensure_ascii=False, indent=2))
+        reported = _redact(record, secrets)
+        # Explicitly requested for local credential diagnosis. These credentials
+        # are persisted in Allure; keep tokens and cookies redacted.
+        if body and "password" in body:
+            reported["request"]["body"]["password"] = body["password"]
+        attach_text("api-call", json.dumps(reported, ensure_ascii=False, indent=2))
+        attach_text("API request", json.dumps(reported["request"], ensure_ascii=False, indent=2))
+        attach_text("API response", json.dumps(reported["response"], ensure_ascii=False, indent=2))
 
 
 def delete_note_via_api(post_id: str, phone: str, password: str) -> None:
@@ -175,7 +182,8 @@ def delete_note_via_api(post_id: str, phone: str, password: str) -> None:
         raise ValueError("Invalid note postId")
     if not phone or not password:
         raise NoteCleanupApiError("API cleanup requires configured login username and password")
-    base = "https://uat-api.velowind.com/api/v1/mobile"
+    from velowind_appium.cleanup_config import note_cleanup_api_base_url
+    base = note_cleanup_api_base_url()
     login = _request_data("POST", base + "/auth/login/phone/password",
                           body={"phone": str(phone), "password": password})
     token = login.get("accessToken")

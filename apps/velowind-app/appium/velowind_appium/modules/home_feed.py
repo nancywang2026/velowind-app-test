@@ -12,7 +12,7 @@ from velowind_appium.actions import (
     swipe_vertical,
     tap_text_if_present,
 )
-from velowind_appium.modules.message_detail import message_detail_is_visible
+from velowind_appium.modules.message_detail import message_detail_is_visible, read_message_detail_snapshot
 from velowind_appium.modules.note_card_picker import tap_first_note_card
 
 
@@ -85,29 +85,38 @@ def wait_for_home_feed(driver: WebDriver, timeout: int = 60) -> str | None:
 
 def open_first_home_message(driver: WebDriver, max_swipes: int = 3) -> None:
     wait_for_home_feed(driver, timeout=60)
-    if message_detail_is_visible(driver):
+    if _home_message_detail_ready(driver):
         return
 
     for _ in range(max_swipes + 1):
-        if message_detail_is_visible(driver):
+        if _home_message_detail_ready(driver):
             return
         if _tap_first_message(driver):
             for _ in range(20):
-                if message_detail_is_visible(driver):
+                if _home_message_detail_ready(driver):
                     return
                 if _detail_load_failed(_safe_page_source(driver)):
                     safe_back(driver)
                     time.sleep(0.3)
                     break
                 time.sleep(0.2)
-        if message_detail_is_visible(driver):
+        if _home_message_detail_ready(driver):
             return
         if not _tap_first_visible_card(driver):
             swipe_vertical(driver, direction="up")
 
-    if message_detail_is_visible(driver):
+    if _home_message_detail_ready(driver):
         return
     raise AssertionError("Unable to detect the first message detail after entering from the home feed")
+
+
+def _home_message_detail_ready(driver: WebDriver) -> bool:
+    if not message_detail_is_visible(driver):
+        return False
+    # A detail shell also exists while loading and on request failure. Keep
+    # failures on the selected note instead of silently moving to another one.
+    read_message_detail_snapshot(driver, timeout=20)
+    return True
 
 
 def _detail_load_failed(page_source: str) -> bool:

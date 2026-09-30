@@ -8,6 +8,25 @@
 
 修复测试前先查阅 [测试用例修复记录](docs/test-fixes/README.md)。每次修复按 [记录模板](docs/test-fixes/TEMPLATE.md) 保存分析、修改、失败尝试和实际验证结果，并更新索引；执行约定见仓库根目录 [AGENTS.md](../../../AGENTS.md)。
 
+## API 清理环境
+
+当前 `cleanup.yaml` 将清理 API 固定为 `https://uat-api.velowind.com`，与当前 UAT App 环境一致。`VW_API_ENV=uat` 是 UAT 的环境选择值；在未配置固定地址时，不指定它也默认 UAT。
+
+```bash
+# 当前 UAT
+VW_API_ENV=uat pnpm appium:ios:test:profile publish
+# 临时切换到生产清理 API 时显式覆盖固定地址
+VW_NOTE_CLEANUP_API_BASE_URL=https://prod-api.velowind.com pnpm appium:ios:test:profile publish
+```
+
+登录与删除共用清理 API 地址。`VW_NOTE_CLEANUP_API_BASE_URL` 的优先级高于
+`cleanup.yaml` 的 `note_cleanup_api_base_url`；配置了固定地址时，`VW_API_ENV`
+和 `VW_UAT_API_HOST` / `VW_PROD_API_HOST` 不会改变实际 host。移除固定地址后，
+`VW_API_ENV=uat|prod` 才会从对应 host 选择地址；未指定时默认 UAT。
+地址支持 HTTPS origin 或带 `/api/v1/mobile` 的完整基础路径。
+环境变量只决定测试脚本的 API 请求地址，不切换已安装 App 的后端，请与 App 实际环境保持一致。
+Allure API 子步骤包含 request / response；按当前调试要求登录 request 显示用户名和明文密码，token / cookie 脱敏。
+
 ## 环境准备
 
 ```bash

@@ -33,7 +33,11 @@
     "appium:android:preflight": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.android_preflight",
     "appium:android:cleanup": "pnpm appium:android:preflight && PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.cleanup_test_data --platform android",
     "appium:android:allure:generate": "PYTHONPATH=apps/velowind-app/appium ./.venv/bin/python -m velowind_appium.allure_history --platform android",
-    "appium:android:allure:open": "allure open .tmp/appium-android/latest-report"
+    "appium:android:allure:open": "allure open .tmp/appium-android/latest-report",
+    "api:private-chat": "PYTHONPATH=apps/velowind-app/api-tests ./.venv/bin/python -m velowind_api --data apps/velowind-app/api-tests/data/private_chat.local.json --alluredir .tmp/private-chat-api/allure-results --open-report",
+    "api:private-chat:check": "PYTHONPATH=apps/velowind-app/api-tests ./.venv/bin/python -m velowind_api --data apps/velowind-app/api-tests/data/private_chat.local.json --check-config --alluredir .tmp/private-chat-api/config-allure-results",
+    "api:private-chat:report": "allure generate .tmp/private-chat-api/allure-results -o .tmp/private-chat-api/allure-report --clean && allure open .tmp/private-chat-api/allure-report",
+    "api:private-chat:unit": "./.venv/bin/python -m pytest -c apps/velowind-app/api-tests/pytest.ini apps/velowind-app/api-tests/tests -m \"not live\" -q"
   },
   "packageManager": "pnpm@9.0.0"
 }

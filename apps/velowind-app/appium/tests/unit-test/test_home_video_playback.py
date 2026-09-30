@@ -32,6 +32,8 @@ def test_aggregated_card_text_does_not_identify_a_video():
 
 
 @pytest.mark.parametrize('outcomes,expected_calls,failed', [
+    ([None] * 2, 2, False),
+    (['broken', None], 2, True),
     ([None] * 4, 4, False),
     (['broken', None, None, None], 4, True),
     ([None, 'broken', None, None], 4, True),
@@ -70,9 +72,9 @@ def test_four_video_thresholds(monkeypatch, tmp_path, outcomes, expected_calls, 
     monkeypatch.setattr(playback, 'check_video_playback', check)
     if failed:
         with pytest.raises(AssertionError, match='视频播放失败'):
-            playback.verify_four_home_videos(driver, tmp_path)
+            playback.verify_four_home_videos(driver, tmp_path, video_count=len(outcomes))
     else:
-        playback.verify_four_home_videos(driver, tmp_path)
+        playback.verify_four_home_videos(driver, tmp_path, video_count=len(outcomes))
     assert len(calls) == expected_calls
     assert step_statuses == ['failed' if result else 'passed' for result in outcomes[:expected_calls]]
 
@@ -287,3 +289,20 @@ def test_ios_returns_using_visible_back_control(monkeypatch):
     monkeypatch.setattr(playback, 'wait_for_home_feed', lambda *a, **k: actions.append('home-ready'))
     playback._return_to_feed(Driver())
     assert actions == ['tap', 'home-ready']
+
+
+@pytest.mark.parametrize('name,expected', [
+    ('android_video_left', True), ('android_video_right', True), ('android_photo', False),
+])
+def test_android_camera_at_physical_pixel_density(name, expected):
+    screenshot = Image.new('RGB', (1280, 2772), '#777777')
+    with Image.open(Path(__file__).parent / 'fixtures/home_camera' / f'{name}.png') as corner:
+        screenshot.paste(corner, (491, 360))
+    output = BytesIO()
+    screenshot.save(output, format='PNG')
+    source = '<hierarchy><node resource-id="post-home-feed-note-card-sample" bounds="[13,354][634,1444]" displayed="true" /></hierarchy>'
+    videos = playback.visible_home_videos(source, {'width': 1280, 'height': 2772}, output.getvalue(), 3.25)
+    assert bool(videos) is expected
+    if expected:
+        assert 550 < videos[0].bounds.x < 590
+        assert 400 < videos[0].bounds.y < 440

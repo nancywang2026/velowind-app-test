@@ -1520,3 +1520,11 @@ def test_android_video_candidate_selects_fixture_date_instead_of_first(monkeypat
     with pytest.raises(AssertionError, match="Expected exactly one Android video"):
         photo_picker._tap_android_photo_picker_video_candidate(Driver(), source_date=(2026, 9, 7, 14, 31, 5))
     assert len(tapped) == 1
+
+
+def test_settings_back_button_is_not_a_photo_library():
+    class Driver:
+        page_source = '<AppiumAUT><XCUIElementTypeApplication type="XCUIElementTypeApplication" name="设置"><XCUIElementTypeButton name="BackButton"/></XCUIElementTypeApplication></AppiumAUT>'
+        def find_element(self, *args):
+            raise AssertionError('Settings controls must not be used as picker evidence')
+    assert photo_picker.photo_library_visible(Driver()) is False

@@ -28,7 +28,7 @@ class HomeVideo:
     bounds: VideoBounds
 
 
-def visible_home_videos(source: str, window: dict, screenshot_png: bytes | None = None) -> list[HomeVideo]:
+def visible_home_videos(source: str, window: dict, screenshot_png: bytes | None = None, coordinate_scale: float = 1.0) -> list[HomeVideo]:
     """Only cards with a visible camera badge are video candidates."""
     root = ElementTree.fromstring(source)
     videos: dict[str, HomeVideo] = {}
@@ -75,12 +75,13 @@ def visible_home_videos(source: str, window: dict, screenshot_png: bytes | None 
             for post_id, bounds in cards.items():
                 if post_id in videos:
                     continue
-                left, top = bounds.x + bounds.width - 44, bounds.y + 2
-                corner = screenshot.crop((round(left * scale_x), round(top * scale_y), round((left + 42) * scale_x), round((top + 42) * scale_y)))
+                span = 42 * coordinate_scale
+                left, top = bounds.x + bounds.width - 44 * coordinate_scale, bounds.y + 2 * coordinate_scale
+                corner = screenshot.crop((round(left * scale_x), round(top * scale_y), round((left + span) * scale_x), round((top + span) * scale_y)))
                 position = camera_outline_position(corner)
                 if position is not None:
                     x, y = position
-                    videos[post_id] = HomeVideo(post_id, VideoBounds(round(left + x * 42) - 8, round(top + y * 42) - 8, 16, 16))
+                    videos[post_id] = HomeVideo(post_id, VideoBounds(round(left + x * span) - 8, round(top + y * span) - 8, 16, 16))
     return sorted(videos.values(), key=lambda video: (video.bounds.y, video.bounds.x))
 
 
@@ -225,29 +226,52 @@ def check_video_playback(driver, artifact_dir: Path, *, timeout: float = 30, obs
 
 
 class _RecordedPlaybackFailure(AssertionError):
-    """Mark this Allure video step failed before aggregating all four results."""
+    """Mark this Allure video step failed before aggregating playback results."""
 
 
-def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20) -> None:
+def verify_four_home_videos(driver, artifact_dir: Path, *, video_count: int = 4, max_swipes: int = 20) -> None:
+    if video_count < 1:
+        raise ValueError("video_count must be a positive integer")
     seen: set[str] = set()
     results: list[tuple[str, str | None]] = []
     run_dir = artifact_dir / f"home-video-playback-{time.time_ns()}"
+    scanned_pages: set[int] = set()
+    discovery: list[str] = []
     try:
         wait_for_home_feed(driver, timeout=30)
+        platform = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower()
+        # Android accessibility coordinates use pixels; iOS uses points.
+        coordinate_scale = driver.get_display_density() / 160 if platform == "android" else 1.0
         for page in range(max_swipes + 1):
             # Refresh coordinates after every return; feed virtualization may
             # move cards. Repeated post IDs never count as another sample.
             while True:
                 source, window = driver.page_source, driver.get_window_size()
-                is_ios = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "ios"
-                screenshot_png = driver.get_screenshot_as_png() if is_ios else None
-                videos = visible_home_videos(source, window, screenshot_png)
+                screenshot_png = driver.get_screenshot_as_png() if platform in {"ios", "android"} else None
+                videos = visible_home_videos(source, window, screenshot_png, coordinate_scale)
+                if page not in scanned_pages:
+                    scanned_pages.add(page)
+                    # Preserve early screens too: a final photo-only screen
+                    # cannot explain whether earlier video cards were missed.
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    xml_path = run_dir / f"feed-page-{page:02d}.xml"
+                    xml_path.write_text(source, encoding="utf-8")
+                    attach_file_if_present(xml_path, attachment_type=allure.attachment_type.XML)
+                    if screenshot_png is not None:
+                        png_path = xml_path.with_suffix(".png")
+                        png_path.write_bytes(screenshot_png)
+                        attach_file_if_present(png_path, attachment_type=allure.attachment_type.PNG)
+                    discovery.append(
+                        f"page={page}: card_ids={'post-home-feed-note-card-' in source}, "
+                        f"badge_ids={'post-home-feed-note-video-badge-' in source}, "
+                        f"candidates={[video.post_id for video in videos]}"
+                    )
                 video = next((video for video in videos if video.post_id not in seen), None)
                 if video is None:
                     break
                 seen.add(video.post_id)
                 try:
-                    with allure.step(f"检查首页视频 {len(results) + 1}/4：{video.post_id}"):
+                    with allure.step(f"检查首页视频 {len(results) + 1}/{video_count}：{video.post_id}"):
                         if screenshot_png is not None:
                             run_dir.mkdir(parents=True, exist_ok=True)
                             selected = run_dir / f"selected-video-{len(results) + 1}.png"
@@ -255,7 +279,7 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
                             attach_file_if_present(selected, attachment_type=allure.attachment_type.PNG)
                         bounds = video.bounds
                         driver.execute_script("mobile: tap", {"x": bounds.x + bounds.width // 2, "y": bounds.y + bounds.height // 2})
-                        print(f"[home-video] CHECK {len(results) + 1}/4 post_id={video.post_id}", flush=True)
+                        print(f"[home-video] CHECK {len(results) + 1}/{video_count} post_id={video.post_id}", flush=True)
                         reason = check_video_playback(driver, run_dir / f"video-{len(results) + 1}")
                         print(f"[home-video] {'FAIL: ' + reason if reason else 'PASS'} post_id={video.post_id}", flush=True)
                         results.append((video.post_id, reason))
@@ -269,9 +293,9 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
                         for index, (post_id, failure) in enumerate(results, 1) if failure
                     )
                     raise AssertionError(f"视频播放失败：已有 2 个视频不能正常播放，立即终止。{details}")
-                if len(results) == 4:
+                if len(results) == video_count:
                     failures = [(post_id, reason) for post_id, reason in results if reason]
-                    assert not failures, f"视频播放失败：4 个视频中 {len(failures)} 个失败；{failures}"
+                    assert not failures, f"视频播放失败：{video_count} 个视频中 {len(failures)} 个失败；{failures}"
                     _return_to_feed(driver)
                     return
                 # If the card never opened, do not back out of the home tab.
@@ -282,9 +306,10 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, max_swipes: int = 20)
             if page < max_swipes:
                 swipe_vertical(driver, direction="up")
                 time.sleep(.5)
-        raise AssertionError(f"视频播放验证未完成：只找到 {len(results)}/4 个不同视频，不能标记通过")
+        raise AssertionError(f"视频播放验证未完成：只找到 {len(results)}/{video_count} 个不同视频，不能标记通过")
     finally:
         summary = "\n".join(f"{index}. {post_id}: {reason or '正常播放'}" for index, (post_id, reason) in enumerate(results, 1))
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "summary.txt").write_text(summary or "未获得视频播放检查结果", encoding="utf-8")
         attach_text("首页视频播放检查结果", summary or "未获得视频播放检查结果")
+        attach_text("首页视频逐屏筛选诊断", "\n".join(discovery) or "尚未扫描首页")

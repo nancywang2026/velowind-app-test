@@ -110,6 +110,13 @@ def confirm_payment_then_think_again(driver: WebDriver, timeout: int = 20) -> No
 
     with _payment_profile("confirm-wait-my-rental-page"):
         wait_for_my_rental_page(driver, timeout=20)
+    if not is_ios:
+        source = safe_page_source(driver)
+        detail_title = source.find('text="订单详情"')
+        rental_title = source.find('text="我的租车"')
+        if detail_title >= 0 and rental_title > detail_title:
+            driver.back()
+            wait_for_my_rental_page(driver, timeout=20)
 
 
 def dismiss_pending_payment_dialog_if_present(driver: WebDriver, timeout: int = 3) -> bool:

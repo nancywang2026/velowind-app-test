@@ -1724,14 +1724,40 @@ def _tap_ios_datetime_picker_value(driver: WebDriver, field: str, value: str) ->
     return False
 
 
+def _ios_datetime_picker_selected_parts(driver: WebDriver) -> dict[str, str] | None:
+    # Read only the visible selected-time leaf, excluding merged container
+    # labels and hidden dates from screens underneath the picker.
+    pattern = r"[0-9]{1,2}月[0-9]{1,2}日 *[0-9]{1,2}点( *[0-9]{1,2}分)?"
+    try:
+        elements = driver.find_elements(
+            AppiumBy.IOS_PREDICATE,
+            f'type == "XCUIElementTypeStaticText" AND visible == true AND label MATCHES "{pattern}"',
+        )
+        if len(elements) != 1:
+            return None
+        label = elements[0].get_attribute("label") or ""
+        if re.fullmatch(pattern, label) is None:
+            return None
+        return _ios_datetime_picker_current_parts_from_source(label)
+    except (WebDriverException, AttributeError):
+        return None
+
+
 def _tap_ios_datetime_picker_wheel_to_target(driver: WebDriver, field: str, target: str) -> bool:
     try:
         rect = driver.get_window_rect()
     except (WebDriverException, KeyError, TypeError, AttributeError):
         return False
+    center = None
     for _ in range(36):
-        source = _safe_page_source(driver)
-        current = _ios_datetime_picker_current_parts_from_source(source)
+        current = _ios_datetime_picker_selected_parts(driver) if center is not None else None
+        if current is None or current.get(field) == target:
+            # Establish geometry once per field; a wheel scroll does not move
+            # the picker. Fall back to a fresh tree if the leaf is unavailable,
+            # and always confirm a claimed target using the original parser.
+            source = _safe_page_source(driver)
+            current = _ios_datetime_picker_current_parts_from_source(source)
+            center = _ios_datetime_picker_column_center(source, field)
         if current is None:
             return False
         current_value = current.get(field)
@@ -1740,8 +1766,6 @@ def _tap_ios_datetime_picker_wheel_to_target(driver: WebDriver, field: str, targ
         direction = _android_datetime_picker_step_direction(field, current_value, target)
         if direction is None:
             return False
-        # The selected value and wheel geometry come from the same fresh snapshot.
-        center = _ios_datetime_picker_column_center(source, field)
         if center is None:
             _tap_ios_datetime_picker_wheel_step(driver, field, direction)
         else:

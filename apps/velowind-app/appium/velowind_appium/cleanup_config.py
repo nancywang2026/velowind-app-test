@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from urllib.parse import urlsplit
+
 import yaml
 
 
@@ -51,6 +53,31 @@ def note_cleanup_mode() -> str:
     if mode not in {"ui", "api"}:
         raise ValueError("note_cleanup_mode / VW_NOTE_CLEANUP_MODE must be ui or api")
     return mode
+
+
+def note_cleanup_api_base_url() -> str:
+    raw = os.environ.get("VW_NOTE_CLEANUP_API_BASE_URL")
+    if raw is None:
+        cleanup = _read_yaml_config().get("cleanup", {})
+        cleanup = cleanup if isinstance(cleanup, dict) else {}
+        raw = cleanup.get("note_cleanup_api_base_url")
+        if raw is None:
+            environment = str(os.environ.get("VW_API_ENV", "uat")).strip().lower()
+            hosts = {
+                "uat": ("VW_UAT_API_HOST", "https://uat-api.velowind.com"),
+                "prod": ("VW_PROD_API_HOST", "https://prod-api.velowind.com"),
+            }
+            if environment not in hosts:
+                raise ValueError("api_environment / VW_API_ENV must be uat or prod")
+            variable, default_host = hosts[environment]
+            raw = os.environ.get(variable, default_host)
+    base = str(raw or "").strip().rstrip("/")
+    parsed = urlsplit(base)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+            or parsed.password or parsed.query or parsed.fragment
+            or parsed.path not in ("", "/api/v1/mobile")):
+        raise ValueError("Configure a valid HTTPS note_cleanup_api_base_url / VW_NOTE_CLEANUP_API_BASE_URL matching the app environment")
+    return base if parsed.path else base + "/api/v1/mobile"
 
 
 def _read_yaml_config() -> dict[str, Any]:

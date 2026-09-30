@@ -897,14 +897,90 @@ def message_note_publish_error_signal(page_source: str) -> str | None:
     return None
 
 
+def _visible_detail_source(page_source: str) -> str:
+    """Scope snapshots to the visible detail, excluding retained feed screens."""
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return page_source
+
+    def find_detail(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return None
+        if any(node.get(key) in {"post-detail-page", "message-detail-page", "article-detail-page"}
+               for key in ("name", "resource-id")):
+            return node
+        for child in node:
+            found = find_detail(child)
+            if found is not None:
+                return found
+        return None
+
+    detail = find_detail(root)
+    # Offscreen children in this scroll view still belong to the selected note.
+    return ElementTree.tostring(detail, encoding="unicode") if detail is not None else page_source
+
+
+def _detail_load_error(page_source: str) -> str | None:
+    try:
+        root = ElementTree.fromstring(_visible_detail_source(page_source))
+    except ElementTree.ParseError:
+        return None
+    errors = {"加载失败", "详情加载失败，请稍后再试。", "网络连接异常", "Network Error"}
+
+    def visible_leaves(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return
+        if not len(node):
+            yield node
+        for child in node:
+            yield from visible_leaves(child)
+
+    for node in visible_leaves(root):
+        for key in ("label", "text", "name", "value"):
+            text = node.get(key, "").strip()
+            if text in errors:
+                return text
+    return None
+
+
+def _ios_detail_texts(page_source: str) -> list[str] | None:
+    if "<XCUIElementType" not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    texts = [node.get("label") or node.get("value") or node.get("name", "")
+             for node in root.iter("XCUIElementTypeStaticText")]
+    return [text.strip() for text in texts if text.strip()] or None
+
+
+def _ios_detail_comments(texts: list[str]) -> list[str]:
+    # A comment body immediately precedes its timestamp and reply action.
+    return _dedupe_preserve_order([
+        texts[index - 1] for index, text in enumerate(texts)
+        if index > 0 and ANDROID_COMMENT_TIME_PATTERN.fullmatch(text)
+        and "回复" in texts[index + 1:index + 3]
+        and texts[index - 1] not in GENERIC_DETAIL_TEXTS
+    ])
+
+
 def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
+    page_source = _visible_detail_source(page_source)
+    if _detail_load_error(page_source):
+        return MessageDetailSnapshot(None, None, None, None, [], None, [])
     page_source, content = _android_detail_source_and_content(page_source)
-    texts = _extract_strings(page_source)
+    ios_texts = _ios_detail_texts(page_source)
+    texts = ios_texts or _extract_strings(page_source)
+    count_source = "" if ios_texts else page_source
     title = content[0] if content is not None else _extract_title(texts)
     body = content[1] if content is not None else _extract_body(texts, title)
-    view_count = _extract_count(page_source, texts, VIEW_COUNT_PATTERN, "浏览")
-    comment_count = _extract_count(page_source, texts, COMMENT_COUNT_PATTERN, "评论")
+    view_count = _extract_count(count_source, texts, VIEW_COUNT_PATTERN, "浏览")
+    comment_count = _extract_count(count_source, texts, COMMENT_COUNT_PATTERN, "评论")
     comments = _dedupe_preserve_order([*_extract_comments(texts), *_extract_android_comments(page_source)])
+    if ios_texts:
+        comments = _ios_detail_comments(ios_texts) or comments
     empty_comment_hint = next((text for text in texts if "还没有评论" in text), None)
     bottom_action_counts = (
         _extract_android_bottom_action_counts(page_source)
@@ -976,6 +1052,9 @@ def read_message_detail_snapshot(driver: WebDriver, timeout: int = 20) -> Messag
             time.sleep(0.2)
             continue
 
+        error = _detail_load_error(page_source)
+        if error:
+            raise AssertionError(f"Message detail failed to load: {error}")
         snapshot = parse_detail_snapshot(page_source)
         last_snapshot = snapshot
         if _snapshot_is_detail_ready(snapshot) or _android_image_note_detail_ready(page_source, snapshot):
@@ -2389,8 +2468,8 @@ def _upload_note_media(driver: WebDriver, draft: MessageNoteDraft) -> None:
     )
     if not photo_chosen:
         raise AssertionError(
-            "Photo library opened but no selectable photo was found. "
-            "If this is a simulator, seed at least one image into Photos."
+            "Photo selection did not complete: the library may not have opened, "
+            "or the requested album/photo could not be selected. Check the captured page."
         )
     _record_note_selected_album_image_source(driver, draft)
 
@@ -3138,7 +3217,10 @@ def _choose_note_image_from_library(
     if picture_indexes:
         kwargs["picture_indexes"] = picture_indexes
     with _note_profile("upload-choose-photo-library"):
-        return photo_picker.choose_photo_from_library(driver, **kwargs)
+        selected = photo_picker.choose_photo_from_library(driver, **kwargs)
+    if not selected and {"相册/本地图片访问权限", "去开启"} <= _visible_note_control_values(_safe_page_source(driver)):
+        raise AssertionError("相册访问被权限提示阻塞，请在被测 App 的系统照片设置中授权后重试；尚未完成选图。")
+    return selected
 
 
 def _record_note_cropper_image(driver: WebDriver) -> None:
@@ -3766,11 +3848,28 @@ def _wait_for_note_photo_picker_opened(driver: WebDriver, timeout: int = 2) -> b
     return _wait_until(lambda: _note_photo_picker_opened(driver), timeout=timeout)
 
 
+def _visible_note_control_values(page_source: str) -> set[str]:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return set()
+    values: set[str] = set()
+
+    def visit(node) -> None:
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return
+        values.update(node.get(key, "").strip()
+                      for key in ("name", "label", "value", "resource-id", "text", "content-desc"))
+        for child in node:
+            visit(child)
+
+    visit(root)
+    return values - {""}
+
+
 def _note_photo_picker_opened(driver: WebDriver) -> bool:
-    page_source = _safe_page_source(driver)
-    return any(
-        marker in page_source
-        for marker in [
+    # Permission prose and ancestor summaries are not picker controls.
+    return bool(_visible_note_control_values(_safe_page_source(driver)) & {
             "从手机相册选择",
             "手机相册",
             "从相册选择",
@@ -3781,8 +3880,7 @@ def _note_photo_picker_opened(driver: WebDriver) -> bool:
             "选择最多9张照片。",
             "PUPickerContainer",
             "photosView_content_scroll_view",
-        ]
-    )
+    })
 
 
 def _choose_photo_library_source(driver: WebDriver) -> bool:

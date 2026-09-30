@@ -61,6 +61,47 @@ def test_extract_rental_order_summary_from_android_text_nodes():
     assert summary.remaining_payment_time == "09:31"
 
 
+def test_extract_submitted_android_order_ignores_stale_detail_and_other_cards():
+    page_source = """
+    <hierarchy>
+      <android.widget.TextView text="订单号 RO-OLD123" displayed="true" />
+      <android.widget.TextView text="已取消" displayed="true" />
+      <android.view.ViewGroup>
+        <android.view.ViewGroup>
+          <android.widget.TextView text="待支付" displayed="true" />
+          <android.widget.TextView text="RO-NEW456" displayed="true" />
+          <android.widget.TextView text="2026-09-30 15:27" displayed="true" />
+          <android.widget.TextView text="2026-10-01 10:00" displayed="true" />
+          <android.widget.TextView text="2026-10-02 10:00" displayed="true" />
+          <android.widget.TextView text="支付未完成，可重新发起支付。" displayed="true" />
+        </android.view.ViewGroup>
+        <android.widget.TextView text="去支付" displayed="true" />
+      </android.view.ViewGroup>
+    </hierarchy>
+    """
+    summary = rental_orders.extract_rental_order_summary(page_source, expected_order_number="RO-NEW456")
+
+    assert summary.order_number == "RO-NEW456"
+    assert summary.created_at == "2026-09-30 15:27"
+    assert summary.payment_incomplete is True
+    assert summary.repay_available is True
+    assert summary.remaining_payment_time is None
+    assert summary.is_complete(require_remaining_payment_time=False) is True
+    assert summary.is_complete() is False
+    assert rental_orders.extract_rental_order_summary(page_source, expected_order_number="RO-MISSING").is_complete(
+        require_remaining_payment_time=False
+    ) is False
+
+
+def test_android_order_summary_rejects_background_list_behind_detail():
+    assert rental_orders._android_order_detail_before_list(
+        '<android.widget.TextView text="订单详情"/><android.widget.TextView text="我的租车"/>'
+    ) is True
+    assert rental_orders._android_order_detail_before_list(
+        '<android.widget.TextView text="我的租车"/><android.widget.TextView text="订单详情"/>'
+    ) is False
+
+
 def test_read_latest_rental_order_summary_uses_current_complete_source_before_wait(monkeypatch):
     page_source = """
     <AppiumAUT>
@@ -156,6 +197,31 @@ def test_confirm_payment_prefers_ios_coordinate_before_locator_scan(monkeypatch)
     assert events == [
         ("coordinate", ((0.50, 0.93), (0.50, 0.91))),
     ]
+
+
+def test_confirm_payment_returns_from_stale_android_order_detail(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+
+        def back(self):
+            events.append("back")
+
+    monkeypatch.setattr(rental_payment_center, "wait_for_rental_payment_center_page", lambda driver, timeout: None)
+    monkeypatch.setattr(rental_payment_center, "tap_first_available", lambda *args, **kwargs: True)
+    monkeypatch.setattr(rental_payment_center, "wait_until_source_contains", lambda *args, **kwargs: True)
+    monkeypatch.setattr(rental_payment_center, "dismiss_pending_payment_dialog_if_present", lambda *args, **kwargs: True)
+    monkeypatch.setattr(rental_payment_center, "wait_for_my_rental_page", lambda *args, **kwargs: events.append("my-rental"))
+    monkeypatch.setattr(
+        rental_payment_center,
+        "safe_page_source",
+        lambda driver: '<android.widget.TextView text="订单详情"/><android.widget.TextView text="我的租车"/>',
+    )
+
+    rental_payment_center.confirm_payment_then_think_again(FakeDriver(), timeout=5)
+
+    assert events == ["my-rental", "back", "my-rental"]
 
 
 def test_dismiss_payment_dialog_prefers_visible_think_again_hit_point(monkeypatch):
