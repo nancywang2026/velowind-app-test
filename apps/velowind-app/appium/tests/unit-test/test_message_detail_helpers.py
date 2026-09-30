@@ -4864,3 +4864,72 @@ def test_note_selection_reports_permission_block_without_claiming_empty_album(mo
     monkeypatch.setattr(message_detail.photo_picker, 'choose_photo_from_library', lambda *a, **k: False)
     with pytest.raises(AssertionError, match='相册访问被权限提示阻塞'):
         message_detail._choose_note_image_from_library(Driver(), album_name='长白山', picture_index=1, picture_indexes=(), select_all_from_album=False)
+
+
+IOS_FAILED_DETAIL = """<App>
+<XCUIElementTypeOther name="post-home-feed-page" label="底层首页正文 评论 12"/>
+<XCUIElementTypeOther name="post-detail-page" visible="true">
+  <XCUIElementTypeOther label="加载失败 详情加载失败，请稍后再试。">
+    <XCUIElementTypeStaticText label="加载失败"/>
+    <XCUIElementTypeStaticText label="详情加载失败，请稍后再试。"/>
+  </XCUIElementTypeOther>
+</XCUIElementTypeOther></App>"""
+
+
+def test_failed_ios_detail_does_not_parse_error_or_underlying_feed_as_content():
+    snapshot = parse_detail_snapshot(IOS_FAILED_DETAIL)
+    assert snapshot.title is None
+    assert snapshot.body is None
+    assert snapshot.comments == []
+    assert snapshot.comment_count is None
+
+
+def test_read_detail_reports_load_failure_without_waiting(monkeypatch):
+    driver = type("Driver", (), {"page_source": IOS_FAILED_DETAIL})()
+    monkeypatch.setattr(message_detail.time, "sleep", lambda _: pytest.fail("Must report explicit failure"))
+    with pytest.raises(AssertionError, match="Message detail failed to load: 加载失败"):
+        message_detail.read_message_detail_snapshot(driver)
+
+
+@pytest.mark.parametrize("source", [
+    '<App><Other label="加载失败"><Text label="正文"/></Other></App>',
+    '<App><Other visible="false"><Text label="加载失败"/></Other></App>',
+    '<App><Other displayed="false"><Text text="加载失败"/></Other></App>',
+    '<App><Other name="post-home-feed-page"><Text label="加载失败"/></Other>'
+    '<Other name="post-detail-page"><Text label="正常正文"/></Other></App>',
+])
+def test_detail_error_ignores_container_hidden_and_underlying_text(source):
+    assert message_detail._detail_load_error(source) is None
+
+
+def test_ios_detail_source_excludes_underlying_screens():
+    source = '<App><Other name="post-home-feed-page" label="底层列表"/>' \
+             '<Other name="post-detail-page"><Text label="目标正文"/></Other></App>'
+    scoped = message_detail._visible_detail_source(source)
+    assert "底层列表" not in scoped
+    assert "目标正文" in scoped
+
+
+def test_ios_snapshot_uses_leaf_content_and_comment_header_not_timestamp():
+    source = '''<App>
+      <XCUIElementTypeOther name="post-home-feed-page" label="首页无关正文"/>
+      <XCUIElementTypeOther name="post-detail-page" visible="true"
+          label="骑行保障车 共 3 条评论 不错 20 小时前 回复">
+        <XCUIElementTypeStaticText label="骑行保障车"/>
+        <XCUIElementTypeStaticText label="这是保障车内部空间和装备的详细介绍。"/>
+        <XCUIElementTypeOther visible="false">
+          <XCUIElementTypeStaticText label="共 3 条评论"/>
+          <XCUIElementTypeStaticText label="测试用户"/>
+          <XCUIElementTypeStaticText label="不错"/>
+          <XCUIElementTypeStaticText label="20 小时前"/>
+          <XCUIElementTypeStaticText label="回复"/>
+          <XCUIElementTypeStaticText label="删除"/>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </App>'''
+    snapshot = parse_detail_snapshot(source)
+    assert snapshot.title == "骑行保障车"
+    assert snapshot.body == "这是保障车内部空间和装备的详细介绍。"
+    assert snapshot.comment_count == "3"
+    assert snapshot.comments == ["不错"]
+    assert snapshot.view_count is None

@@ -6,6 +6,7 @@
 
 | 问题 / 检索词 | 记录 | 已确认范围 |
 | --- | --- | --- |
+| iOS 浏览笔记、详情加载失败、错误页被识别为详情 | [详情加载失败](2026-09-21-ios-note-detail-load-failure.md) | 232 单元通过，5 条既有失败单独记录；完整目标用例真机 1 passed，互动数据未清理 |
 | Android 拍摄视频、相机权限、仅在使用中允许 | [相机授权阻塞](2026-09-20-android-camera-permission.md) | 已补系统媒体授权处理；单元 84 passed，真机 1 passed 且新增笔记删除成功 |
 | 发布后删除、登录 HTTP 400、Incorrect password | [API 清理密码失效](2026-09-20-note-cleanup-login-password.md) | 生产 App 错连 UAT 已修复；默认 UAT、运行时选生产；单元 39 passed，生产真机 1 passed 且删除成功 |
 | 首页视频数量、2 个视频、VW_HOME_VIDEO_COUNT | [视频检查数量可配置](2026-09-20-home-video-count.md) | 默认检查 2 个；单元 43 passed；真机未验证 |

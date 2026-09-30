@@ -45,6 +45,7 @@ def test_tap_first_visible_card_binds_driver_to_detail_verifier(monkeypatch):
 
 
 def test_open_first_home_message_waits_for_detail_after_tap(monkeypatch):
+    monkeypatch.setattr(home_feed, "read_message_detail_snapshot", lambda driver, timeout: None)
     state = {"detail_visible": False}
     clock = {"now": 0.0}
 
@@ -86,6 +87,7 @@ def test_open_first_home_message_uses_card_tap_when_direct_target_missing(monkey
 
 
 def test_open_first_home_message_skips_failed_detail_and_tries_next_card(monkeypatch):
+    monkeypatch.setattr(home_feed, "read_message_detail_snapshot", lambda driver, timeout: None)
     events = []
     state = {"page": "home", "detail_visible": False}
 
@@ -373,3 +375,16 @@ def test_select_note_type_waits_for_type_results(monkeypatch):
     home_feed.select_note_type(object(), "徒步", timeout=1)
 
     assert events == ["徒步"]
+
+
+def test_open_first_home_message_does_not_accept_failed_detail_shell(monkeypatch):
+    monkeypatch.setattr(home_feed, "wait_for_home_feed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(home_feed, "message_detail_is_visible", lambda driver: True)
+
+    def failed_snapshot(driver, timeout):
+        raise AssertionError("Message detail failed to load: 加载失败")
+
+    monkeypatch.setattr(home_feed, "read_message_detail_snapshot", failed_snapshot)
+    monkeypatch.setattr(home_feed, "_tap_first_message", lambda driver: pytest.fail("Must not switch notes"))
+    with pytest.raises(AssertionError, match="Message detail failed to load"):
+        home_feed.open_first_home_message(object())

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.webdriver import WebDriver
 
@@ -34,7 +35,7 @@ class RentalOrderSummary:
     repay_available: bool
     remaining_payment_time: str | None
 
-    def is_complete(self) -> bool:
+    def is_complete(self, *, require_remaining_payment_time: bool = True) -> bool:
         return all(
             [
                 self.order_number,
@@ -43,7 +44,7 @@ class RentalOrderSummary:
                 self.return_time,
                 self.payment_incomplete,
                 self.repay_available,
-                self.remaining_payment_time,
+                self.remaining_payment_time if require_remaining_payment_time else True,
             ]
         )
 
@@ -57,29 +58,45 @@ def wait_for_my_rental_page(driver: WebDriver, timeout: int = 20) -> str | None:
     )
 
 
-def read_latest_rental_order_summary(driver: WebDriver, timeout: int = 20) -> RentalOrderSummary:
+def read_latest_rental_order_summary(
+    driver: WebDriver, timeout: int = 20, *, expected_order_number: str | None = None
+) -> RentalOrderSummary:
     end_at = time.monotonic() + timeout
     last_summary = RentalOrderSummary(None, None, None, None, False, False, None)
+    detail_in_front = False
+    is_android = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android"
     while time.monotonic() < end_at:
-        last_summary = extract_rental_order_summary(safe_page_source(driver))
-        if last_summary.is_complete():
+        source = safe_page_source(driver)
+        detail_in_front = is_android and _android_order_detail_before_list(source)
+        last_summary = extract_rental_order_summary(source, expected_order_number=expected_order_number)
+        if not detail_in_front and last_summary.is_complete(require_remaining_payment_time=not is_android):
             return last_summary
         remaining_timeout = max(0.5, end_at - time.monotonic())
         wait_for_my_rental_page(driver, timeout=remaining_timeout)
-        last_summary = extract_rental_order_summary(safe_page_source(driver))
-        if last_summary.is_complete():
+        source = safe_page_source(driver)
+        detail_in_front = is_android and _android_order_detail_before_list(source)
+        last_summary = extract_rental_order_summary(source, expected_order_number=expected_order_number)
+        if not detail_in_front and last_summary.is_complete(require_remaining_payment_time=not is_android):
             return last_summary
         time.sleep(0.4)
-    raise AssertionError(f"Latest rental order summary is incomplete: {last_summary}")
+    raise AssertionError(f"Latest rental order summary is incomplete or behind order detail (detail_in_front={detail_in_front}): {last_summary}")
 
 
-def extract_rental_order_summary(page_source: str) -> RentalOrderSummary:
+def _android_order_detail_before_list(page_source: str) -> bool:
+    detail_title = page_source.find('text="订单详情"')
+    rental_title = page_source.find('text="我的租车"')
+    return detail_title >= 0 and rental_title > detail_title
+
+
+def extract_rental_order_summary(page_source: str, *, expected_order_number: str | None = None) -> RentalOrderSummary:
+    if expected_order_number:
+        page_source = _matching_android_order_card(page_source, expected_order_number)
     texts = extract_visible_texts(page_source)
     joined_text = " ".join(texts)
     time_values = _extract_time_values(texts)
 
     return RentalOrderSummary(
-        order_number=_extract_order_number(texts, joined_text),
+        order_number=expected_order_number if expected_order_number and expected_order_number in texts else _extract_order_number(texts, joined_text),
         created_at=_extract_labeled_time(texts, CREATED_AT_LABELS) or _time_at(time_values, 0),
         pickup_time=_extract_labeled_time(texts, PICKUP_TIME_LABELS) or _time_at(time_values, 1),
         return_time=_extract_labeled_time(texts, RETURN_TIME_LABELS) or _time_at(time_values, 2),
@@ -87,6 +104,25 @@ def extract_rental_order_summary(page_source: str) -> RentalOrderSummary:
         repay_available="可重新发起支付" in joined_text or "重新支付" in joined_text or "继续支付" in joined_text,
         remaining_payment_time=_extract_remaining_payment_time(texts, joined_text),
     )
+
+
+def _matching_android_order_card(page_source: str, order_number: str) -> str:
+    if "<hierarchy" not in page_source:
+        return page_source
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return ""
+    parents = {child: parent for parent in root.iter() for child in parent}
+    for element in root.iter():
+        if element.attrib.get("text") != order_number:
+            continue
+        card = parents.get(element)
+        if card is None:
+            break
+        card = parents.get(card, card)
+        return ElementTree.tostring(card, encoding="unicode")
+    return ""
 
 
 def _extract_order_number(texts: list[str], joined_text: str) -> str | None:
