@@ -6,9 +6,12 @@
 
 | 问题 / 检索词 | 记录 | 已确认范围 |
 | --- | --- | --- |
+| 租车订单取消、释放车辆、自动清理 | [租车自动取消](2026-09-30-rental-order-cleanup.md) | 32 单元通过；目标真机 1 passed、实际取消成功，本次无订单遗留 |
+| Android 租车订单、旧详情混入、剩余支付时间缺失 | [订单卡片误读](2026-09-30-android-rental-order-card.md) | 25 单元通过；目标真机 1 passed；后续自动清理见上一条 |
+| 执行效率、场次日期、滚轮读取 | [iOS 效率优化](2026-09-21-ios-efficiency.md) | 152 单元通过；候选真机两轮通过，场次节省 10.5%–12.1%；整套未复跑、场次未清理 |
 | iOS 浏览笔记、详情加载失败、错误页被识别为详情 | [详情加载失败](2026-09-21-ios-note-detail-load-failure.md) | 232 单元通过，5 条既有失败单独记录；完整目标用例真机 1 passed，互动数据未清理 |
 | Android 拍摄视频、相机权限、仅在使用中允许 | [相机授权阻塞](2026-09-20-android-camera-permission.md) | 已补系统媒体授权处理；单元 84 passed，真机 1 passed 且新增笔记删除成功 |
-| 发布后删除、登录 HTTP 400、Incorrect password | [API 清理密码失效](2026-09-20-note-cleanup-login-password.md) | 生产 App 错连 UAT 已修复；默认 UAT、运行时选生产；单元 39 passed，生产真机 1 passed 且删除成功 |
+| 发布后删除、登录 HTTP 400、Incorrect password、UAT 清理 host | [API 清理环境配置](2026-09-20-note-cleanup-login-password.md) | 历史生产真机 1 passed 且删除成功；2026-09-30 按当前 UAT App 固定清理 host，UAT 真机清理待验证 |
 | 首页视频数量、2 个视频、VW_HOME_VIDEO_COUNT | [视频检查数量可配置](2026-09-20-home-video-count.md) | 默认检查 2 个；单元 43 passed；真机未验证 |
 | 私聊接收侧、clientMessageId mismatch | [接收视角断言](2026-09-18-api-private-chat-recipient-client-id.md) | 已修复，真实B四条/C五条接收核验通过 |
 | 活动分享、17000025、provider unavailable | [活动卡片阻断](2026-09-18-api-private-chat-activity-provider.md) | 两条公开活动均失败，待后端核查 |

@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from velowind_appium.modules import (
@@ -14,10 +16,9 @@ from velowind_appium.modules import (
     tap_select_car_now,
     wait_for_rental_store_page,
 )
-from velowind_appium.actions import safe_back
 from velowind_appium.modules.home_feed import wait_for_home_feed
-from velowind_appium.modules.rental_common import tap_by_coordinate_ratios
-from velowind_appium.modules.rental_common import safe_page_source
+from velowind_appium.modules.rental_common import safe_page_source, tap_by_coordinate_ratios
+from velowind_appium.modules.rental_orders import cancel_rental_order
 from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_in_on_home
 
 
@@ -43,18 +44,32 @@ def test_user_can_create_rental_order_and_leave_payment_unfinished(driver, ios_c
         lambda: extract_rental_order_summary(safe_page_source(driver)).order_number,
     )
     assert submitted_order_number, "Payment center did not show a submitted order number"
-    step("confirm-payment-then-think-again", lambda: confirm_payment_then_think_again(driver, timeout=25), capture=True)
+    try:
+        step("confirm-payment-then-think-again", lambda: confirm_payment_then_think_again(driver, timeout=25), capture=True)
 
-    summary = step(
-        "read-my-rental-unfinished-order",
-        lambda: read_latest_rental_order_summary(driver, timeout=25, expected_order_number=submitted_order_number),
-        capture=True,
-    )
-    is_android = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android"
-    assert summary.order_number == submitted_order_number
-    assert summary.is_complete(require_remaining_payment_time=not is_android), (
-        f"Expected complete unfinished rental order summary, got: {summary}"
-    )
+        summary = step(
+            "read-my-rental-unfinished-order",
+            lambda: read_latest_rental_order_summary(driver, timeout=25, expected_order_number=submitted_order_number),
+            capture=True,
+        )
+        is_android = str((getattr(driver, "capabilities", {}) or {}).get("platformName", "")).lower() == "android"
+        assert summary.order_number == submitted_order_number
+        assert summary.is_complete(require_remaining_payment_time=not is_android), (
+            f"Expected complete unfinished rental order summary, got: {summary}"
+        )
+    finally:
+        flow_failed = sys.exc_info()[0] is not None
+        try:
+            step(
+                "cancel-submitted-rental-order",
+                lambda: cancel_rental_order(driver, submitted_order_number, timeout=20),
+                capture=True,
+            )
+        except Exception:
+            # Keep the original test failure; cleanup-pending is attached separately.
+            if not flow_failed:
+                raise
+
 
 
 def _prepare_rental_home(driver, ios_config) -> None:

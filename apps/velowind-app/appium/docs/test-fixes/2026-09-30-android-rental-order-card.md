@@ -108,3 +108,7 @@ VW_APPIUM_PLATFORM=android VW_ANDROID_TARGET=physical VW_APPIUM_SERVER_URL=http:
 - 未完成：本轮待支付订单 `RO1790755474818E2A62D` 未取消；整套 Android 测试未复跑。
 - 下一步：若需要清理测试数据，取消该待支付订单；整套回归需另行执行。
 - 设备：复测前未发现其他运行中的真机 pytest；常驻 Appium 服务沿用 4725 端口，未结束他人进程。
+
+## 后续：自动取消订单
+
+用户进一步要求下单验证后取消订单。该项独立记录于[租车自动取消](2026-09-30-rental-order-cleanup.md)：32 单元通过，完整 Android 目标用例 1 passed，自动取消已真机验证。上述历史通过时未清理的结论保留；订单 `RO1790755474818E2A62D` 后续现场已显示“已取消”。
