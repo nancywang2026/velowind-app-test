@@ -966,11 +966,56 @@ def _ios_detail_comments(texts: list[str]) -> list[str]:
     ])
 
 
+def _ios_detail_content(page_source: str) -> tuple[str | None, str | None] | None:
+    if "<XCUIElementType" not in page_source:
+        return None
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    scroll = next((node for node in root.iter() if node.get("name") == "post-detail-scroll-view"), None)
+    if scroll is None:
+        return None
+
+    def text_of(node):
+        return (node.get("label") or node.get("value") or node.get("name", "")).strip()
+
+    layout = scroll
+    while len(layout) == 1 and layout[0].tag != "XCUIElementTypeStaticText":
+        layout = layout[0]
+    panels = [layout] if len(layout) and layout[0].tag == "XCUIElementTypeStaticText" else list(layout)
+    for panel in panels:
+        children = list(panel)
+        if not children or children[0].tag != "XCUIElementTypeStaticText":
+            continue
+        title = text_of(children[0])
+        if (not title or title in GENERIC_DETAIL_TEXTS or _contains_detail_meta(title)
+                or ANDROID_COMMENT_TIME_PATTERN.fullmatch(title)):
+            continue
+        # In the iOS content panel, the body immediately follows the title,
+        # either as StaticText or wrapped in Other. Location/comments are
+        # separate groups; never fill missing content from their leaf text.
+        body = None
+        if len(children) > 1:
+            body_node = children[1]
+            while body_node.tag == "XCUIElementTypeOther" and len(body_node) == 1:
+                body_node = body_node[0]
+            if body_node.tag == "XCUIElementTypeStaticText":
+                text = text_of(body_node)
+                if text and not ANDROID_COMMENT_TIME_PATTERN.fullmatch(text):
+                    body = text
+        return title, body
+    # A known detail scroll view must not fall back to location/author text.
+    return None, None
+
+
 def parse_detail_snapshot(page_source: str) -> MessageDetailSnapshot:
     page_source = _visible_detail_source(page_source)
     if _detail_load_error(page_source):
         return MessageDetailSnapshot(None, None, None, None, [], None, [])
     page_source, content = _android_detail_source_and_content(page_source)
+    if content is None:
+        content = _ios_detail_content(page_source)
     ios_texts = _ios_detail_texts(page_source)
     texts = ios_texts or _extract_strings(page_source)
     count_source = "" if ios_texts else page_source

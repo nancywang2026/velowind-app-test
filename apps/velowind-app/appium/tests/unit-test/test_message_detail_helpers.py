@@ -4933,3 +4933,83 @@ def test_ios_snapshot_uses_leaf_content_and_comment_header_not_timestamp():
     assert snapshot.comment_count == "3"
     assert snapshot.comments == ["不错"]
     assert snapshot.view_count is None
+
+
+def _short_ios_note_source(body_xml, title="测试"):
+    # Reduced from the failed device XML: body wraps a StaticText, while the
+    # location, comments and retained feed belong to separate groups.
+    return f'''<App>
+      <XCUIElementTypeOther name="post-home-feed-page">
+        <XCUIElementTypeStaticText label="首页长正文不能冒充笔记内容"/>
+      </XCUIElementTypeOther>
+      <XCUIElementTypeOther name="post-detail-page" visible="true">
+        <XCUIElementTypeOther name="post-detail-scroll-view">
+          <XCUIElementTypeScrollView><XCUIElementTypeOther><XCUIElementTypeOther>
+            <XCUIElementTypeOther name="post-detail-video-surface"/>
+            <XCUIElementTypeOther>
+              <XCUIElementTypeStaticText label="{title}"/>
+              {body_xml}
+              <XCUIElementTypeOther>
+                <XCUIElementTypeOther name="location-icon"/>
+                <XCUIElementTypeStaticText label="地点"/>
+                <XCUIElementTypeStaticText label="徐汇滨江中心模速空间"/>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther><XCUIElementTypeStaticText label="17 分钟前"/></XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+            <XCUIElementTypeOther visible="false">
+              <XCUIElementTypeStaticText label="共 0 条评论"/>
+              <XCUIElementTypeStaticText label="还没有评论，来说两句吧"/>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther></XCUIElementTypeOther></XCUIElementTypeScrollView>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeStaticText label="作者姓名"/>
+      </XCUIElementTypeOther>
+    </App>'''
+
+
+@pytest.mark.parametrize("title,body", [
+    ("测试", "测试"), ("骑", "好"), ("短标题", "短正文"),
+    ("长标题" * 20, "包含评论和留言的真实正文"),
+])
+def test_ios_detail_reads_short_equal_and_long_content_from_panel(title, body):
+    source = _short_ios_note_source(
+        f'<XCUIElementTypeOther><XCUIElementTypeStaticText label="{body}"/></XCUIElementTypeOther>',
+        title=title,
+    )
+    snapshot = parse_detail_snapshot(source)
+    assert snapshot.title == title
+    assert snapshot.body == body
+    assert snapshot.comment_count == "0"
+    assert snapshot.view_count is None
+
+
+@pytest.mark.parametrize("body_xml", [
+    "", '<XCUIElementTypeOther><XCUIElementTypeStaticText label=""/></XCUIElementTypeOther>',
+])
+def test_ios_detail_never_borrows_missing_body_from_location_author_or_feed(body_xml):
+    snapshot = parse_detail_snapshot(_short_ios_note_source(body_xml))
+    assert snapshot.title == "测试"
+    assert snapshot.body is None
+
+
+def test_read_ios_detail_accepts_short_equal_title_and_body():
+    class Driver:
+        page_source = _short_ios_note_source(
+            '<XCUIElementTypeOther><XCUIElementTypeStaticText label="测试"/></XCUIElementTypeOther>'
+        )
+
+    snapshot = message_detail.read_message_detail_snapshot(Driver(), timeout=1)
+    assert snapshot.title == snapshot.body == "测试"
+
+
+def test_ios_detail_without_content_panel_does_not_parse_comment_author_as_title():
+    source = _short_ios_note_source("", title="")
+    source = source.replace(
+        '<XCUIElementTypeStaticText label="共 0 条评论"/>',
+        '<XCUIElementTypeStaticText label="共 1 条评论"/>'
+        '<XCUIElementTypeOther><XCUIElementTypeStaticText label="评论作者"/>'
+        '<XCUIElementTypeStaticText label="很长的评论不能冒充正文"/></XCUIElementTypeOther>',
+    )
+    snapshot = parse_detail_snapshot(source)
+    assert snapshot.title is None
+    assert snapshot.body is None
