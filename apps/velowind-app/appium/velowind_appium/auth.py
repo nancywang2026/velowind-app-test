@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import re
+import xml.etree.ElementTree as ElementTree
 
 from appium.webdriver.common.appiumby import AppiumBy
 from appium.webdriver.webdriver import WebDriver
@@ -8,6 +10,10 @@ from selenium.common.exceptions import NoSuchElementException, WebDriverExceptio
 
 from velowind_appium.actions import tap_accessibility_id_or_text_if_present, tap_text_if_present
 from velowind_appium.config import IosAppiumConfig
+
+
+class LoginRejected(AssertionError):
+    """The App explicitly rejected the supplied credentials."""
 
 
 def login_required_from_page_source(page_source: str) -> bool:
@@ -34,6 +40,8 @@ def _login_redirect_visible_from_page_source(page_source: str) -> bool:
 
 
 def ensure_logged_in_if_needed(driver: WebDriver, config: IosAppiumConfig) -> bool:
+    from velowind_appium.environment_login import effective_login_config
+    config = effective_login_config(driver, config)
     if not config.login_username or not config.login_password:
         return False
 
@@ -64,7 +72,7 @@ def _wait_for_login_form(driver: WebDriver, timeout: int = 12) -> bool:
     return False
 
 
-def _perform_password_login(driver: WebDriver, username: str, password: str) -> None:
+def _perform_password_login(driver: WebDriver, username: str, password: str, *, resubmit: bool = True) -> None:
     _dismiss_login_agreement_sheet(driver)
     _open_password_login_form(driver)
 
@@ -81,6 +89,11 @@ def _perform_password_login(driver: WebDriver, username: str, password: str) -> 
         pass
     password_input.send_keys(password)
 
+    # Android can consume the first tap outside an EditText to dismiss its
+    # keyboard. Close it before locating the agreement and submitting once.
+    if _is_android(driver) and driver.is_keyboard_shown():
+        driver.hide_keyboard()
+
     _tap_agreement(driver)
     if not _tap_login_submit(driver):
         raise AssertionError("Unable to submit the login form")
@@ -92,9 +105,14 @@ def _perform_password_login(driver: WebDriver, username: str, password: str) -> 
         _dismiss_login_agreement_sheet(driver)
         _save_password_if_prompted(driver)
         current_source = _safe_page_source(driver)
+        rejection = _login_rejection_reason(current_source)
+        if rejection:
+            raise LoginRejected(
+                f"Login rejected: {rejection}. Configure valid login credentials for the installed App environment."
+            )
         if not login_required_from_page_source(current_source):
             return
-        if time.monotonic() - last_submit_at >= 2:
+        if resubmit and time.monotonic() - last_submit_at >= 2:
             _tap_agreement(driver)
             _tap_login_submit(driver)
             _save_password_if_prompted(driver)
@@ -102,6 +120,31 @@ def _perform_password_login(driver: WebDriver, username: str, password: str) -> 
         time.sleep(0.5)
 
     raise AssertionError("Login page remained visible after submitting credentials")
+
+
+def _password_rejected_from_page_source(page_source: str) -> bool:
+    return _login_rejection_reason(page_source) == "密码错误"
+
+
+def _login_rejection_reason(page_source: str) -> str | None:
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return None
+    def visit(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return None
+        if node.tag in {"XCUIElementTypeStaticText", "android.widget.TextView"}:
+            for attribute in ("name", "label", "text"):
+                value = node.get(attribute, "")
+                if value in {"密码错误", "Incorrect password"}:
+                    return "密码错误"
+                if value == "未设置密码":
+                    return "未设置密码"
+                if re.fullmatch(r"用户不存在[：:]\s*userId=\S+", value):
+                    return "用户不存在"
+        return next((reason for child in node if (reason := visit(child)) is not None), None)
+    return visit(root)
 
 
 def _tap_accessibility_id_if_present(
@@ -253,6 +296,16 @@ def _tap_agreement(driver: WebDriver) -> None:
         except (NoSuchElementException, WebDriverException):
             continue
 
+    if _is_android(driver):
+        match = _android_agreement_checkbox_from_source(_safe_page_source(driver))
+        if match is None:
+            raise AssertionError("Unable to locate Android login agreement checkbox")
+        (x, y), checked = match
+        if not checked:
+            driver.execute_script("mobile: clickGesture", {"x": x, "y": y})
+            time.sleep(0.2)
+        return
+
     for xpath in [
         '//XCUIElementTypeOther[@name="我已阅读并同意《寻风集用户协议》《隐私政策》"]/XCUIElementTypeOther[1]',
         '(//XCUIElementTypeOther[@name="我已阅读并同意《寻风集用户协议》《隐私政策》"])[1]',
@@ -274,6 +327,61 @@ def _tap_agreement(driver: WebDriver) -> None:
         _tap_element_leading_checkbox(driver, element)
     except (NoSuchElementException, WebDriverException):
         return
+
+
+def _android_agreement_checkbox_from_source(source: str):
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return None
+    parents = {child: parent for parent in root.iter() for child in parent}
+    def visible(node):
+        while node is not None:
+            if node.get("displayed") == "false" or node.get("visible") == "false":
+                return False
+            node = parents.get(node)
+        return True
+    def rect(node):
+        match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", node.get("bounds", ""))
+        if not match:
+            return None
+        x, y, right, bottom = map(int, match.groups())
+        return x, y, right-x, bottom-y
+    candidates = {}
+    for label in root.iter("android.widget.TextView"):
+        text = label.get("text", "")
+        if "已阅读" not in text or "同意" not in text or not visible(label):
+            continue
+        copy = parents.get(label)
+        row = parents.get(copy)
+        label_rect = rect(label)
+        if row is None or label_rect is None:
+            continue
+        # In old Android builds the agreement text and checkbox are adjacent
+        # siblings. Tap the square before the copy, never the legal links.
+        siblings = list(row)
+        index = siblings.index(copy)
+        if index == 0:
+            continue
+        checkbox = siblings[index-1]
+        bounds = rect(checkbox)
+        if bounds is None or not visible(checkbox) or checkbox.get("enabled") == "false":
+            continue
+        x, y, w, h = bounds
+        lx, ly, _, lh = label_rect
+        if not (lh > 0 and .5*lh <= w <= 2*lh and .5*lh <= h <= 2*lh
+                and abs(w-h) <= .15*lh and 0 <= lx-(x+w) <= lh
+                and abs((y+h/2)-(ly+lh/2)) <= lh/2):
+            continue
+        # RN's old checkbox exposes no checked state. Its checked-only SVG
+        # mark distinguishes selected from the empty circle, avoiding toggles
+        # when both the mode switch and login preparation call this helper.
+        checked = checkbox.get("checked") == "true" or any(
+            node.tag == "com.horcrux.svg.SvgView" and visible(node) for node in checkbox.iter())
+        candidates[(int(x+w/2), int(y+h/2))] = checked
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates.items()))
 
 
 def _tap_element_center(driver: WebDriver, element) -> None:

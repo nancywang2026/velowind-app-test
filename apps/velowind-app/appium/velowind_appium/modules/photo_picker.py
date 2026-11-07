@@ -260,6 +260,22 @@ def _record_video_from_camera(driver: WebDriver, *, record_seconds: float | None
         return False
     if not _tap_camera_record_control(driver, start=False):
         return False
+    if not _wait_until(
+        lambda: _camera_video_preview_visible(driver)
+        or _ios_native_camera_video_preview_visible(_safe_page_source(driver)),
+        timeout=10,
+    ):
+        return False
+    if _ios_native_camera_video_preview_visible(_safe_page_source(driver)):
+        # UIImagePickerController requires accepting the clip before the app
+        # can display its own preview and actual duration metadata.
+        try:
+            driver.find_element(
+                AppiumBy.IOS_PREDICATE,
+                'type == "XCUIElementTypeButton" AND name == "Done" AND visible == true',
+            ).click()
+        except (NoSuchElementException, WebDriverException):
+            return False
     if not _wait_until(lambda: _camera_video_preview_visible(driver), timeout=10):
         return False
     actual_seconds = _camera_video_duration_seconds(_safe_page_source(driver))
@@ -392,6 +408,15 @@ def _wait_for_camera_recording_duration(
 
 def _camera_video_preview_visible(driver: WebDriver) -> bool:
     return "预览视频" in _safe_page_source(driver)
+
+
+def _ios_native_camera_video_preview_visible(page_source: str) -> bool:
+    # Native controls use English accessibility names even in the Chinese UI.
+    # Require playback alongside Done to avoid accepting another Done button.
+    return bool(
+        visible_ios_name(page_source, {"Playback"})
+        and visible_ios_name(page_source, {"Done"})
+    )
 
 
 def _camera_video_duration_seconds(page_source: str) -> int | None:
@@ -764,8 +789,7 @@ def choose_local_photo(
         )
     if album_name:
         with _photo_picker_profile("open-photo-album"):
-            target_album = "相机" if is_android else album_name
-            album_opened = open_photo_album(driver, target_album)
+            album_opened = open_photo_album(driver, album_name)
         if not album_opened:
             if is_android:
                 return False
@@ -773,11 +797,6 @@ def choose_local_photo(
                 return False
         if is_ios and not _ensure_ios_photo_album_active(driver, album_name):
             return False
-        if is_android and _is_android_photo_picker(driver):
-            # Android image-note cases always choose the first item from 相机.
-            normalized_index = 1
-            normalized_indexes = ()
-            select_all_from_album = False
     if album_name:
         if normalized_indexes:
             with _photo_picker_profile("tap-photo-grid-candidates"):

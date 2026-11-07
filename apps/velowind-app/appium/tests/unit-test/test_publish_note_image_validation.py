@@ -3,10 +3,12 @@ from __future__ import annotations
 from io import BytesIO
 
 from PIL import Image, ImageDraw
+import pytest
 
 from velowind_appium.image_validation import (
     ImageBounds,
     compare_publish_note_images,
+    contained_image_bounds,
     crop_image_from_screenshot,
     find_note_detail_image_bounds,
     find_publish_note_preview_image_bounds,
@@ -113,3 +115,55 @@ def test_find_note_detail_image_bounds_uses_largest_detail_image():
     bounds = find_note_detail_image_bounds(page_source)
 
     assert bounds == ImageBounds(x=32, y=180, width=1000, height=562)
+
+
+@pytest.mark.parametrize(
+    "image_size, expected",
+    [
+        ((769, 1022), ImageBounds(0, 170, 402, 534)),
+        ((320, 180), ImageBounds(0, 324, 402, 226)),
+        ((180, 640), ImageBounds(78, 0, 246, 874)),
+        ((402, 874), ImageBounds(0, 0, 402, 874)),
+    ],
+)
+def test_contained_image_bounds_excludes_viewer_letterboxing(image_size, expected):
+    assert contained_image_bounds(ImageBounds(0, 0, 402, 874), image_size) == expected
+
+
+@pytest.mark.parametrize("wrong_image", [False, True])
+def test_publish_image_validation_captures_ios_photo_without_viewer_controls(monkeypatch, tmp_path, wrong_image):
+    from velowind_appium.modules import message_detail
+
+    source = _source_image()
+    source_path = tmp_path / "source.png"
+    source.save(source_path)
+    screenshot = Image.new("RGB", (1206, 2622), "black")
+    photo = source.transpose(Image.Transpose.FLIP_LEFT_RIGHT) if wrong_image else source
+    screenshot.paste(photo.resize((1206, 678)), (0, 972))
+    ImageDraw.Draw(screenshot).text((1100, 250), "X", fill="white")
+    buffer = BytesIO()
+    screenshot.save(buffer, format="PNG")
+
+    class Driver:
+        capabilities = {"platformName": "iOS"}
+        _publish_note_album_source_image_path = source_path
+        page_source = '<root><XCUIElementTypeOther name="post-detail-preview-pager" visible="true" /></root>'
+
+        def get_screenshot_as_png(self):
+            return buffer.getvalue()
+
+        def get_window_size(self):
+            return {"width": 402, "height": 874}
+
+    monkeypatch.setattr(message_detail, "message_detail_is_visible", lambda driver: True)
+    monkeypatch.setattr(message_detail, "find_note_detail_image_bounds", lambda source: ImageBounds(0, 122, 402, 534))
+    monkeypatch.setattr(message_detail, "_open_published_note_image_viewer", lambda *args, **kwargs: ImageBounds(0, 0, 402, 874))
+    monkeypatch.setenv("VW_APPIUM_ARTIFACT_DIR", str(tmp_path))
+
+    if wrong_image:
+        with pytest.raises(AssertionError, match="does not match"):
+            message_detail._validate_published_note_image_matches_uploaded_preview(Driver())
+    else:
+        message_detail._validate_published_note_image_matches_uploaded_preview(Driver())
+        with Image.open(next(tmp_path.glob("*-detail-image.png"))) as captured:
+            assert captured.size == (1206, 678)

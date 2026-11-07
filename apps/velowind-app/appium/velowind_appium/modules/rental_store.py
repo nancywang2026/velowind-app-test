@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from xml.etree import ElementTree
 
 from appium.webdriver.webdriver import WebDriver
 
@@ -41,6 +42,8 @@ def choose_first_store(driver: WebDriver, timeout: int = 15) -> None:
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         source = safe_page_source(driver)
+        if _tap_first_visible_store_option(driver, source) and _wait_for_store_selected(driver):
+            return
         if "选择服务城市" in source:
             tap_by_coordinate_ratios(driver, [(0.88, 0.37), (0.90, 0.38)])
             time.sleep(0.3)
@@ -52,7 +55,7 @@ def choose_first_store(driver: WebDriver, timeout: int = 15) -> None:
                 timeout=1,
             ):
                 time.sleep(0.3)
-                if tap_first_available(driver, accessibility_ids=FIRST_STORE_IDS, texts=FIRST_STORE_TEXTS, timeout=2):
+                if tap_first_available(driver, accessibility_ids=FIRST_STORE_IDS, texts=FIRST_STORE_TEXTS, timeout=2) or _tap_first_visible_store_option(driver, safe_page_source(driver)):
                     if _wait_for_store_selected(driver):
                         return
         if tap_first_available(driver, accessibility_ids=FIRST_STORE_IDS, texts=FIRST_STORE_TEXTS, timeout=1):
@@ -70,6 +73,27 @@ def choose_first_store(driver: WebDriver, timeout: int = 15) -> None:
     if _store_selected(driver):
         return
     raise AssertionError("Unable to select the first rental service store")
+
+
+def _tap_first_visible_store_option(driver: WebDriver, source: str) -> bool:
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError:
+        return False
+    names = []
+
+    def visit(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return
+        if node.tag in {"XCUIElementTypeStaticText", "android.widget.TextView"}:
+            text = node.get("text") or node.get("name") or node.get("label") or ""
+            if text.endswith("店") and text not in {*STORE_PAGE_TEXTS, "请选择服务门店"}:
+                names.append(text)
+        for child in node:
+            visit(child)
+
+    visit(root)
+    return bool(names) and tap_visible_text_hit_point(driver, [names[0]], timeout=1)
 
 
 def tap_select_car_now(driver: WebDriver, timeout: int = 15) -> None:

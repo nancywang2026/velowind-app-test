@@ -1,6 +1,26 @@
 from velowind_appium.modules import note_card_picker
 
 
+def test_ios_stable_button_cards_are_selected_in_screen_order():
+    source = '''<AppiumAUT>
+      <XCUIElementTypeOther visible="false">
+        <XCUIElementTypeButton name="post-home-feed-note-card-hidden" label="隐藏" x="4" y="125" width="195" height="300"/>
+      </XCUIElementTypeOther>
+      <XCUIElementTypeButton name="post-home-feed-note-card-left" label="保障车" x="4" y="125" width="195" height="308" visible="true"/>
+      <XCUIElementTypeButton name="post-home-feed-note-card-right" label="测试" x="203" y="125" width="195" height="308" visible="true"/>
+    </AppiumAUT>'''
+    taps = []
+
+    class Driver:
+        def execute_script(self, script, payload):
+            taps.append(payload)
+
+    assert note_card_picker.tap_note_card_at_ordinal(
+        Driver(), ordinal=2, page_source=source, verify_open=lambda: bool(taps),
+    ) is True
+    assert taps == [{"x": 300, "y": 315}]
+
+
 def test_tap_note_card_at_ordinal_selects_second_unique_card():
     page_source = """
     <AppiumAUT>

@@ -93,6 +93,8 @@ def open_me_page(driver: WebDriver, timeout: int = 12) -> None:
         if _tap_me_tab(driver):
             if _wait_until(lambda: me_page_is_visible(_safe_page_source(driver)), timeout=3):
                 return
+        else:
+            _tap_note_editor_back(driver)
         time.sleep(0.2)
     raise AssertionError("Unable to enter the Me page after saving draft")
 
@@ -172,20 +174,7 @@ def _tap_note_editor_back_points(driver: WebDriver) -> bool:
 
 
 def _tap_me_tab(driver: WebDriver) -> bool:
-    if tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=2):
-        return True
-    try:
-        rect = driver.get_window_rect()
-        driver.execute_script(
-            "mobile: tap",
-            {
-                "x": int(rect["width"] * 0.88),
-                "y": int(rect["height"] * 0.93),
-            },
-        )
-        return True
-    except (AttributeError, KeyError, TypeError, WebDriverException):
-        return False
+    return tap_accessibility_id_or_text_if_present(driver, "bottom-nav-me", "我的", timeout=2)
 
 
 def _wait_until(condition, *, timeout: int | float) -> bool:

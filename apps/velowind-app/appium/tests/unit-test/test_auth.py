@@ -204,6 +204,48 @@ def test_tap_agreement_handles_updated_age_confirmation_copy():
     assert taps == [("mobile: tap", {"x": 58, "y": 462.0})]
 
 
+def android_agreement_source(*, checked=False, hidden=False):
+    mark = '<com.horcrux.svg.SvgView/>' if checked else ''
+    return f'''<hierarchy><android.view.ViewGroup resource-id="login-page" displayed="{str(not hidden).lower()}">
+      <android.view.ViewGroup bounds="[301,1551][363,1613]">{mark}</android.view.ViewGroup>
+      <android.view.ViewGroup bounds="[375,1551][978,1670]">
+        <android.widget.TextView text="我已年满18岁，并已阅读且同意" bounds="[375,1551][978,1607]"/>
+        <android.widget.TextView text="《用户协议》《隐私政策》" bounds="[375,1614][978,1670]"/>
+      </android.view.ViewGroup>
+    </android.view.ViewGroup></hierarchy>'''
+
+
+@pytest.mark.parametrize("checked", [False, True])
+def test_android_agreement_uses_adjacent_checkbox_and_checked_mark(checked):
+    assert auth._android_agreement_checkbox_from_source(android_agreement_source(checked=checked)) == ((332, 1582), checked)
+
+
+def test_android_agreement_rejects_hidden_or_ambiguous_controls():
+    assert auth._android_agreement_checkbox_from_source(android_agreement_source(hidden=True)) is None
+    source = android_agreement_source()
+    assert auth._android_agreement_checkbox_from_source('<root>' + source + source.replace('[301,', '[401,').replace('[363,', '[463,').replace('[375,', '[475,') + '</root>') is None
+
+
+def test_android_agreement_is_idempotent_and_does_not_use_ios_locators(monkeypatch):
+    calls = []
+    class Driver:
+        capabilities = {"platformName": "Android"}
+        page_source = android_agreement_source()
+
+        def find_element(self, by, value):
+            assert by == AppiumBy.ACCESSIBILITY_ID
+            raise NoSuchElementException()
+
+        def execute_script(self, script, payload):
+            calls.append((script, payload))
+            self.page_source = android_agreement_source(checked=True)
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    driver = Driver()
+    auth._tap_agreement(driver)
+    auth._tap_agreement(driver)
+    assert calls == [("mobile: clickGesture", {"x": 332, "y": 1582})]
+
+
 def test_tap_login_submit_uses_immediate_predicate_lookup(monkeypatch):
     calls = []
 
@@ -244,8 +286,19 @@ def test_tap_login_submit_uses_android_text_locator(monkeypatch):
     assert calls == [("登录", 1)]
 
 
-def test_perform_password_login_uses_password_form_then_saves_password(monkeypatch):
+@pytest.mark.parametrize("platform,keyboard_shown", [("iOS", True), ("Android", False), ("Android", True)])
+def test_perform_password_login_uses_password_form_then_saves_password(monkeypatch, platform, keyboard_shown):
     events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": platform}
+
+        def is_keyboard_shown(self):
+            events.append("keyboard-check")
+            return keyboard_shown
+
+        def hide_keyboard(self):
+            events.append("hide-keyboard")
 
     class FakePhoneField:
         def click(self):
@@ -278,9 +331,9 @@ def test_perform_password_login_uses_password_form_then_saves_password(monkeypat
     monkeypatch.setattr(auth.time, "monotonic", lambda: 0)
     monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
 
-    auth._perform_password_login(object(), "13300000000", "secret")
+    auth._perform_password_login(FakeDriver(), "13300000000", "secret")
 
-    assert events[:10] == [
+    expected = [
         "dismiss-sheet",
         "open-password-form",
         "click-phone",
@@ -289,16 +342,23 @@ def test_perform_password_login_uses_password_form_then_saves_password(monkeypat
         "click-password",
         "clear-password",
         ("send-password", "secret"),
-        "tap-agreement",
-        "save-password",
     ]
+    if platform == "Android":
+        expected.append("keyboard-check")
+        if keyboard_shown:
+            expected.append("hide-keyboard")
+    expected.extend(["tap-agreement", "save-password"])
+    assert events[:len(expected)] == expected
 
 
-def test_perform_password_login_retries_submit_when_login_page_persists(monkeypatch):
+@pytest.mark.parametrize("rejected", [False, True])
+@pytest.mark.parametrize("resubmit", [False, True])
+def test_perform_password_login_retries_submit_when_login_page_persists(monkeypatch, rejected, resubmit):
     events = []
     page_states = iter(
         [
-            "密码登录 请输入手机号和密码完成登录 登录",
+            '<AppiumAUT><XCUIElementTypeStaticText name="密码错误" visible="true"/></AppiumAUT>'
+            if rejected else "密码登录 请输入手机号和密码完成登录 登录",
             "密码登录 请输入手机号和密码完成登录 登录",
             "",
         ]
@@ -327,9 +387,43 @@ def test_perform_password_login_retries_submit_when_login_page_persists(monkeypa
     monkeypatch.setattr(auth.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
 
-    auth._perform_password_login(object(), "13300000000", "secret")
+    if rejected:
+        with pytest.raises(AssertionError, match="Login rejected: 密码错误"):
+            auth._perform_password_login(object(), "13300000000", "secret", resubmit=resubmit)
+        assert events.count("submit") == 1
+        return
 
-    assert events.count("submit") >= 2
+    auth._perform_password_login(object(), "13300000000", "secret", resubmit=resubmit)
+
+    assert events.count("submit") >= 2 if resubmit else events.count("submit") == 1
+
+
+@pytest.mark.parametrize("source,expected", [
+    ('<hierarchy><android.widget.TextView text="密码错误"/></hierarchy>', True),
+    ('<AppiumAUT><XCUIElementTypeStaticText name="密码错误" visible="false"/></AppiumAUT>', False),
+    ('<AppiumAUT><XCUIElementTypeOther name="密码错误"/></AppiumAUT>', False),
+    ('<AppiumAUT><XCUIElementTypeStaticText name="文章中的密码错误说明"/></AppiumAUT>', False),
+    ('', False),
+])
+def test_password_rejection_requires_visible_error_text(source, expected):
+    assert auth._password_rejected_from_page_source(source) is expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("用户不存在：userId=test-user", "用户不存在"),
+    ("未设置密码", "未设置密码"),
+    ("Incorrect password", "密码错误"),
+    ("网络请求失败", None),
+    ("文章介绍用户不存在的情况", None),
+])
+def test_login_rejection_classifies_missing_accounts_without_leaking_identity(text, expected):
+    source = f'<root><XCUIElementTypeStaticText name="{text}"/></root>'
+    assert auth._login_rejection_reason(source) == expected
+
+
+def test_hidden_login_error_is_not_attributed_to_current_attempt():
+    source = '<root><node visible="false"><XCUIElementTypeStaticText name="密码错误"/></node></root>'
+    assert auth._login_rejection_reason(source) is None
 
 
 @pytest.mark.parametrize("platform", ["Android", "iOS"])

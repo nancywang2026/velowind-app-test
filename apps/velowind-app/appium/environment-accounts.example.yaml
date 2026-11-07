@@ -1,0 +1,10 @@
+# Copy this manifest to a local path, then use absolute config_file paths or
+# paths relative to that manifest. Credential files must contain login.username
+# and login.password. They must identify different environments unambiguously.
+environments:
+  test:
+    api_base_url: https://dev-api.velowind.com
+    config_file: ios-appium.yaml
+  prod:
+    api_base_url: https://prod-api.velowind.com
+    config_file: ios-appium.prod.yaml

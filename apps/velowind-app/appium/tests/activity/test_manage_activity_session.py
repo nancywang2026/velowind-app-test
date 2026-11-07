@@ -22,7 +22,7 @@ def test_user_can_add_activity_session_from_my_approved_activity(driver, ios_con
         "\n".join(
             [
                 "1. 已进入我的活动发布列表",
-                "2. 已找到通过且上架的活动",
+                "2. 已找到审核通过且可管理场次的活动（上架优先，兼容未发布）",
                 "3. 已打开通过活动的管理场次入口",
                 "4. 已新增场次并填写全部可见字段",
                 f"5. 成功信号: {success_signal}",

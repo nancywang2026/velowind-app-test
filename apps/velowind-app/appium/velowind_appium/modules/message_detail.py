@@ -40,6 +40,7 @@ from velowind_appium.ios_keyboard import hide_ios_keyboard_if_possible
 from velowind_appium.ios_source import visible_ios_name
 from velowind_appium.image_validation import (
     compare_images_for_publish_note,
+    contained_image_bounds,
     crop_image_from_screenshot,
     find_largest_visible_image_bounds,
     find_note_detail_image_bounds,
@@ -420,6 +421,7 @@ def publish_message_note(
         driver._api_note_publication = {
             "requested_title": requested_title, "published_title": draft.title, "post_id": None,
         }
+        driver._api_note_publication_login = getattr(driver, "_environment_login_selection", None)
     if draft.media_type == "video" and draft.media_source == "camera":
         # A session-scoped driver can retain the source path recorded by a
         # previous album-video case. A newly recorded camera clip has no such
@@ -589,6 +591,9 @@ def open_message_note_publisher(
     ios_config: IosAppiumConfig | None = None,
     timeout: int = 30,
 ) -> None:
+    if ios_config is not None:
+        from velowind_appium.environment_login import effective_login_config
+        ios_config = effective_login_config(driver, ios_config)
     _prepare_android_publish_entry(driver)
 
     end_at = time.monotonic() + timeout
@@ -1122,7 +1127,7 @@ def open_system_message_page(driver: WebDriver, timeout: int = 15) -> SystemMess
     def _system_messages_entry_visible() -> bool:
         nonlocal reloaded_network_error
         page_source = _safe_page_source(driver)
-        if "系统消息" in page_source:
+        if any(text in page_source for text in ("系统消息", "系统通知")):
             return True
         if not reloaded_network_error and _messages_network_error_visible(page_source):
             reloaded_network_error = tap_text_if_present(driver, "重新加载", timeout=1)
@@ -1131,7 +1136,7 @@ def open_system_message_page(driver: WebDriver, timeout: int = 15) -> SystemMess
     if not _wait_until(_system_messages_entry_visible, timeout=timeout):
         raise AssertionError("Messages page did not expose the System Messages entry")
 
-    if not tap_text_if_present(driver, "系统消息", timeout=2):
+    if not any(tap_text_if_present(driver, text, timeout=2) for text in ("系统消息", "系统通知")):
         raise AssertionError("Unable to tap the System Messages entry")
 
     end_at = time.monotonic() + timeout
@@ -1175,7 +1180,7 @@ def parse_system_message_snapshot(page_source: str) -> SystemMessageSnapshot:
             body = following[1] if len(following) > 1 else title
 
     return SystemMessageSnapshot(
-        page_visible="系统消息" in joined_text,
+        page_visible=any(text in joined_text for text in ("系统消息", "系统通知")),
         category=category,
         timestamp=timestamp,
         title=title,
@@ -1386,9 +1391,23 @@ def _tap_publish_entry_if_present(driver: WebDriver) -> bool:
 
         if _wait_until(_entry_or_login_opened, timeout=10):
             return True
+        # A tap immediately after launch can return before the app accepts it.
+        # Recheck the destination before retrying: tapping through an opened
+        # sheet could dismiss it or select content underneath it.
+        if _entry_or_login_opened():
+            return True
+        try:
+            entry = driver.find_element(AppiumBy.ACCESSIBILITY_ID, PUBLISH_ENTRY_PRIMARY_ID)
+        except NoSuchElementException:
+            entry = None
+        if entry is not None and entry.is_displayed() and entry.is_enabled():
+            entry.click()
+            if _wait_until(_entry_or_login_opened, timeout=10):
+                return True
         raise AssertionError(
             f"Clicked accessibilityId={PUBLISH_ENTRY_PRIMARY_ID}, but no publish sheet, "
-            "note form or login page appeared within 10 seconds"
+            "note form or login page appeared after waiting 10 seconds per click "
+            "(at most 2 clicks)"
         )
 
     for accessibility_id in PUBLISH_ENTRY_IDS:
@@ -2578,6 +2597,11 @@ def _validate_published_note_image_matches_uploaded_preview(
     if bounds is None:
         raise AssertionError("Unable to locate the published note detail image for pixel validation")
     image_bounds = _open_published_note_image_viewer(driver, bounds, timeout=timeout)
+    if is_ios and _ios_image_preview_visible(_safe_page_source(driver)):
+        # iOS exposes the full-screen contain Image, including letterboxing,
+        # as its accessibility bounds. Compare the displayed photo area only.
+        with Image.open(source_path) as source_image:
+            image_bounds = contained_image_bounds(image_bounds, source_image.size)
     detail_image = _capture_image_bounds(driver, image_bounds)
     detail_path = _publish_note_validation_detail_path()
     detail_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2889,10 +2913,15 @@ def _ios_published_detail_title(source: str, title: str) -> str | None:
     for detail in root.iter():
         if detail.get("name") != "post-detail-page" or detail.get("visible") == "false":
             continue
-        for node in detail.iter("XCUIElementTypeStaticText"):
+        text_nodes = list(detail.iter("XCUIElementTypeStaticText"))
+        title_nodes = [node for node in text_nodes if node.get("name") == "post-detail-title"]
+        for node in title_nodes or text_nodes:
             # The title can sit below a portrait video. Its exact text still
             # identifies the detail even before scrolling it into view.
-            actual = _source_element_text(node.attrib)
+            # Newer builds put the accessibility identifier in name and the
+            # displayed title in label/value. Never match the identifier or
+            # another field when an explicit title control is available.
+            actual = (node.get("label") or node.get("value") or node.get("name", "")).strip()
             if _published_note_title_matches(actual, title):
                 return actual
     return None
@@ -2974,6 +3003,7 @@ def _my_notes_list_visible(page_source: str) -> bool:
     return "我的笔记" in page_source and (
         any(token in page_source for token in ["发布", "草稿箱", "我的发布"])
         or all(token in page_source for token in ["笔记", "收藏", "点赞"])
+        or all(token in page_source for token in ["我发的", "收藏的", "赞过的"])
     )
 
 
@@ -6016,7 +6046,20 @@ def _tap_android_detail_share_button_from_source(driver: WebDriver) -> bool:
 
 
 def _share_sheet_visible(page_source: str) -> bool:
-    return any(token in page_source for token in ["朋友圈", "微信好友", "发送给朋友", "微信"])
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        return False
+    targets = {"朋友圈", "微信好友", "发送给朋友", "微信"}
+
+    def visit(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return False
+        if any(node.get(attribute) in targets for attribute in ("name", "label", "value", "text", "content-desc")):
+            return True
+        return any(visit(child) for child in node)
+
+    return visit(root)
 
 
 def _tap_share_target(driver: WebDriver, target_text: str) -> bool:

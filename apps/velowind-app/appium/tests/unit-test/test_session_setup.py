@@ -484,6 +484,32 @@ def test_pytest_runtest_makereport_can_capture_final_page_for_passed_test(monkey
     ]
 
 
+@pytest.mark.parametrize("phase,failed,expected", [
+    ("setup", True, ["test_demo-setup"]),
+    ("setup", False, []),
+    ("teardown", True, []),
+    ("call", True, ["test_demo"]),
+])
+def test_failed_setup_captures_debug_artifacts(monkeypatch, phase, failed, expected):
+    captured = []
+    report = type("Report", (), {"when": phase, "failed": failed, "passed": not failed})()
+    outcome = type("Outcome", (), {"get_result": lambda self: report})()
+    item = type("Item", (), {
+        "name": "test_demo",
+        "funcargs": {
+            "driver": object(),
+            "ios_config": type("Config", (), {"artifact_dir": Path(".tmp/appium-ios")})(),
+        },
+    })()
+    monkeypatch.setattr(conftest, "capture_and_attach_debug_artifacts",
+                        lambda driver, artifact_dir, label: captured.append(label))
+    hook = conftest.pytest_runtest_makereport(item, None)
+    next(hook)
+    with pytest.raises(StopIteration):
+        hook.send(outcome)
+    assert captured == expected
+
+
 def test_home_visible_rejects_publish_form_overlay():
     page_source = """
     <AppiumAUT>

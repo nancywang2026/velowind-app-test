@@ -1,0 +1,16 @@
+{
+  "api_origin": "https://dev-api.velowind.com",
+  "observed_app_origin": "",
+  "environment_evidence": "",
+  "postman_environment": "",
+  "accounts": {
+    "a": {"phone_variable":"phone_a","password_variable":"password_a","user_id_variable":"user_id_a","name_variable":"name_a"},
+    "b": {"phone_variable":"phone_b","password_variable":"password_b","user_id_variable":"user_id_b","name_variable":"name_b"},
+    "c": {"phone_variable":"phone_c","password_variable":"password_c","user_id_variable":"user_id_c","name_variable":"name_c"}
+  },
+  "capabilities": [],
+  "devices": {},
+  "locators": {},
+  "operations": {},
+  "report_directory": ".tmp/message-regression"
+}

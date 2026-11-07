@@ -96,6 +96,22 @@ def crop_image_from_screenshot(
     return screenshot.crop((left, upper, right, lower))
 
 
+def contained_image_bounds(bounds: ImageBounds, image_size: tuple[int, int]) -> ImageBounds:
+    """Return the centered, aspect-fit image area inside a viewer's bounds."""
+    width, height = image_size
+    if min(width, height, bounds.width, bounds.height) <= 0:
+        raise ValueError("Image and viewer dimensions must be positive")
+    scale = min(bounds.width / width, bounds.height / height)
+    content_width = max(1, min(bounds.width, round(width * scale)))
+    content_height = max(1, min(bounds.height, round(height * scale)))
+    return ImageBounds(
+        x=bounds.x + (bounds.width - content_width) // 2,
+        y=bounds.y + (bounds.height - content_height) // 2,
+        width=content_width,
+        height=content_height,
+    )
+
+
 def find_publish_note_preview_image_bounds(page_source: str) -> ImageBounds | None:
     if not page_source or "发布笔记" not in page_source:
         return None

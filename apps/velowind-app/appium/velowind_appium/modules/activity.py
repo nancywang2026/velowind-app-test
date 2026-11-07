@@ -1745,7 +1745,7 @@ def _add_itinerary_segment(driver: WebDriver) -> bool:
 
 
 def _tap_add_itinerary_segment_from_source(driver: WebDriver, page_source: str) -> bool:
-    """Tap the same last visible iOS 30x30 add control without a remote XPath query."""
+    """Find the add row after an itinerary field group, then use legacy geometry."""
     if "<XCUIElementType" not in page_source:
         return False
     try:
@@ -1754,7 +1754,33 @@ def _tap_add_itinerary_segment_from_source(driver: WebDriver, page_source: str) 
         return False
 
     candidates = []
+    for section in root.iter("XCUIElementTypeOther"):
+        children = list(section)
+        if section.get("visible") == "false" or len(children) < 2:
+            continue
+        field_group = children[0]
+        while len(field_group) == 1 and field_group[0].tag == "XCUIElementTypeOther":
+            field_group = field_group[0]
+        fields = list(field_group)
+        if len(fields) != 3:
+            continue
+        if not (len(list(fields[0].iter("XCUIElementTypeTextField"))) == 1
+                and len(list(fields[1].iter("XCUIElementTypeTextField"))) == 1
+                and len(list(fields[2].iter("XCUIElementTypeTextView"))) == 1):
+            continue
+        controls = list(children[1])
+        if len(controls) != 1 or children[1].get("visible") == "false":
+            continue
+        control = controls[0]
+        if control.tag != "XCUIElementTypeOther" or control.get("visible") != "true":
+            continue
+        rect = _ios_rect_from_attrs(control.attrib)
+        if rect is not None and float(rect["width"]) > 0 and float(rect["height"]) > 0:
+            candidates.append((float(rect["y"]), float(rect["x"]), float(rect["width"]), float(rect["height"])))
+    structural_candidates = bool(candidates)
     for element in root.iter():
+        if structural_candidates:
+            break
         if element.tag.rsplit("}", 1)[-1] != "XCUIElementTypeOther":
             continue
         if element.attrib.get("visible") != "true":
@@ -1769,7 +1795,7 @@ def _tap_add_itinerary_segment_from_source(driver: WebDriver, page_source: str) 
             y = float(rect["y"])
         except (KeyError, TypeError, ValueError):
             continue
-        if round(width) == 30 and round(height) == 30:
+        if 29 <= round(width) <= 31 and 29 <= round(height) <= 31:
             candidates.append((y, x, width, height))
     if not candidates:
         return False
@@ -1788,7 +1814,8 @@ def _tap_add_itinerary_segment_from_source(driver: WebDriver, page_source: str) 
 def _find_add_itinerary_segment_button(driver: WebDriver):
     buttons = []
     for xpath in [
-        '//XCUIElementTypeOther[@width="30" and @height="30"]',
+        '//XCUIElementTypeOther[(@width="29" or @width="30" or @width="31") '
+        'and (@height="29" or @height="30" or @height="31")]',
         "//android.view.ViewGroup[com.horcrux.svg.SvgView]",
     ]:
         try:

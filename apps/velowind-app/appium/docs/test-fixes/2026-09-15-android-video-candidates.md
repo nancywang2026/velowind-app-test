@@ -4,7 +4,7 @@
 
 - 用例：`test_four_home_videos_play_normally`，Android 真机 `4ea581b6`。
 - App：1.2.6，versionCode 32，安装更新时间 2026-09-15 14:03:01。
-- 当前状态：2026-09-20 第 3 轮 Android 真机目标用例通过，两个不同视频播放通过；整套未验证。第 1 轮失败事实保留如下。
+- 当前状态：2026-10-27 第4轮复发1/2，已补受控滚动并在探针中找到2个候选，235项联合单元通过；完整播放复验因真机离线未执行完成。2026-09-20历史真机通过保留，不能代表本轮；整套未验证。
 - 历史：iOS 首页视频记录要求摄像头标识及四个不同视频，仍保留该要求；原 Android 初始化问题另见 `2026-09-15-android-hidden-api.md`。
 
 ## 失败证据
@@ -80,3 +80,42 @@ VW_APPIUM_PLATFORM=android VW_ANDROID_TARGET=physical VW_ANDROID_UDID=YHK7EERSGA
 - 清理：无发布或新增业务数据，无业务数据清理需求；目标用例结束，fixture 完成会话释放。
 - 本轮无失败修改尝试；旧失败报告和未暴露 badge 的事实保留。
 - 已完成：Android 密度适配、截图识别、真实样本回归、目标真机播放验证。未验证：整套、其他 Android 密度设备及 iOS 真机回归；原 iOS 离线回归包含在 46 项通过结果中。
+
+## 第 4 轮：2026-10-27 登录准备修复后出现1/2
+
+- 用户原报告55083为环境登录 setup 失败，见 [Android 环境登录准备](2026-10-27-android-environment-login.md)，不是本条历史0/2的直接复发。补齐登录兼容后 run `20261027-android-environment-login-r3` 到达真实视频步骤。
+- 真机 YHK7EERSGAPZX87X / Android16 / 实际App1.2.8(code39)，prod凭据 App 登录成功；r3 **1 failed / 24 deselected / 152.04秒**。首个视频 `pst-e6bba5694f2f4c52830634bb86b81947` 播放passed，随后21屏扫描没有找到第二个不同视频，完整断言失败。
+- 报告/原始结果 `.tmp/appium-android/runs/20261027-android-environment-login-r3/{allure-report,allure-results}/`；逐屏PNG/XML位于该run `artifacts/home-video-playback-*/feed-page-*`，诊断附件 `f8ada3bb-02d6-4029-ad69-9717c62e5e6a-attachment.txt`。
+- 已确认逐屏候选仅page0有1个，其他屏空；最后一屏显示已到底。不能从最后图片屏断言全部数据仅1个视频。
+- 新观察：前几屏每屏6–8张卡片，page1与前屏重叠2张，page2–7与前屏均0重叠。Android compatibility将 mobile:swipe映射为未指定speed的 swipeGesture，可能惯性跨过部分卡片角标；这是待验证推测，尚未修改或认定是原因。
+- 设备无其他pytest，启动只读受控滚动探针：同一登录环境/首页，用scrollGesture小步慢速滚动，每屏截图/XML及候选留证，目录 `.tmp/appium-android/runs/20261027-video-scroll-investigation/`。不新增业务数据，不降低目标数量，不用探针代替最终播放断言。
+- 下一步：比较慢速连续扫描是否能找到原规则识别的第二个视频；如果不能，继续区分数据与识别问题。完整原目标目前仍失败，未清理事项不涉及新增。
+
+### 第 4 轮滚动探针首次无效
+
+- 首探针调用 ensure_read_session_on_home 后未显式选择笔记Tab，重启App实际默认活动Tab；截图确认扫描的是活动列表，12屏无笔记卡片ID，不能用于比较视频数量/手势覆盖。此探针未提交业务数据，正常quit。
+- 重做探针目录 `20261027-video-scroll-investigation-r2`，显式点击 bottom-nav-home，并断言真实笔记 feed 的 `post-home-feed-category-scroll` 存在后才扫描。前次无效探针保留，未据此认定数据不足。
+
+### 第 4 轮对照证据与修改
+
+- 修正后的只读探针：page0找到原视频；小步滚动后的page3找到第二个不同视频 `pst-c4a25e7b6d104f409fabdd2f67fa6d7b`。使用原 visible_home_videos / 摄像头识别规则，未改候选条件。原r3的21屏XML中完全没有这个postId，支持原手势跳过卡片的判断，不能归因为生产首页仅1个视频。
+- 对照参数：scrollGesture，扫描区域top=17%窗口高度/height=70%，percent=.55，speed=1000像素/秒；每页保留截图/XML。探针未打开/播放第二个视频，只证实候选可发现；完整播放仍需用例验证。
+- 修改 `home_video_playback.py::verify_four_home_videos`：仅 Android 扫描使用该受控 scrollGesture；iOS原手势保留。全局 swipe compatibility不变，避免影响其他模块。
+- 新增 Android 完整扫描流程单元：两个不同页面视频必须分别播放检查，使用重叠scroll而非默认fling；原不同ID、图片排除、数量、错误及播放阈值断言保留。
+- 本轮联合单元及完整目标真机待补；不将候选探针当成播放通过。
+
+### 第 4 轮最终复验进度
+
+```bash
+VW_APPIUM_AUTO_OPEN_REPORT=0 PYTHONPATH=apps/velowind-app/appium .venv/bin/python -m pytest apps/velowind-app/appium/tests/unit-test/test_environment_login.py apps/velowind-app/appium/tests/unit-test/test_auth.py apps/velowind-app/appium/tests/unit-test/test_session_setup.py apps/velowind-app/appium/tests/unit-test/test_home_video_playback.py -q --tb=short
+```
+
+- **235 passed / 18.64 秒**，`git diff --check` 通过；既有 LibreSSL warning。覆盖登录、会话、视频候选和播放阈值。
+- 探针及前序 pytest 已结束，按 [Android登录记录](2026-10-27-android-environment-login.md) 第1轮完整suite定向命令启动 `20261027-android-environment-login-r4`，run/artifact ID对应改r4；不设置 VW_HOME_VIDEO_COUNT，不降低默认2个目标。
+- 真实完整用例运行中，未提前计通过；整套、其他设备未复验。没有新增业务数据，无发布/删除清理步骤。
+
+### 第 4 轮完整复验被设备离线阻断
+
+- `20261027-android-environment-login-r4` 在 pnpm preflight 即失败：`Configured Android device is not online: YHK7EERSGAPZX87X`，没有进入 pytest、没有创建新 Appium 会话，不能计为真机失败断言或通过。
+- 此前已完成235项单元、慢速连续扫描发现2个不同视频；修改后完整播放/目标用例尚未验证。原r3只有1个视频播放通过，不能将候选探针补为第2个播放结果。
+- 当前阻塞为物理设备离线，待设备恢复后用同命令新run复验；不结束任何既有Appium/adb服务。无新增业务数据或待删除目标。

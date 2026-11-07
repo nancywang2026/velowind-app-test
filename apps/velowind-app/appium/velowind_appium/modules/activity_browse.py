@@ -206,7 +206,9 @@ def switch_activity_category_navigation(driver: WebDriver, timeout: int = 10) ->
     end_at = time.monotonic() + timeout
     while time.monotonic() < end_at:
         page_source = _safe_page_source(driver)
-        if "全部活动" in page_source and any(text in page_source for text in ACTIVITY_CATEGORY_TEXTS):
+        if ("全部活动" in page_source or "全部" in _extract_texts(page_source, visible_only=True)) and any(
+            text in page_source for text in ACTIVITY_CATEGORY_TEXTS[1:]
+        ):
             return
         time.sleep(0.2)
     raise AssertionError("Unable to find the activity category navigation")

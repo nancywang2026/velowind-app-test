@@ -1,0 +1,250 @@
+{
+  "name": "私聊测试：3条未读、5条消息、置顶隐藏、笔记活动分享",
+  "export_sha256": "571c69d80076bb3663f5c2f2e59e25b8ceffa42992513aa85f3bdb39e7388f0e",
+  "requests": [
+    {
+      "folder": "01 登录三个普通用户（步骤1及测试准备）",
+      "name": "用户A手机号密码登录",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/auth/login/phone/password",
+      "actor": "anonymous",
+      "body": {
+        "phone": "{{phone_a}}",
+        "password": "{{password_a}}"
+      }
+    },
+    {
+      "folder": "01 登录三个普通用户（步骤1及测试准备）",
+      "name": "用户B手机号密码登录",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/auth/login/phone/password",
+      "actor": "anonymous",
+      "body": {
+        "phone": "{{phone_b}}",
+        "password": "{{password_b}}"
+      }
+    },
+    {
+      "folder": "01 登录三个普通用户（步骤1及测试准备）",
+      "name": "用户C手机号密码登录",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/auth/login/phone/password",
+      "actor": "anonymous",
+      "body": {
+        "phone": "{{phone_c}}",
+        "password": "{{password_c}}"
+      }
+    },
+    {
+      "folder": "02 A关注B（步骤2）",
+      "name": "A关注B",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/user-follows",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "targetUserId": "{{user_id_b}}"
+      }
+    },
+    {
+      "folder": "03 记录B未读基线，A连续发送3条（步骤3–4）",
+      "name": "B查询私聊列表，记录A会话未读基线",
+      "method": "GET",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations",
+      "actor": "Bearer {{access_token_b}}",
+      "body": null
+    },
+    {
+      "folder": "03 记录B未读基线，A连续发送3条（步骤3–4）",
+      "name": "A→B 第1/3条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_b}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "未读测试 A→B 第1/3条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "03 记录B未读基线，A连续发送3条（步骤3–4）",
+      "name": "A→B 第2/3条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_b}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "未读测试 A→B 第2/3条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "03 记录B未读基线，A连续发送3条（步骤3–4）",
+      "name": "A→B 第3/3条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_b}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "未读测试 A→B 第3/3条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "05 B私聊列表应显示3条未读（步骤5）",
+      "name": "B查看列表：A会话unreadCount预期3",
+      "method": "GET",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations",
+      "actor": "Bearer {{access_token_b}}",
+      "body": null
+    },
+    {
+      "folder": "06 A与C发起私聊，发送5条（步骤6）",
+      "name": "A→C 第1/5条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_c}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "私聊测试 A→C 第1/5条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "06 A与C发起私聊，发送5条（步骤6）",
+      "name": "A→C 第2/5条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_c}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "私聊测试 A→C 第2/5条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "06 A与C发起私聊，发送5条（步骤6）",
+      "name": "A→C 第3/5条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_c}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "私聊测试 A→C 第3/5条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "06 A与C发起私聊，发送5条（步骤6）",
+      "name": "A→C 第4/5条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_c}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "私聊测试 A→C 第4/5条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "06 A与C发起私聊，发送5条（步骤6）",
+      "name": "A→C 第5/5条消息",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_c}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "私聊测试 A→C 第5/5条消息",
+        "clientMessageId": "{{request_id}}"
+      }
+    },
+    {
+      "folder": "07 A置顶与C的会话（步骤7）",
+      "name": "A置顶C",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_c}}/pin",
+      "actor": "Bearer {{access_token_a}}",
+      "body": null
+    },
+    {
+      "folder": "07 A置顶与C的会话（步骤7）",
+      "name": "A查看列表确认C置顶",
+      "method": "GET",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations",
+      "actor": "Bearer {{access_token_a}}",
+      "body": null
+    },
+    {
+      "folder": "08 A隐藏与B的会话（步骤8）",
+      "name": "A隐藏B",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_b}}/hide",
+      "actor": "Bearer {{access_token_a}}",
+      "body": null
+    },
+    {
+      "folder": "08 A隐藏与B的会话（步骤8）",
+      "name": "A查看列表确认B已隐藏",
+      "method": "GET",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations",
+      "actor": "Bearer {{access_token_a}}",
+      "body": null
+    },
+    {
+      "folder": "09 A分享笔记给B（步骤9）",
+      "name": "A→B 分享笔记卡片",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_b}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "分享一篇笔记给你",
+        "clientMessageId": "{{request_id}}",
+        "context": {
+          "contextType": "POST",
+          "bizType": "POST",
+          "bizId": "{{post_id}}"
+        }
+      }
+    },
+    {
+      "folder": "10 A分享活动给C（步骤10）",
+      "name": "A→C 分享活动卡片",
+      "method": "POST",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_c}}/messages",
+      "actor": "Bearer {{access_token_a}}",
+      "body": {
+        "contentType": "TEXT",
+        "content": "分享一个活动给你",
+        "clientMessageId": "{{request_id}}",
+        "context": {
+          "contextType": "ACTIVITY",
+          "bizId": "{{activity_id}}"
+        }
+      }
+    },
+    {
+      "folder": "10 A分享活动给C（步骤10）",
+      "name": "A最终查看会话列表",
+      "method": "GET",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations",
+      "actor": "Bearer {{access_token_a}}",
+      "body": null
+    },
+    {
+      "folder": "11 B/C分别查看与A的私信，确认分享卡片",
+      "name": "11.1 用户B查看与A的私信：确认分享的笔记",
+      "method": "GET",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_a}}/messages?pageSize=50",
+      "actor": "Bearer {{access_token_b}}",
+      "body": null
+    },
+    {
+      "folder": "11 B/C分别查看与A的私信，确认分享卡片",
+      "name": "11.2 用户C查看与A的私信：确认分享的活动",
+      "method": "GET",
+      "url": "{{base_url}}/api/v1/mobile/message-center/private-conversations/{{user_id_a}}/messages?pageSize=50",
+      "actor": "Bearer {{access_token_c}}",
+      "body": null
+    }
+  ]
+}

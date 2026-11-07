@@ -1,0 +1,3 @@
+data/*.local.json
+*.postman_environment.json
+.tmp/

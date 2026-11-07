@@ -171,6 +171,14 @@ def test_ios_json_source_can_be_disabled_without_changing_idle_wait(monkeypatch)
     assert capabilities["appium:waitForIdleTimeout"] == 0.2
 
 
+def test_ios_snapshot_depth_supports_nested_activity_cards(monkeypatch):
+    monkeypatch.setenv("VW_IOS_UDID", "test-device")
+    monkeypatch.delenv("VW_IOS_SNAPSHOT_MAX_DEPTH", raising=False)
+    assert build_ios_capabilities(load_ios_config())["appium:settings[snapshotMaxDepth]"] == 60
+    monkeypatch.setenv("VW_IOS_SNAPSHOT_MAX_DEPTH", "100")
+    assert build_ios_capabilities(load_ios_config())["appium:settings[snapshotMaxDepth]"] == 100
+
+
 def test_build_ios_capabilities_uses_app_path_when_provided(monkeypatch):
     monkeypatch.setenv("VW_IOS_UDID", "device-001")
     monkeypatch.setenv("VW_IOS_APP", "/tmp/VeloWind.app")

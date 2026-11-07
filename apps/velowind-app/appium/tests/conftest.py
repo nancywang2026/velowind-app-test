@@ -73,12 +73,27 @@ def create_test_driver(config):
 def driver(ios_config):
     with profile_section("driver.create", emit=_progress):
         app_driver = create_test_driver(ios_config)
-    yield app_driver
     try:
-        with profile_section("driver.quit", emit=_progress):
-            app_driver.quit()
-    except (InvalidSessionIdException, WebDriverException):
-        pass
+        from velowind_appium.environment_login import detect_app_environment
+        selected = detect_app_environment(app_driver, ios_config)
+        if selected is not None:
+            artifacts = allure_artifacts(REPO_ROOT, _test_platform())
+            environment = build_allure_environment(_test_platform(), ios_config)
+            environment.update({"App Environment": selected.environment, "App API": selected.api_base_url})
+            write_allure_environment(artifacts.results, environment)
+        yield app_driver
+    except Exception:
+        try:
+            capture_and_attach_debug_artifacts(app_driver, ios_config.artifact_dir, label="app-session-setup")
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            with profile_section("driver.quit", emit=_progress):
+                app_driver.quit()
+        except (InvalidSessionIdException, WebDriverException):
+            pass
 
 
 def prepare_logged_in_session(driver, ios_config) -> bool:
@@ -180,7 +195,7 @@ def pytest_runtest_makereport(item, call):
         if outcome is None:
             outcome = "passed" if getattr(report, "passed", False) else "failed"
         _progress(f"CASE {str(outcome).upper()} {nodeid or getattr(item, 'name', '<unknown>')}")
-    if report.when != "call":
+    if report.when != "call" and not (report.when == "setup" and report.failed):
         return
 
     app_driver = item.funcargs.get("driver")
@@ -200,7 +215,8 @@ def pytest_runtest_makereport(item, call):
             attach_recorded_publish_note_image_validation_artifacts(app_driver)
         except Exception:
             pass
-        capture_and_attach_debug_artifacts(app_driver, ios_config.artifact_dir, label=item.name)
+        label = f"{item.name}-setup" if report.when == "setup" else item.name
+        capture_and_attach_debug_artifacts(app_driver, ios_config.artifact_dir, label=label)
 
 
 def pytest_sessionfinish(session, exitstatus):

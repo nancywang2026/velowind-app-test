@@ -14,6 +14,7 @@ TITLE = '测试笔记'
 @pytest.fixture(autouse=True)
 def cleanup_api_environment(monkeypatch):
     monkeypatch.setenv('VW_NOTE_CLEANUP_API_BASE_URL', 'https://production.example.test')
+    monkeypatch.delenv('VW_API_ENV', raising=False)
 
 
 def card(post_id=POST_ID):
@@ -56,6 +57,24 @@ def test_http_contract(monkeypatch):
     assert delete.full_url.endswith('/posts/' + POST_ID)
     assert delete.get_header('Authorization') == 'Bearer test-token'
     assert UUID(login.get_header('X-request-id')) != UUID(delete.get_header('X-request-id'))
+
+
+def test_detected_base_url_overrides_static_environment_and_redacts_password(monkeypatch):
+    calls, attachments = [], []
+    monkeypatch.setattr(api, 'attach_text', lambda name, body: attachments.append(body))
+    responses = iter([{'accessToken': 'secret-token'}, {'postId': POST_ID, 'deleted': True}])
+    class Response(io.StringIO):
+        status = 200
+        headers = {}
+    class Opener:
+        def open(self, request, timeout):
+            calls.append(request)
+            return Response(json.dumps({'code': 0, 'data': next(responses)}))
+    monkeypatch.setattr(api, 'build_opener', lambda *a: Opener())
+    api.delete_note_via_api(POST_ID, 'phone', 'secret-password', base_url='https://matched.example')
+    assert all(r.full_url.startswith('https://matched.example/api/v1/mobile/') for r in calls)
+    assert 'secret-password' not in ''.join(attachments)
+    assert 'secret-token' not in ''.join(attachments)
 
 
 @pytest.mark.parametrize('result', [{'code': 401, 'data': {}}, {'code': 0, 'data': None}, 'bad'])
@@ -230,7 +249,11 @@ def test_cleanup_api_base_url_reads_yaml(monkeypatch):
     assert cleanup_config.note_cleanup_api_base_url() == 'https://production.example.test/api/v1/mobile'
 
 
-@pytest.mark.parametrize('environment,host', [('uat', 'https://uat-api.velowind.com'), ('prod', 'https://prod-api.velowind.com')])
+@pytest.mark.parametrize('environment,host', [
+    ('test', 'https://dev-api.velowind.com'),
+    ('uat', 'https://uat-api.velowind.com'),
+    ('prod', 'https://prod-api.velowind.com'),
+])
 def test_cleanup_environment_hosts(monkeypatch, environment, host):
     from velowind_appium import cleanup_config
     monkeypatch.delenv('VW_NOTE_CLEANUP_API_BASE_URL')
@@ -240,6 +263,19 @@ def test_cleanup_environment_hosts(monkeypatch, environment, host):
     assert cleanup_config.note_cleanup_api_base_url() == host + '/api/v1/mobile'
     monkeypatch.setenv('VW_' + environment.upper() + '_API_HOST', 'https://override.example.test')
     assert cleanup_config.note_cleanup_api_base_url() == 'https://override.example.test/api/v1/mobile'
+
+
+def test_explicit_environment_overrides_fixed_yaml_but_not_explicit_url(monkeypatch):
+    from velowind_appium import cleanup_config
+    monkeypatch.delenv('VW_NOTE_CLEANUP_API_BASE_URL')
+    monkeypatch.delenv('VW_TEST_API_HOST', raising=False)
+    monkeypatch.setenv('VW_API_ENV', 'test')
+    monkeypatch.setattr(cleanup_config, '_read_yaml_config', lambda: {
+        'cleanup': {'note_cleanup_api_base_url': 'https://uat-api.velowind.com'},
+    })
+    assert cleanup_config.note_cleanup_api_base_url() == 'https://dev-api.velowind.com/api/v1/mobile'
+    monkeypatch.setenv('VW_NOTE_CLEANUP_API_BASE_URL', 'https://explicit.example.test')
+    assert cleanup_config.note_cleanup_api_base_url() == 'https://explicit.example.test/api/v1/mobile'
 
 
 def test_cleanup_environment_defaults_to_uat_and_rejects_invalid_selection(monkeypatch):

@@ -167,6 +167,29 @@ def _note_card_rects_from_source(page_source: str) -> list[tuple[int, int, int, 
     if "<android." in page_source:
         return _android_note_card_rects_from_source(page_source)
 
+    try:
+        root = ElementTree.fromstring(page_source)
+    except ElementTree.ParseError:
+        root = None
+    identified_rects: set[tuple[int, int, int, int]] = set()
+
+    def visit(node):
+        if node.get("visible") == "false" or node.get("displayed") == "false":
+            return
+        if re.fullmatch(r"post-home-feed-note-card-[^\s]+", node.get("name", "")):
+            rect = _rect_from_attrs(node.attrib)
+            if rect is not None:
+                left, top, width, height = rect
+                if 0 <= left <= 430 and top >= 120 and 150 <= width <= 220 and 70 <= height <= 500:
+                    identified_rects.add(rect)
+        for child in node:
+            visit(child)
+
+    if root is not None:
+        visit(root)
+    if identified_rects:
+        return sorted(identified_rects, key=lambda item: (item[1], item[0]))
+
     rects: list[tuple[int, int, int, int]] = []
     for tag in re.findall(r"<XCUIElementTypeOther\b[^>]*>", page_source):
         attrs = _xml_tag_attrs(tag)

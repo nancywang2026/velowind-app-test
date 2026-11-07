@@ -10,21 +10,54 @@
 
 ## API 清理环境
 
-当前 `cleanup.yaml` 将清理 API 固定为 `https://uat-api.velowind.com`，与当前 UAT App 环境一致。`VW_API_ENV=uat` 是 UAT 的环境选择值；在未配置固定地址时，不指定它也默认 UAT。
+### 根据 App 登录自动识别环境
+
+设置 `VW_APPIUM_ENVIRONMENT_ACCOUNTS` 指向环境候选清单即可启用；格式见 [environment-accounts.example.yaml](environment-accounts.example.yaml)。每个候选提供 `api_base_url` 和含 `login.username/password` 的 `config_file`，相对配置路径按清单所在目录解析。至少配置两个环境，并使用可以区分环境的凭据。
 
 ```bash
-# 当前 UAT
-VW_API_ENV=uat pnpm appium:ios:test:profile publish
-# 临时切换到生产清理 API 时显式覆盖固定地址
-VW_NOTE_CLEANUP_API_BASE_URL=https://prod-api.velowind.com pnpm appium:ios:test:profile publish
+VW_APPIUM_ENVIRONMENT_ACCOUNTS="$PWD/.private/message-regression/app-environments.yaml" \
+pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-publish-note.yaml
 ```
 
-登录与删除共用清理 API 地址。`VW_NOTE_CLEANUP_API_BASE_URL` 的优先级高于
-`cleanup.yaml` 的 `note_cleanup_api_base_url`；配置了固定地址时，`VW_API_ENV`
-和 `VW_UAT_API_HOST` / `VW_PROD_API_HOST` 不会改变实际 host。移除固定地址后，
-`VW_API_ENV=uat|prod` 才会从对应 host 选择地址；未指定时默认 UAT。
+也可在 Appium YAML 中设置 `environment_login.candidates_file`，路径相对于运行目录；显式 `VW_APPIUM_ENVIRONMENT_ACCOUNTS` 优先。设置 `VW_API_ENV` 且未指定上述清单时，会自动读取仓库 `.private/message-regression/app-environments.yaml`（若存在），因此常规 `pnpm` suite 入口无需额外指定生产 Appium 配置文件。没有任何可用清单时沿用原静态配置行为。
+
+`VW_API_ENV=prod` 优先尝试生产账号，`VW_API_ENV=test` 优先尝试测试账号；首选被明确拒绝后，再按清单顺序尝试其余环境。未设置变量时按原清单顺序；设置了清单中不存在的环境时在登录前报错。该变量是尝试优先级，最终环境及删除地址仍由实际登录结果确认。
+
+每个 Appium 会话先退出已有登录态，按候选顺序各提交一次密码登录。明确的“密码错误”“用户不存在”“未设置密码”会继续下一组，切换前重新打开干净表单；设备错误、登录超时、未出现已登录个人页均直接失败。App 登录成功并确认已认证个人页后，立即绑定该候选环境及其 API 地址，不再请求其他环境进行核验。此识别方式依赖配置中各环境使用不同且能区分环境的凭据。
+
+匹配结果保存在当前 driver 会话，后续自动登录恢复使用匹配凭据，笔记 API 删除使用同一组用户名、密码及匹配地址，优先于静态 `VW_API_ENV` / 清理 host。发布后若登录匹配信息被替换，拒绝删除；新会话重新识别。Allure 保存候选拒绝/匹配结果和最终环境，自动识别及匹配清理的 API 附件隐藏密码与令牌。
+
+当前本地已放置默认清单，`VW_API_ENV=prod` 即可触发生产优先识别；清单与凭据保存在 Git 忽略的本地路径。Allure 的 `app-environment-login-order` 记录实际候选顺序，`note-cleanup-mode` 记录优先变量、静态 host 覆盖是否存在及匹配结果。
+
+### 手动选择环境
+
+当前生产真机使用独立本地配置 `ios-appium.prod.yaml`，其中包含 `device`、`login` 和 `cleanup`。该文件已加入 Git 忽略，需在 `login` 中填写有效生产凭据；默认保留 App 数据和照片授权（`no_reset: true`）。同时指定两个配置变量，使 UI 登录与 API 清理使用同一文件：
+
+```bash
+VW_APPIUM_CONFIG_FILE="$PWD/apps/velowind-app/appium/ios-appium.prod.yaml" \
+VW_APPIUM_CLEANUP_CONFIG_FILE="$PWD/apps/velowind-app/appium/ios-appium.prod.yaml" \
+VW_API_ENV=prod pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-publish-note.yaml
+```
+
+若使用另一个已有配置文件，将上述两个变量设为其绝对路径；该文件需包含 `login`、设备配置和 `cleanup`。已有 `VW_LOGIN_USERNAME` / `VW_LOGIN_PASSWORD` 环境变量仍优先于文件中的登录配置。
+
+`VW_API_ENV=test` 使用测试环境 `https://dev-api.velowind.com`，`uat` 使用 UAT，`prod` 使用生产环境。当前真机 App 已确认为生产环境，`cleanup.yaml` 默认使用生产环境；未指定环境且 YAML 未配置地址时才回退到 UAT。
+
+```bash
+# 测试环境
+VW_API_ENV=test pnpm appium:ios:test:profile publish
+# UAT
+VW_API_ENV=uat pnpm appium:ios:test:profile publish
+# 生产
+VW_API_ENV=prod pnpm appium:ios:test:profile publish
+```
+
+未启用自动识别时，登录与删除共用清理 API 地址，优先级为 `VW_NOTE_CLEANUP_API_BASE_URL` →
+显式 `VW_API_ENV=test|uat|prod` → `cleanup.yaml` 的 `note_cleanup_api_base_url` → UAT 默认地址。
+各环境可分别通过 `VW_TEST_API_HOST` / `VW_UAT_API_HOST` / `VW_PROD_API_HOST` 覆盖 host。
 地址支持 HTTPS origin 或带 `/api/v1/mobile` 的完整基础路径。
 环境变量只决定测试脚本的 API 请求地址，不切换已安装 App 的后端，请与 App 实际环境保持一致。
+活动搜索默认按当前测试数据的地点“上海”验证，可通过 `VW_ACTIVITY_SEARCH_KEYWORD` 指定已有活动的标题或地点；用例仍要求返回匹配结果。
 Allure API 子步骤包含 request / response；按当前调试要求登录 request 显示用户名和明文密码，token / cookie 脱敏。
 
 ## 环境准备
@@ -474,6 +507,20 @@ iOS P1 的 13 条用例基线、笔记正文定位优化、两轮真机验证及
 ### iOS P1 执行效率
 
 iOS 默认 `waitForIdleTimeout=0.2` 秒、`animationCoolOffTimeout=0.2` 秒。
+iOS 页面快照默认 `snapshotMaxDepth=60`，避免新版活动列表在第 50 层被截断；可用 `VW_IOS_SNAPSHOT_MAX_DEPTH` 调整。
 笔记提交及图片/视频校验阶段临时使用至少 1 秒空闲等待，并在成功或异常后恢复原值；业务轮询、媒体比对、测试内容与清理逻辑保持原配置。
 可通过 `VW_IOS_WAIT_FOR_IDLE_TIMEOUT=1.0 VW_IOS_ANIMATION_COOL_OFF_TIMEOUT=2.0` 恢复本轮优化前的驱动等待参数。
 完整 13 条真机 P1 的耗时、逐步骤基线、失败候选及默认命令复跑结果见 [少于 30 分钟优化记录](../../../benchmarks/appium/20260910-ios-under30/README.md)。
+
+### 消息独立运行器的 Allure 报告
+
+`message_regression` 的 `LiveRun.save()` 自动在每轮输出目录写入 `allure-results/`，保留失败和阻断状态；运行中的检查不计为通过。新运行记录真实毫秒起止时间。HTML 生成使用安装的 Allure CLI；不会触发测试重跑：
+
+```bash
+PYTHONPATH=apps/velowind-app/appium .venv/bin/python -m velowind_appium.message_regression.allure_report \
+  --input <单份live-results.json或包含各suite的目录> \
+  --results <本轮allure-results目录> --report <本轮allure-report目录>
+allure open <本轮allure-report目录>
+```
+
+每轮使用独立结果目录，避免混入其他运行。导入旧记录时不补造绝对时间，耗时显示在参数中；XML 为实际存在的分组快照，不冒充逐步骤截图。

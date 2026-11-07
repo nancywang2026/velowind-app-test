@@ -55,7 +55,16 @@ def cleanup_published_note(driver: WebDriver, title: str, app_config) -> Cleanup
     mode = note_cleanup_mode()
     if mode not in {"ui", "api"}:
         raise ValueError("VW_NOTE_CLEANUP_MODE must be ui or api")
-    attach_text("note-cleanup-mode", f"mode={mode}\nVW_NOTE_CLEANUP_MODE={os.environ.get('VW_NOTE_CLEANUP_MODE', '<unset>')}\nmodule={__file__}")
+    selected = getattr(driver, "_environment_login_selection", None)
+    attach_text("note-cleanup-mode", "\n".join([
+        f"mode={mode}",
+        f"VW_NOTE_CLEANUP_MODE={os.environ.get('VW_NOTE_CLEANUP_MODE', '<unset>')}",
+        f"VW_API_ENV={os.environ.get('VW_API_ENV', '<unset>')}",
+        f"static_api_override_present={'VW_NOTE_CLEANUP_API_BASE_URL' in os.environ}",
+        f"matched_environment={selected.environment if selected else '<none>'}",
+        f"matched_api={selected.api_base_url if selected else '<none>'}",
+        f"module={__file__}",
+    ]))
     print(f"[note-cleanup] mode={mode}", flush=True)
     if mode == "api":
         return cleanup_published_note_via_api(driver, title, app_config)
@@ -91,7 +100,15 @@ def cleanup_published_note_via_api(driver, title: str, app_config) -> CleanupRep
     if title not in (publication["requested_title"], publication["published_title"]):
         raise NoteCleanupApiError("Saved postId belongs to a different publication")
     if not publication.get("deleted"):
-        delete_note_via_api(publication["post_id"], app_config.login_username, app_config.login_password)
+        selected = getattr(driver, "_environment_login_selection", None)
+        bound = getattr(driver, "_api_note_publication_login", None)
+        if selected != bound:
+            raise NoteCleanupApiError("App login changed after publication; refusing cleanup")
+        if selected is not None:
+            delete_note_via_api(publication["post_id"], selected.username, selected.password,
+                                base_url=selected.api_base_url)
+        else:
+            delete_note_via_api(publication["post_id"], app_config.login_username, app_config.login_password)
         publication["deleted"] = True
     return CleanupReport("note", [title], [])
 

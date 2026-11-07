@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from velowind_appium.modules import (
@@ -29,7 +31,7 @@ from velowind_appium.session import (
 
 
 ACTIVITY_CATEGORY = "骑行"
-ACTIVITY_SEARCH_KEYWORD = "张家界"
+ACTIVITY_SEARCH_KEYWORD = os.environ.get("VW_ACTIVITY_SEARCH_KEYWORD", "上海")
 
 
 def _open_signup_available_activity_detail_or_skip(driver, step) -> None:
@@ -136,8 +138,7 @@ def test_user_can_fill_activity_signup_identity_fields(driver, ios_config, step)
     )
 
 
-@pytest.mark.full
-def test_user_can_submit_activity_signup_to_payment_page(driver, ios_config, step):
+def run_activity_signup_case(driver, ios_config, step, *, notification_observer=None):
     draft = build_activity_signup_draft()
     dismiss_common_system_alerts(driver, step)
 
@@ -149,12 +150,25 @@ def test_user_can_submit_activity_signup_to_payment_page(driver, ios_config, ste
     step("fill-activity-signup", lambda: fill_activity_signup_form(driver, draft, timeout=20), capture=True)
     if "已经报名，无需重复报名" in driver.page_source:
         pytest.skip("The current account already has an activity signup for this session")
+    if notification_observer is not None:
+        step("capture-activity-signup-notification-baseline", notification_observer.before_business)
     try:
-        snapshot = step("submit-activity-signup-order", lambda: submit_activity_signup_order(driver, timeout=25), capture=True)
-    except ActivitySignupAlreadyExistsError as error:
-        pytest.skip(str(error))
+        try:
+            snapshot = step("submit-activity-signup-order", lambda: submit_activity_signup_order(driver, timeout=25), capture=True)
+        except ActivitySignupAlreadyExistsError as error:
+            pytest.skip(str(error))
+        assert snapshot.is_order_submission_complete(), f"Expected signup submission to reach payment/order page, got: {snapshot}"
+        if notification_observer is not None:
+            step("verify-activity-signup-and-ending-notifications", lambda: notification_observer.after_signup(driver, ios_config, snapshot))
+        return snapshot
+    finally:
+        if notification_observer is not None:
+            step("cleanup-current-activity-signup", notification_observer.cleanup)
 
-    assert snapshot.is_order_submission_complete(), f"Expected signup submission to reach payment/order page, got: {snapshot}"
+
+@pytest.mark.full
+def test_user_can_submit_activity_signup_to_payment_page(driver, ios_config, step):
+    run_activity_signup_case(driver, ios_config, step)
 
 
 @pytest.mark.full

@@ -1,0 +1,7 @@
+{"values":[
+ {"key":"base_url","value":"http://127.0.0.1"},
+ {"key":"phone_a","value":"test-phone-a"}, {"key":"password_a","value":"test-password-a"},
+ {"key":"phone_b","value":"test-phone-b"}, {"key":"password_b","value":"test-password-b"},
+ {"key":"phone_c","value":"test-phone-c"}, {"key":"password_c","value":"test-password-c"},
+ {"key":"post_id","value":"test-post"}, {"key":"activity_id","value":"test-activity"}
+]}

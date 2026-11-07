@@ -97,6 +97,44 @@ def test_repeated_video_does_not_fill_four_samples(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
+def test_android_scans_next_video_with_overlapping_scroll_instead_of_fling(monkeypatch, tmp_path):
+    gestures, checked = [], []
+    class Driver:
+        capabilities = {"platformName": "Android"}
+        page, detail = 0, False
+
+        @property
+        def page_source(self):
+            return DETAIL.format('') if self.detail else '<root name="post-home-feed-category-pager">' + badge(str(self.page)) + '</root>'
+
+        def get_window_size(self):
+            return {"width": 400, "height": 800}
+
+        def get_display_density(self):
+            return 160
+
+        def get_screenshot_as_png(self):
+            return frame_png(0, 'static')
+
+        def execute_script(self, script, payload):
+            if script == 'mobile: tap':
+                self.detail = True
+            else:
+                assert script == 'mobile: scrollGesture'
+                assert payload['direction'] == 'down' and payload['percent'] < 1
+                assert payload['speed'] == 1000
+                gestures.append(script)
+                self.page += 1
+    driver = Driver()
+    monkeypatch.setattr(playback, 'wait_for_home_feed', lambda *a, **k: None)
+    monkeypatch.setattr(playback, 'safe_back', lambda d: setattr(d, 'detail', False))
+    monkeypatch.setattr(playback, 'swipe_vertical', lambda *a, **k: pytest.fail('Android scan must not fling over cards'))
+    monkeypatch.setattr(playback.time, 'sleep', lambda *a: None)
+    monkeypatch.setattr(playback, 'check_video_playback', lambda d, *a: checked.append(d.page))
+    playback.verify_four_home_videos(driver, tmp_path, video_count=2, max_swipes=1)
+    assert checked == [0, 1] and gestures == ['mobile: scrollGesture']
+
+
 def frame_png(index, mode):
     frame = Image.new('RGB', (200, 200), 'black' if mode == 'black' else '#446688')
     if mode != 'black':
@@ -220,6 +258,11 @@ def test_camera_recognition_from_real_device_corners(name, expected):
 @pytest.mark.parametrize('color', ['white', 'black', '#777777'])
 def test_solid_corner_is_not_camera(color):
     assert camera_outline_position(Image.new('RGB', (126, 126), color)) is None
+
+
+def test_camera_recognition_from_130_device_corner():
+    with Image.open(Path(__file__).parent / 'fixtures/home_camera/video-130.png') as corner:
+        assert camera_outline_position(corner) is not None
 
 
 @pytest.mark.parametrize('scale', [2, 3])

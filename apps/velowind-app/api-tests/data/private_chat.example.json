@@ -1,0 +1,48 @@
+{
+  "base_url": "https://dev-api.velowind.com",
+  "accounts": {
+    "a": {
+      "phone": "13381509990",
+      "password": "12345678"
+    },
+    "b": {
+      "phone": "17721152557",
+      "password": "12345678"
+    },
+    "c": {
+      "phone": "18101606084",
+      "password": "12345678"
+    }
+  },
+  "resources": {
+    "post_id": "pst-4b7e9b3a0b044fca8d4a3626aa77aa8f",
+    "activity_id": "route-992391bc5408456e97b9e5d144c42701"
+  },
+  "messages": {
+    "to_b": {
+      "count": 3,
+      "template": "[{run_id}] 未读测试 A→B 第{index}/{count}条消息"
+    },
+    "to_c": {
+      "count": 5,
+      "template": "[{run_id}] 私聊测试 A→C 第{index}/{count}条消息"
+    },
+    "post_share": "[{run_id}] 分享一篇笔记给你",
+    "activity_share": "[{run_id}] 分享一个活动给你"
+  },
+  "expected": {
+    "baseline_unread_b": 0,
+    "unread_b": 3,
+    "unread_delta_b": 3
+  },
+  "execution": {
+    "http_timeout_seconds": 15,
+    "request_interval_seconds": 0.2,
+    "page_size": 50,
+    "max_pages": 20,
+    "send_interval_seconds": 21
+  },
+  "preparation": {
+    "mark_b_history_read": true
+  }
+}

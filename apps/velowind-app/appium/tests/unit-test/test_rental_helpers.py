@@ -383,6 +383,19 @@ def test_wait_for_store_selected_checks_final_state_after_timeout(monkeypatch):
     assert rental_store._wait_for_store_selected(driver, timeout=5) is True
 
 
+def test_store_picker_selects_actual_visible_name_without_hardcoded_store(monkeypatch):
+    source = '''<root>
+      <XCUIElementTypeStaticText name="请选择服务门店" visible="true"/>
+      <node visible="false"><XCUIElementTypeStaticText name="隐藏店"/></node>
+      <XCUIElementTypeStaticText name="上海徐汇店" visible="true"/>
+      <XCUIElementTypeStaticText name="上海市人民公园" visible="true"/>
+    </root>'''
+    taps = []
+    monkeypatch.setattr(rental_store, "tap_visible_text_hit_point", lambda driver, texts, timeout: taps.append(texts) or True)
+    assert rental_store._tap_first_visible_store_option(object(), source) is True
+    assert taps == [["上海徐汇店"]]
+
+
 def test_choose_first_store_opens_store_picker_before_tapping_first_store(monkeypatch):
     driver = _FakeRentalDriver("租车 服务门店 上海市 请选择服务门店 立即选车")
     events = []

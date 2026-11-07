@@ -113,3 +113,15 @@ VW_API_ENV=prod VW_IOS_TARGET=device VW_APPIUM_RUN_ID=20260920-prod-cleanup-fix 
 - 已完成用户要求的目标用例生产真机验证。后续运行示例：`VW_API_ENV=prod pnpm appium:ios:test:profile publish`；不指定 VW_API_ENV 默认 UAT。host 可用 VW_UAT_API_HOST、VW_PROD_API_HOST 分别覆盖。
 
 - 新报告临时入口：<http://127.0.0.1:56290/>（本地报告服务存续期间有效）。
+
+## 第 7 轮：当前 App 改为 UAT，显式固定清理 host（2026-09-30）
+
+- 用户要求：当前连接 UAT，将清理数据的 host 改为 `https://uat-api.velowind.com`；并确认 UAT 对应 `VW_API_ENV=uat`。
+- 现场证据：本轮进程的 `VW_API_ENV`、`VW_UAT_API_HOST`、`VW_PROD_API_HOST`、`VW_NOTE_CLEANUP_API_BASE_URL`、`VW_APPIUM_CLEANUP_CONFIG_FILE` 均未设置；修改前默认解析已指向 UAT。未发现新的登录或清理失败报告，因此本轮没有失败用例证据。
+- 已确认原因：默认 UAT 只依赖隐式选择；若启动进程显式设为 `VW_API_ENV=prod`，清理会指向生产。当前 App 环境已由用户确认为 UAT。未确认有正在运行的进程使用生产覆盖。
+- 修改：在 `cleanup.yaml` 显式设置 `cleanup.note_cleanup_api_base_url: https://uat-api.velowind.com`，让清理登录与删除固定使用 UAT；同步修正 Appium README 中的配置优先级与运行示例。`VW_NOTE_CLEANUP_API_BASE_URL` 仍可在运行时覆盖。
+- 无效尝试：无。本轮未复用历史生产环境验证结果作为 UAT 验证。
+- 验证命令与结果：`env -u VW_API_ENV -u VW_NOTE_CLEANUP_API_BASE_URL -u VW_UAT_API_HOST -u VW_PROD_API_HOST PYTHONPATH=apps/velowind-app/appium .venv/bin/python -c 'from velowind_appium.cleanup_config import note_cleanup_api_base_url; print(note_cleanup_api_base_url())'` 输出 `https://uat-api.velowind.com/api/v1/mobile`；`env -u VW_NOTE_CLEANUP_API_BASE_URL VW_API_ENV=prod PYTHONPATH=apps/velowind-app/appium .venv/bin/python -c 'from velowind_appium.cleanup_config import note_cleanup_api_base_url; print(note_cleanup_api_base_url())'` 仍输出同一 UAT 地址，确认 YAML 固定地址优先于环境选择。`VW_APPIUM_AUTO_OPEN_REPORT=0 PYTHONPATH=apps/velowind-app/appium .venv/bin/python -m pytest apps/velowind-app/appium/tests/unit-test/test_note_api_cleanup.py apps/velowind-app/appium/tests/unit-test/test_cleanup_config.py -q` 为 **39 passed、1 warning**；`git diff --check` 通过。
+- 报告目录：单元运行仅生成计时目录 `.tmp/appium-ios/runs/20260930-150530-97078/timing/`；本轮未运行真机用例，无 Allure 报告。
+- 用例断言：未执行；实际清理：未执行；真机验证：未执行。原第 6 轮的生产通过结果只适用于当时的生产环境。
+- 当前状态：配置解析与单元验证通过；UAT 真机清理未验证。若后续需要真机回归，先确认无其他 Appium / pytest 任务占用设备，再运行目标用例并分别检查断言与清理附件。本轮未检查设备进程，因为未启动真机验证。

@@ -1625,14 +1625,15 @@ def test_find_add_itinerary_segment_button_supports_android_view_group():
     assert activity._find_add_itinerary_segment_button(FakeDriver()) is add_button
 
 
-def test_add_itinerary_segment_taps_ios_add_control_from_existing_snapshot(monkeypatch):
+@pytest.mark.parametrize("width,height", [(30, 30), (31, 30), (30, 31)])
+def test_add_itinerary_segment_taps_ios_add_control_from_existing_snapshot(monkeypatch, width, height):
     taps = []
     sources = iter(
         [
-            """
+            f"""
             <AppiumAUT>
               <XCUIElementTypeTextField visible="true" placeholderValue="标题" />
-              <XCUIElementTypeOther visible="true" x="340" y="620" width="30" height="30" />
+              <XCUIElementTypeOther visible="true" x="340" y="620" width="{width}" height="{height}" />
             </AppiumAUT>
             """,
             """
@@ -1654,7 +1655,30 @@ def test_add_itinerary_segment_taps_ios_add_control_from_existing_snapshot(monke
     monkeypatch.setattr(activity, "_safe_page_source", lambda driver: next(sources))
 
     assert activity._add_itinerary_segment(FakeDriver()) is True
-    assert taps == [("mobile: tap", {"x": 355, "y": 635})]
+    assert taps == [("mobile: tap", {"x": int(340 + width / 2), "y": int(620 + height / 2)})]
+
+
+def test_itinerary_add_control_uses_field_group_structure_without_fixed_size():
+    source = '''<AppiumAUT><XCUIElementTypeOther visible="true">
+      <XCUIElementTypeOther><XCUIElementTypeOther><XCUIElementTypeOther>
+        <XCUIElementTypeOther><XCUIElementTypeTextField value="Day1"/></XCUIElementTypeOther>
+        <XCUIElementTypeOther><XCUIElementTypeTextField value="集合点"/></XCUIElementTypeOther>
+        <XCUIElementTypeOther><XCUIElementTypeTextView value="行程内容"/></XCUIElementTypeOther>
+      </XCUIElementTypeOther></XCUIElementTypeOther></XCUIElementTypeOther>
+      <XCUIElementTypeOther visible="true">
+        <XCUIElementTypeOther visible="true" x="346" y="361" width="36" height="28"/>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+    <XCUIElementTypeOther visible="true" x="346" y="700" width="30" height="30"/>
+    </AppiumAUT>'''
+    taps = []
+
+    class Driver:
+        def execute_script(self, script, payload):
+            taps.append(payload)
+
+    assert activity._tap_add_itinerary_segment_from_source(Driver(), source) is True
+    assert taps == [{"x": 364, "y": 375}]
 
 
 def test_count_itinerary_editor_sections_supports_android_title_fields():

@@ -37,7 +37,7 @@ def camera_outline_position(corner: Image.Image) -> tuple[float, float] | None:
         foreground = mask.histogram()[255]
         # Badge center is about 20 points from the cover's top and right edge.
         # Allow layout rounding and small device/font-scale differences.
-        for y in range(24, 65):
+        for y in range(16, 65):
             for x in range(24, 65):
                 patch = binary.crop((x, y, x + mask.width, y + mask.height))
                 count = patch.histogram()[255]

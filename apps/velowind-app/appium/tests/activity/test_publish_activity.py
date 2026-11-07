@@ -7,10 +7,16 @@ from velowind_appium.session import dismiss_common_system_alerts, ensure_logged_
 
 @pytest.mark.full
 def test_user_can_publish_activity_for_review(driver, ios_config, step):
+    run_publish_activity_case(driver, ios_config, step)
+
+
+def run_publish_activity_case(driver, ios_config, step, *, notification_observer=None):
     draft = build_activity_draft()
 
     dismiss_common_system_alerts(driver, step)
     step("prepare-home-session", lambda: ensure_logged_in_for_publish_entry(driver, ios_config))
+    if notification_observer is not None:
+        step("capture-activity-notification-baseline", notification_observer.before_business)
     success_signal = step(
         "publish-activity-for-review",
         lambda: publish_activity(driver, draft, ios_config=ios_config, timeout=90),
@@ -32,3 +38,6 @@ def test_user_can_publish_activity_for_review(driver, ios_config, step):
     assert any(token in success_signal for token in ["成功", "审核", "待审核", "我的活动"]), (
         f"Expected the publish flow to end in a success/review state, got: {success_signal}"
     )
+    if notification_observer is not None:
+        step("verify-activity-system-notification", lambda: notification_observer.after_publication(
+            driver, ios_config, draft, success_signal))

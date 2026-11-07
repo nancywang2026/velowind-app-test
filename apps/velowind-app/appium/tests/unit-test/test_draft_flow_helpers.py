@@ -82,3 +82,36 @@ def test_save_note_draft_flow_runs_expected_steps(monkeypatch):
         ("save-draft", 10),
         ("open-me", 12),
     ]
+
+
+def test_open_me_page_returns_from_detail_before_tapping_root_tab(monkeypatch):
+    events = []
+
+    class Driver:
+        page_source = "笔记详情"
+
+    driver = Driver()
+
+    def tap_me(current):
+        if current.page_source == "笔记详情":
+            events.append("tab-absent")
+            return False
+        events.append("tap-me")
+        current.page_source = "我的 编辑资料 草稿箱"
+        return True
+
+    def go_back(current):
+        events.append("back-to-tabs")
+        current.page_source = "笔记 活动 消息 我的"
+        return True
+
+    monkeypatch.setattr(draft_flow, "_tap_me_tab", tap_me)
+    monkeypatch.setattr(draft_flow, "_tap_note_editor_back", go_back)
+    monkeypatch.setattr(draft_flow.time, "sleep", lambda seconds: None)
+    draft_flow.open_me_page(driver)
+    assert events == ["tab-absent", "back-to-tabs", "tap-me"]
+
+
+def test_missing_me_tab_does_not_tap_detail_coordinates(monkeypatch):
+    monkeypatch.setattr(draft_flow, "tap_accessibility_id_or_text_if_present", lambda *args, **kwargs: False)
+    assert draft_flow._tap_me_tab(object()) is False

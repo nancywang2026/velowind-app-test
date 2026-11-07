@@ -383,6 +383,22 @@ def test_my_notes_list_visible_accepts_android_notes_tabs():
     assert message_detail._my_notes_list_visible("我的笔记 笔记 收藏 点赞") is True
 
 
+def test_my_notes_list_visible_accepts_ios_published_notes_tabs():
+    assert message_detail._my_notes_list_visible("我的笔记 我发的 收藏的 赞过的") is True
+    assert message_detail._my_notes_list_visible("我的 我的笔记 设置") is False
+
+
+@pytest.mark.parametrize('attribute', ['label', 'value'])
+def test_ios_published_detail_reads_title_text_instead_of_identifier(attribute):
+    source = f'<root><XCUIElementTypeOther name="post-detail-page"><XCUIElementTypeStaticText name="post-detail-title" {attribute}="2596f1eb-测试 - 长白山真的有" /></XCUIElementTypeOther></root>'
+    assert message_detail._ios_published_detail_title(source, '2596f1eb-测试 - 长白山真的有') == '2596f1eb-测试 - 长白山真的有'
+
+
+def test_ios_published_detail_rejects_target_title_only_in_body():
+    source = '<root><XCUIElementTypeOther name="post-detail-page"><XCUIElementTypeStaticText name="post-detail-title" label="另一篇笔记" /><XCUIElementTypeStaticText name="post-detail-body" label="2596f1eb-测试 - 长白山真的有" /></XCUIElementTypeOther></root>'
+    assert message_detail._ios_published_detail_title(source, '2596f1eb-测试 - 长白山真的有') is None
+
+
 def test_android_published_note_title_accepts_truncated_prefix(monkeypatch):
     taps = []
 
@@ -958,14 +974,107 @@ def test_ios_publish_entry_reports_transition_timeout_without_fallback(monkeypat
         def click(self):
             clicks.append("click")
 
+        def is_displayed(self):
+            return True
+
+        def is_enabled(self):
+            return True
+
     class FakeDriver:
         capabilities = {"platformName": "iOS"}
+        page_source = "活动列表"
 
         def find_element(self, by, value):
             return FakeElement()
 
     monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: False)
     with pytest.raises(AssertionError, match="accessibilityId=bottom-nav-center-action"):
+        message_detail._tap_publish_entry_if_present(FakeDriver())
+    assert clicks == ["click", "click"]
+
+
+@pytest.mark.parametrize("destination", ["选择发布类型", "手机号登录 请输入手机号 密码登录 验证并登录"])
+def test_ios_publish_entry_retries_same_visible_id_after_missed_click(monkeypatch, destination):
+    events = []
+
+    class FakeElement:
+        def is_displayed(self):
+            return True
+
+        def is_enabled(self):
+            return True
+
+        def click(self):
+            events.append("click")
+            if events.count("click") == 2:
+                driver.page_source = destination
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = "活动列表"
+
+        def find_element(self, by, value):
+            events.append((by, value))
+            return FakeElement()
+
+    driver = FakeDriver()
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: condition())
+    assert message_detail._tap_publish_entry_if_present(driver) is True
+    assert events == [(message_detail.AppiumBy.ACCESSIBILITY_ID, "bottom-nav-center-action"), "click"] * 2
+
+
+def test_ios_publish_entry_rechecks_destination_before_retry(monkeypatch):
+    clicks = []
+
+    class FakeElement:
+        def click(self):
+            clicks.append("click")
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = "活动列表"
+
+        def find_element(self, by, value):
+            return FakeElement()
+
+    driver = FakeDriver()
+
+    def wait(condition, timeout):
+        driver.page_source = "选择发布类型"
+        return False
+
+    monkeypatch.setattr(message_detail, "_wait_until", wait)
+    assert message_detail._tap_publish_entry_if_present(driver) is True
+    assert clicks == ["click"]
+
+
+@pytest.mark.parametrize("state", ["missing", "hidden", "disabled"])
+def test_ios_publish_entry_does_not_retry_unavailable_entry(monkeypatch, state):
+    clicks = []
+    lookups = []
+
+    class FakeElement:
+        def click(self):
+            clicks.append("click")
+
+        def is_displayed(self):
+            return state != "hidden"
+
+        def is_enabled(self):
+            return state != "disabled"
+
+    class FakeDriver:
+        capabilities = {"platformName": "iOS"}
+        page_source = "活动列表"
+
+        def find_element(self, by, value):
+            lookups.append(value)
+            if len(lookups) > 1 and state == "missing":
+                raise NoSuchElementException("entry gone")
+            return FakeElement()
+
+    monkeypatch.setattr(message_detail, "_wait_until", lambda condition, timeout: False)
+    with pytest.raises(AssertionError, match="at most 2 clicks"):
         message_detail._tap_publish_entry_if_present(FakeDriver())
     assert clicks == ["click"]
 
@@ -1351,7 +1460,8 @@ def test_browse_android_detail_scrolls_when_interaction_metadata_is_missing(monk
     assert events == ["up"]
 
 
-def test_parse_system_message_snapshot_detects_first_visible_message():
+@pytest.mark.parametrize("header", ["系统消息", "系统通知"])
+def test_parse_system_message_snapshot_detects_first_visible_message(header):
     page_source = """
     <AppiumAUT>
       <XCUIElementTypeStaticText name="系统消息" visible="true" />
@@ -1362,7 +1472,7 @@ def test_parse_system_message_snapshot_detects_first_visible_message():
     </AppiumAUT>
     """
 
-    snapshot = message_detail.parse_system_message_snapshot(page_source)
+    snapshot = message_detail.parse_system_message_snapshot(page_source.replace('name="系统消息"', f'name="{header}"'))
 
     assert snapshot.page_visible
     assert snapshot.category == "活动通知"
@@ -1391,7 +1501,8 @@ def test_parse_system_message_snapshot_accepts_system_notification_category():
     assert snapshot.is_basic_system_message_visible()
 
 
-def test_open_system_message_page_taps_messages_tab_and_system_entry(monkeypatch):
+@pytest.mark.parametrize("entry", ["系统消息", "系统通知"])
+def test_open_system_message_page_taps_messages_tab_and_system_entry(monkeypatch, entry):
     calls = []
     page = {"source": "首页 笔记 活动 消息 我的"}
 
@@ -1402,10 +1513,12 @@ def test_open_system_message_page_taps_messages_tab_and_system_entry(monkeypatch
 
     def fake_tap_tab(driver, accessibility_id, text, timeout=3):
         calls.append(("tap-tab", accessibility_id, text))
-        page["source"] = "消息 系统通知 系统消息"
+        page["source"] = f"消息 {entry}"
         return True
 
     def fake_tap_text(driver, text, timeout=1):
+        if text != entry:
+            return False
         calls.append(("tap-text", text))
         page["source"] = "系统消息 活动通知 07-31 17:45 有新的活动报名"
         return True
@@ -1419,7 +1532,7 @@ def test_open_system_message_page_taps_messages_tab_and_system_entry(monkeypatch
     assert snapshot.is_basic_system_message_visible()
     assert calls == [
         ("tap-tab", "bottom-nav-messages", "消息"),
-        ("tap-text", "系统消息"),
+        ("tap-text", entry),
     ]
 
 
@@ -1570,7 +1683,7 @@ def test_build_changbaishan_note_draft_uses_requested_content():
     assert "第一次去长白山" in draft.body
     assert draft.topics == ["#长白山", "#旅行日记", "#治愈系风景", "#长白山天池", "#东北旅行"]
     assert draft.location == "长白山"
-    assert draft.album == "图片"
+    assert draft.album == "长白山"
     assert draft.allow_comments is True
 
 
@@ -1582,7 +1695,7 @@ def test_load_message_note_draft_reads_yaml_use_case():
     draft = load_message_note_draft("publish-note-changbaishan", testdata_path=testdata_path)
 
     assert draft.title == "测试 - 长白山真的有种让人瞬间安静下来的魔力"
-    assert draft.album == "图片"
+    assert draft.album == "长白山"
     assert draft.picture_index == 1
     assert draft.location == "长白山"
 
@@ -2514,6 +2627,17 @@ def test_close_ios_image_preview_taps_visible_top_right_close_button():
 
     assert message_detail._close_ios_image_preview_if_visible(FakeDriver()) is True
     assert taps == [("mobile: tap", {"x": 372, "y": 87})]
+
+
+@pytest.mark.parametrize("source,expected", [
+    ('<root><XCUIElementTypeStaticText name="朋友圈" visible="true"/></root>', True),
+    ('<hierarchy><android.widget.TextView text="微信好友"/></hierarchy>', True),
+    ('<root name="详情 微信 朋友圈"><node visible="false"><node name="朋友圈"/></node></root>', False),
+    ('<root><node name="关于微信的笔记"/></root>', False),
+    ('', False),
+])
+def test_share_sheet_requires_visible_exact_target(source, expected):
+    assert message_detail._share_sheet_visible(source) is expected
 
 
 def test_share_note_to_moments_taps_share_then_target(monkeypatch):

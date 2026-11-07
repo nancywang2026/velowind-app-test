@@ -304,7 +304,17 @@ def verify_four_home_videos(driver, artifact_dir: Path, *, video_count: int = 4,
                 else:
                     wait_for_home_feed(driver, timeout=20)
             if page < max_swipes:
-                swipe_vertical(driver, direction="up")
+                if platform == "android":
+                    # A default-speed swipe can fling past whole cards on
+                    # high-density Android devices. Keep adjacent scans
+                    # overlapping so every card's video corner can be seen.
+                    driver.execute_script("mobile: scrollGesture", {
+                        "left": 0, "top": int(window["height"] * .17),
+                        "width": window["width"], "height": int(window["height"] * .70),
+                        "direction": "down", "percent": .55, "speed": 1000,
+                    })
+                else:
+                    swipe_vertical(driver, direction="up")
                 time.sleep(.5)
         raise AssertionError(f"视频播放验证未完成：只找到 {len(results)}/{video_count} 个不同视频，不能标记通过")
     finally:

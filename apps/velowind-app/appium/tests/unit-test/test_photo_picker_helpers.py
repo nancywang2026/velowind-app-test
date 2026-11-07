@@ -1,3 +1,5 @@
+import pytest
+
 from velowind_appium.modules import photo_picker
 
 
@@ -123,6 +125,63 @@ def test_camera_video_duration_reads_seconds_from_preview():
     assert photo_picker._camera_video_duration_seconds("预览视频 0:29 | 720 x 1280 | MOV") == 29
     assert photo_picker._camera_video_duration_seconds("预览视频 31 秒 | 720 x 1280 | MOV") == 31
     assert photo_picker._camera_video_duration_seconds("预览视频 | 720 x 1280 | MOV") is None
+
+
+NATIVE_CAMERA_PREVIEW = '''<XCUIElementTypeApplication visible="true">
+  <XCUIElementTypeOther name="当前位置" value="0:0:0.00，共0:0:0.00" visible="true" />
+  <XCUIElementTypeButton name="Cancel" label="重拍" visible="true" />
+  <XCUIElementTypeButton name="Playback" label="播放" visible="true" />
+  <XCUIElementTypeButton name="Done" label="使用视频" visible="true" />
+</XCUIElementTypeApplication>'''
+
+
+@pytest.mark.parametrize("source, expected", [
+    (NATIVE_CAMERA_PREVIEW, True),
+    (NATIVE_CAMERA_PREVIEW.replace('name="Playback"', 'name="Other"'), False),
+    (NATIVE_CAMERA_PREVIEW.replace('name="Done" label="使用视频" visible="true"',
+                                   'name="Done" label="使用视频" visible="false"'), False),
+    (NATIVE_CAMERA_PREVIEW.replace('Application visible="true"', 'Application visible="false"'), False),
+    ('<invalid', False),
+    ('预览视频 0:05 确认', False),
+])
+def test_native_camera_preview_requires_visible_playback_and_done(source, expected):
+    assert photo_picker._ios_native_camera_video_preview_visible(source) is expected
+
+
+@pytest.mark.parametrize("app_preview, expected", [
+    ("预览视频 0:05 | 720 x 1280 | MOV", True),
+    ("预览视频 | 720 x 1280 | MOV", False),
+    ("预览视频 0:00 | 720 x 1280 | MOV", False),
+    (None, False),
+])
+def test_record_camera_accepts_native_clip_before_checking_app_duration(monkeypatch, app_preview, expected):
+    events = []
+
+    class Driver:
+        capabilities = {"platformName": "iOS"}
+        page_source = NATIVE_CAMERA_PREVIEW
+
+        def find_element(self, by, selector):
+            assert by == photo_picker.AppiumBy.IOS_PREDICATE
+            assert 'name == "Done"' in selector
+            return self
+
+        def click(self):
+            events.append("use-native-video")
+            if app_preview is not None:
+                self.page_source = app_preview
+
+    driver = Driver()
+    monkeypatch.setattr(photo_picker, "_camera_video_controls_visible", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "_tap_camera_record_control", lambda driver, start: True)
+    monkeypatch.setattr(photo_picker, "_wait_for_camera_recording_duration", lambda *args, **kwargs: True)
+    monkeypatch.setattr(photo_picker, "_wait_until", lambda predicate, timeout: predicate())
+    monkeypatch.setattr(photo_picker, "_confirm_camera_video_selection",
+                        lambda driver: events.append("confirm-app-preview") or True)
+
+    assert photo_picker._record_video_from_camera(driver, record_seconds=5) is expected
+    assert events == (["use-native-video", "confirm-app-preview"] if expected else ["use-native-video"])
+    assert getattr(driver, "_camera_video_actual_seconds", None) == (5 if expected else None)
 
 
 def test_record_video_from_camera_waits_configured_duration_then_reads_preview(monkeypatch):
@@ -1011,6 +1070,40 @@ def test_choose_album_photo_confirms_android_system_selection_before_cropper(mon
 
     assert photo_picker.choose_local_photo(FakeDriver(), album_name="云南洱海") is True
     assert events == ["system"]
+
+
+def test_android_photo_picker_uses_requested_album_and_photo_index(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        page_source = '<node package="com.android.photopicker" />'
+
+    monkeypatch.setattr(photo_picker, "open_photo_album", lambda driver, album: events.append(("album", album)) or True)
+    monkeypatch.setattr(photo_picker, "tap_photo_grid_candidate", lambda driver, index: events.append(("photo", index)) or True)
+    monkeypatch.setattr(photo_picker, "confirm_system_photo_picker_selection", lambda driver: events.append("confirm") or True)
+
+    assert photo_picker.choose_local_photo(FakeDriver(), album_name="长白山", picture_index=2) is True
+    assert events == [("album", "长白山"), ("photo", 2), "confirm"]
+
+
+def test_android_photo_picker_stops_when_requested_album_is_missing(monkeypatch):
+    events = []
+
+    class FakeDriver:
+        capabilities = {"platformName": "Android"}
+        page_source = '<node package="com.android.photopicker" />'
+
+    monkeypatch.setattr(photo_picker, "choose_photo_library_source", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "dismiss_photo_permission_alerts", lambda driver: None)
+    monkeypatch.setattr(photo_picker, "photo_library_visible", lambda driver, timeout: True)
+    monkeypatch.setattr(photo_picker, "_select_android_photo_picker_albums_tab", lambda driver: True)
+    monkeypatch.setattr(photo_picker, "open_photo_album", lambda driver, album: events.append(("album", album)) or False)
+    monkeypatch.setattr(photo_picker, "tap_photo_grid_candidate", lambda driver, index: events.append(("photo", index)) or True)
+    monkeypatch.setattr(photo_picker, "_choose_first_option", lambda *args, **kwargs: events.append("fallback") or True)
+
+    assert photo_picker.choose_photo_from_library(FakeDriver(), album_name="长白山") is False
+    assert events == [("album", "长白山")]
 
 
 def test_choose_local_photo_reopens_requested_ios_album_when_title_mismatches(monkeypatch):

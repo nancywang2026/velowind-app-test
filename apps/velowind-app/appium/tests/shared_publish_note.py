@@ -46,10 +46,13 @@ def publish_record_video_note_use_case_ids() -> list[str]:
     return use_case_ids
 
 
-def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, verification_label: str, assertion_label: str) -> None:
+def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, verification_label: str,
+                          assertion_label: str, notification_observer=None) -> None:
     draft = load_message_note_draft(use_case_id, testdata_path=TESTDATA_PATH)
 
     step("prepare-home-session", lambda: ensure_logged_in_for_publish_entry(app_driver, app_config))
+    if notification_observer is not None:
+        step("capture-note-notification-baseline", notification_observer.before_business)
     success_signal = step(
         f"publish-note-for-review-{use_case_id}",
         lambda: publish_message_note(app_driver, draft, ios_config=app_config, timeout=90),
@@ -76,12 +79,19 @@ def run_publish_note_case(app_driver, app_config, step, use_case_id: str, *, ver
         f"Expected the {assertion_label} note publish flow to end in a success/review state, got: {success_signal}"
     )
 
-    cleanup_config = load_cleanup_config()
-    if cleanup_config.delete_published_note_after_success:
-        step(
-            f"cleanup-published-note-{use_case_id}",
-            lambda: cleanup_published_note_after_success(app_driver, app_config, draft.title),
-        )
+    try:
+        if notification_observer is not None:
+            # Observer must resolve this publication's ID and wait for actual
+            # published state; a submission/review toast is insufficient.
+            step("verify-note-system-notification", lambda: notification_observer.after_publication(
+                app_driver, app_config, draft, success_signal))
+    finally:
+        cleanup_config = load_cleanup_config()
+        if cleanup_config.delete_published_note_after_success:
+            step(
+                f"cleanup-published-note-{use_case_id}",
+                lambda: cleanup_published_note_after_success(app_driver, app_config, draft.title),
+            )
 
 
 def cleanup_published_note_after_success(

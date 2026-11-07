@@ -200,18 +200,21 @@ def _ios_approved_more_point(source: str) -> tuple[float, float] | None:
     except ElementTree.ParseError:
         return None
     parents = {child: parent for parent in root.iter() for child in parent}
+    unpublished_point = None
     for card in root.iter("XCUIElementTypeOther"):
         groups = [child for child in card if child.tag == "XCUIElementTypeOther"]
         if card.get("visible") != "true" or len(groups) != 3:
             continue
-        # Both exact badges must belong to this card's content group. Never
-        # combine states from different cards or tap a pending/delisted card.
+        # Approval and shelf badges must belong to this card. The App allows
+        # session management before first publication; retain listed cards as
+        # the first choice and use an approved unpublished card as a fallback.
         states = {
             node.get(attr) for node in groups[1].iter()
             if node.get("visible") == "true"
             for attr in ("name", "label", "value")
         }
-        if not {"通过", "上架"} <= states:
+        if ("通过" not in states or not {"上架", "未发布"} & states
+                or {"被拒", "待审", "审核中", "下架"} & states):
             continue
         more = next(iter(groups[2]), None)
         if more is None or more.get("visible") != "true" or more.get("enabled") == "false":
@@ -239,8 +242,11 @@ def _ios_approved_more_point(source: str) -> tuple[float, float] | None:
             continue
         if (card_rect[0] <= point[0] <= card_rect[0] + card_rect[2]
                 and card_rect[1] <= point[1] <= card_rect[1] + card_rect[3]):
-            return point
-    return None
+            if "上架" in states:
+                return point
+            if unpublished_point is None:
+                unpublished_point = point
+    return unpublished_point
 
 
 def _ios_source_rect(node) -> tuple[float, float, float, float] | None:
@@ -2480,9 +2486,9 @@ def _tap_more_for_approved_activity(driver: WebDriver, page_source: str | None =
     if page_source is None:
         page_source = _safe_page_source(driver)
     if _is_ios_driver(driver):
-        if "通过" not in page_source or "上架" not in page_source:
+        if "通过" not in page_source or not any(state in page_source for state in ("上架", "未发布")):
             return False
-        # On iOS only act on a card that structurally contains both states.
+        # On iOS only act on a card that structurally contains both badges.
         # Do not fall through to a generic More button, which could belong to
         # a pending, rejected, or delisted activity.
         return _tap_ios_approved_more_element(driver)
@@ -2542,11 +2548,12 @@ def _top_approved_badge_center_y(driver: WebDriver) -> int | None:
 
 def _tap_ios_approved_more_element(driver: WebDriver) -> bool:
     # Match the card structurally: its content group contains both exact state
-    # badges (approved and listed), while its third group is the card's More
+    # badges (approved and listed/unpublished), while its third group is the card's More
     # action. No screen coordinates or fixed dimensions participate here.
     state_predicate = (
         '//*[@name="通过" or @label="通过" or @value="通过"]'
-        ' and .//*[@name="上架" or @label="上架" or @value="上架"]'
+        ' and .//*[@name="上架" or @label="上架" or @value="上架"'
+        ' or @name="未发布" or @label="未发布" or @value="未发布"]'
     )
     xpaths = [
         (

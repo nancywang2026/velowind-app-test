@@ -20,6 +20,11 @@ from velowind_appium.reporting import allure, attach_text
 class NoteCleanupApiError(RuntimeError):
     """Sanitized API failure; never includes credentials or response bodies."""
 
+    def __init__(self, message, *, status=None, code=None):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+
 
 def api_cleanup_enabled():
     from velowind_appium.cleanup_config import note_cleanup_mode
@@ -101,12 +106,12 @@ def _redact(value, secrets=()):
     return value
 
 
-def _request_data(method, url, *, body=None, token=None):
+def _request_data(method, url, *, body=None, token=None, redact_credentials=False):
     with allure.step(f"API {method} {url}"):
-        return _reported_request_data(method, url, body=body, token=token)
+        return _reported_request_data(method, url, body=body, token=token, redact_credentials=redact_credentials)
 
 
-def _reported_request_data(method, url, *, body=None, token=None):
+def _reported_request_data(method, url, *, body=None, token=None, redact_credentials=False):
     headers = {"Accept": "application/json", "X-Request-Id": str(uuid.uuid4())}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -154,7 +159,10 @@ def _reported_request_data(method, url, *, body=None, token=None):
                     read_response(error, error.code)
                 except (OSError, ValueError):
                     pass
-            raise NoteCleanupApiError(f"Note cleanup {method} failed: HTTP {error.code}") from None
+            response_body = (record.get("response") or {}).get("body")
+            code = response_body.get("code") if isinstance(response_body, dict) else None
+            raise NoteCleanupApiError(f"Note cleanup {method} failed: HTTP {error.code}",
+                                      status=error.code, code=code) from None
         except (URLError, OSError, ValueError):
             raise NoteCleanupApiError(f"Note cleanup {method} failed: network or invalid JSON response") from None
         if not isinstance(result, dict) or result.get("code") != 0 or not isinstance(result.get("data"), dict):
@@ -170,22 +178,23 @@ def _reported_request_data(method, url, *, body=None, token=None):
         reported = _redact(record, secrets)
         # Explicitly requested for local credential diagnosis. These credentials
         # are persisted in Allure; keep tokens and cookies redacted.
-        if body and "password" in body:
+        if body and "password" in body and not redact_credentials:
             reported["request"]["body"]["password"] = body["password"]
         attach_text("api-call", json.dumps(reported, ensure_ascii=False, indent=2))
         attach_text("API request", json.dumps(reported["request"], ensure_ascii=False, indent=2))
         attach_text("API response", json.dumps(reported["response"], ensure_ascii=False, indent=2))
 
 
-def delete_note_via_api(post_id: str, phone: str, password: str) -> None:
+def delete_note_via_api(post_id: str, phone: str, password: str, *, base_url=None) -> None:
     if not re.fullmatch(r"pst-[0-9a-fA-F]{32}", post_id):
         raise ValueError("Invalid note postId")
     if not phone or not password:
         raise NoteCleanupApiError("API cleanup requires configured login username and password")
-    from velowind_appium.cleanup_config import note_cleanup_api_base_url
-    base = note_cleanup_api_base_url()
+    from velowind_appium.cleanup_config import note_cleanup_api_base_url, normalize_note_api_base_url
+    base = normalize_note_api_base_url(base_url) if base_url is not None else note_cleanup_api_base_url()
     login = _request_data("POST", base + "/auth/login/phone/password",
-                          body={"phone": str(phone), "password": password})
+                          body={"phone": str(phone), "password": password},
+                          **({"redact_credentials": True} if base_url is not None else {}))
     token = login.get("accessToken")
     if not isinstance(token, str) or not token.strip():
         raise NoteCleanupApiError("Login response is missing accessToken")

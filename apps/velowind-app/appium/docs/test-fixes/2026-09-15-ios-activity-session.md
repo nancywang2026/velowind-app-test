@@ -5,7 +5,7 @@
 - 用户要求：分析并修复报告中的失败用例。
 - 用例：`test_user_can_add_activity_session_from_my_approved_activity`。
 - 模块：`velowind_appium/modules/activity_sessions.py`；iOS 真机。
-- 当前状态：真机局部通过（仅此用例）；整套未验证，新增场次未清理；最后核实日期：2026-09-15。
+- 当前状态：2026-10-27 已兼容通过+未发布入口，取消额外跨环境 API 核验后218项关联单元通过；原完整真机目标1 passed，整套未复跑，新场次未删除。历史各轮结论保留。
 - 历史参考：`activity-session-ios-android-notes.md` 提到 iOS 部分控件需要 W3C touch；不能直接认定本次原因相同。
 
 ## 失败证据
@@ -82,3 +82,65 @@ VW_APPIUM_RUN_ID=20260915-activity-session-fix VW_APPIUM_AUTO_OPEN_REPORT=0 PYTH
 - 未完成/未验证：整套回归、Android 真机、测试场次删除。查找仍受固定 180 秒上限约束，列表进一步增长时可能再次超时，可另行研究限定测试活动/查询方式。
 - 设备状态：本轮 pytest 已退出，会话正常 quit；未停止其他 Appium 服务。
 - 下一步：如需整套结论，先检查设备占用后运行对应 suite；不要将此次单用例通过视为整套通过。
+
+## 第 4 轮：2026-10-27 复发，活动通过但尚未发布
+
+### 新失败证据
+
+- 用户报告 `http://127.0.0.1:51511/#suites/939591926e03527b1c0b544223c58491/7f5965898c4c2a57/`，用例与原记录相同。
+- 最新失败步骤 `01-add-activity-session`，**217.717 秒**，`Unable to open Manage Sessions for an approved activity`。运行目录待从报告服务进程核实。
+- 失败附件 `allure-report/data/attachments/47fa1ce5ea8a3b1d.png`、`3aea2747cde5bf49.xml`；本轮调查副本 `/tmp/activity-session-20261027.{png,xml}`。
+- 实际已滚到我的活动发布列表底部，唯一可见“通过”的测试活动为“测试 - 张家界大环线2天1晚”，状态“通过 + 未发布”；其他卡片为“被拒 + 上架”或“被拒”。
+- 确认 `_ios_approved_more_point` 要求同卡片精确“通过 + 上架”，因此排除了现场唯一审核通过活动。本次不能复用历史“查找时间不足”结论或只扩大超时。
+- 本地前端 `packages/activity/src/page/my-activities/Page.tsx::resolvePublishedRouteActions` 总是包含“管理场次”，上/下架操作另由 canToggleShelf 控制；安装包行为仍需现场核实。
+- 进程检查无其他设备 pytest；未结束常驻 Appium/WDA。当前准备只打开通过但未发布的测试活动菜单，不提交数据。
+
+### 修改与验证（进行中）
+
+- 尚未修改筛选；先验证现场该卡片是否提供管理场次入口。保持审核通过要求，不选择被拒卡片，不改变活动上架/审核状态。
+- 原用例未进入新增表单，无此次失败新增场次，无清理目标。
+
+### 第 4 轮现场确认与修复
+
+- 已核实原运行目录 `.tmp/appium-ios/runs/20261027-164911-75374/`。
+- 独立只读交互探测：在同一生产 App 的“通过 + 未发布”测试活动上，点击 XML 派生 More 点 `(364,565)`，实际显示菜单“编辑 / 管理场次 / 上架活动”。现场截图和 XML `.tmp/appium-ios/runs/20261027-session-unpublished-investigation/menu.*`，未点“上架活动”、未创建场次。
+- 当前 App 允许审核通过但未发布活动管理场次；历史“通过 + 上架”限制在本次安装包和数据状态下不再适合作为唯一入口条件。
+- 修改 `_ios_approved_more_point`：保留通过状态及同卡片/可见/可点击/裁剪校验；优先通过+上架，找不到再使用通过+未发布；显式排除被拒、待审、审核中、下架。兼容旧 iOS 语义 More 分支的 shelf 条件。
+- 用例验证说明同步为“审核通过且可管理场次（上架优先，兼容未发布）”，完整表单、日期和提交/发布流程未跳过。
+- 新增回归：未发布可用、上架优先、不能跨卡片组合状态、即使有其他“通过”文本也拒绝被拒卡片；原隐藏祖先及屏幕裁剪覆盖继续保留。
+- 关联单元 **147 passed / 18.80 秒**；完善被拒状态用例后定向 **10 passed / 24 deselected / 0.05 秒**。旧失败 XML 修复后可得到 `(364,528)`，落在现场通过未发布卡片 More 范围内。
+- 原完整用例真机 run `20261027-activity-session-unpublished-r1` 已启动，使用 VW_API_ENV=prod 和常规 pnpm/ios-p1 入口，仅 -k 定向此用例。检查无其他设备 pytest 后才启动；本轮运行中，尚不计通过。
+- 本轮新场次清理状态待核实。原用例没有自动清理步骤，不用 passed 代替实际清理。
+
+```bash
+VW_APPIUM_AUTO_OPEN_REPORT=0 PYTHONPATH=apps/velowind-app/appium .venv/bin/python -m pytest apps/velowind-app/appium/tests/unit-test/test_ios_p1_performance.py apps/velowind-app/appium/tests/unit-test/test_activity_sessions.py -q
+
+VW_API_ENV=prod VW_NOTE_CLEANUP_MODE=api VW_APPIUM_PLATFORM=ios \
+VW_APPIUM_SERVER_URL=http://127.0.0.1:4723 VW_IOS_UDID=00008150-0006799C2693401C \
+VW_APPIUM_ARTIFACT_DIR=.tmp/appium-ios/runs/20261027-activity-session-unpublished-r1/artifacts \
+VW_APPIUM_RUN_ID=20261027-activity-session-unpublished-r1 VW_ALLURE_OPEN_PORT=0 \
+pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-p1.yaml -k test_user_can_add_activity_session_from_my_approved_activity
+```
+
+### 第 4 轮完整复验首次结果：环境核验网络阻塞
+
+- `20261027-activity-session-unpublished-r1`：**1 setup error / 12 deselected / 102.29 秒**。生产 App 登录成功、prod-api 密码登录 HTTP 200；dev-api 作为另一个环境的唯一性核验请求没有 HTTP 响应，记录 `network or invalid JSON response`，识别逻辑按原规则报 inconclusive。
+- 该轮尚未执行 add-activity-session，不是筛选修复在现场失败，也不能计为通过；无新增场次、无清理目标。
+- 保留环境识别对于网络异常停止的逻辑，不将无响应当成登录拒绝。下一轮在网络恢复后原样复验。
+
+### 第 4 轮第二次结果及环境流程纠正
+
+- r2 `20261027-activity-session-unpublished-r2`：**1 setup error / 12 deselected / 101.36 秒**。用户新报告端口 52873；仍是额外 dev-api 唯一性请求读超时，尚未进入场次步骤，无新增数据。原样重试未解决问题，保留失败。
+- 用户追问后核对其要求，确定跨环境 API 核验为实现额外引入。已移除此依赖：指定环境账号 App 登录成功并确认已登录个人页后即绑定，只在明确拒绝时尝试其他账号。详见 [环境识别第5轮](2026-10-27-app-environment-login.md)。没有把超时当成账号拒绝。
+- 场次定位和完整断言保持，准备再次使用常规 pnpm 入口复验。单元、真机和实际清理结果分别补充。
+
+### 第 4 轮最终结果：原目标真机通过
+
+- 联合环境/清理/场次单元 **218 passed / 19.08 秒**；没有替代真机结论。
+- `20261027-activity-session-unpublished-r3`：**1 passed / 12 deselected / 451.50 秒**，pnpm 退出码0。命令沿用 r1，run/artifact ID 改 r3，额外 `--tb=short`。
+- App prod 凭据成功即绑定生产，未再请求测试 API。活动发布列表6.86秒，管理场次入口3.84秒，新增表单2.76秒；完整新增步骤371.3秒，提交3.15秒，后续发布检查4.13秒，成功信号“管理场次”。本用例断言新增流程成功，不额外宣称已验证独立的上架业务状态。
+- 报告目录 `.tmp/appium-ios/runs/20261027-activity-session-unpublished-r3/allure-report/`，原始结果同 run 的 `allure-results/`；临时 URL `http://127.0.0.1:54211/`。
+- 实际清理：本用例没有自动删除场次步骤，本轮“测试 - 场次 1027”**未删除**；未用 passed 替代清理结论。r1/r2 均在 setup 失败，没有新增场次。
+- 最终状态：原入口失败与完整目标已修复并真机通过；r1/r2 阻塞记录保留。整套 P1、Android、新场次删除均未验证。日期控件填写仍较慢，本轮不作为效率优化结论。
+- 设备 pytest/run_ios_tests 已退出、driver.quit passed；未停止其他 Appium 或报告服务。`git diff --check` 通过。
+- 下一步如需整套或清理验证，先检查现有进程，按精确场次目标核实后操作；不批量处理其他既有活动/场次。

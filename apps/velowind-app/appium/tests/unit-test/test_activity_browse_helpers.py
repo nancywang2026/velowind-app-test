@@ -1,6 +1,17 @@
 from velowind_appium.modules import activity_browse
 
 
+def test_activity_category_navigation_supports_current_and_legacy_all_labels():
+    for header in ("全部活动", "全部"):
+        class Driver:
+            page_source = (
+                f'<AppiumAUT><XCUIElementTypeStaticText name="{header}" visible="true"/>'
+                '<XCUIElementTypeStaticText name="骑行" visible="true"/></AppiumAUT>'
+            )
+
+        activity_browse.switch_activity_category_navigation(Driver(), timeout=1)
+
+
 def test_activity_feed_contains_category_results_requires_activity_card_content():
     page_source = """
     <AppiumAUT>

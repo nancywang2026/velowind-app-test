@@ -41,6 +41,27 @@ def test_ios_more_requires_both_states_on_same_visible_card():
     assert activity_sessions._ios_approved_more_point(activity_list(cards)) == (364, 478)
 
 
+def test_ios_more_accepts_approved_unpublished_activity():
+    source = activity_list(activity_card(listed=False).replace('name="下架"', 'name="未发布"'))
+    assert activity_sessions._ios_approved_more_point(source) == (364, 421)
+
+
+def test_ios_more_prefers_listed_card_over_unpublished_card():
+    cards = activity_card(listed=False, y=240).replace('name="下架"', 'name="未发布"') + activity_card(y=454)
+    assert activity_sessions._ios_approved_more_point(activity_list(cards)) == (364, 478)
+
+
+def test_ios_more_does_not_combine_approval_and_unpublished_from_different_cards():
+    cards = activity_card(listed=False, y=240) + activity_card(approved=False, listed=False, y=347).replace('name="下架"', 'name="未发布"')
+    assert activity_sessions._ios_approved_more_point(activity_list(cards)) is None
+
+
+def test_ios_more_rejects_explicit_rejection_even_with_other_approval_text():
+    source = activity_list(activity_card().replace('name="测试活动"', 'name="通过"')
+                           .replace('<XCUIElementTypeOther name="通过"', '<XCUIElementTypeOther name="被拒"'))
+    assert activity_sessions._ios_approved_more_point(source) is None
+
+
 @pytest.mark.parametrize("cards", [
     activity_card(approved=False) + activity_card(listed=False),
     activity_card(visible="false"), activity_card(y=-100), activity_card(y=900),

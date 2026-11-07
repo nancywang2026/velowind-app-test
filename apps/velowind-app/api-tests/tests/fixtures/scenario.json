@@ -1,0 +1,44 @@
+{
+  "base_url": "${base_url}",
+  "accounts": {
+    "a": {
+      "phone": "${phone_a}",
+      "password": "${password_a}"
+    },
+    "b": {
+      "phone": "${phone_b}",
+      "password": "${password_b}"
+    },
+    "c": {
+      "phone": "${phone_c}",
+      "password": "${password_c}"
+    }
+  },
+  "resources": {
+    "post_id": "${post_id}",
+    "activity_id": "${activity_id}"
+  },
+  "messages": {
+    "to_b": {
+      "count": 3,
+      "template": "[{run_id}] 未读测试 A→B 第{index}/{count}条消息"
+    },
+    "to_c": {
+      "count": 5,
+      "template": "[{run_id}] 私聊测试 A→C 第{index}/{count}条消息"
+    },
+    "post_share": "[{run_id}] 分享一篇笔记给你",
+    "activity_share": "[{run_id}] 分享一个活动给你"
+  },
+  "expected": {
+    "baseline_unread_b": 0,
+    "unread_b": 3,
+    "unread_delta_b": 3
+  },
+  "execution": {
+    "http_timeout_seconds": 15,
+    "request_interval_seconds": 0.2,
+    "page_size": 50,
+    "max_pages": 20
+  }
+}

@@ -58,19 +58,25 @@ def note_cleanup_mode() -> str:
 def note_cleanup_api_base_url() -> str:
     raw = os.environ.get("VW_NOTE_CLEANUP_API_BASE_URL")
     if raw is None:
+        environment = os.environ.get("VW_API_ENV")
         cleanup = _read_yaml_config().get("cleanup", {})
         cleanup = cleanup if isinstance(cleanup, dict) else {}
-        raw = cleanup.get("note_cleanup_api_base_url")
+        raw = cleanup.get("note_cleanup_api_base_url") if environment is None else None
         if raw is None:
-            environment = str(os.environ.get("VW_API_ENV", "uat")).strip().lower()
+            environment = str(environment if environment is not None else "uat").strip().lower()
             hosts = {
+                "test": ("VW_TEST_API_HOST", "https://dev-api.velowind.com"),
                 "uat": ("VW_UAT_API_HOST", "https://uat-api.velowind.com"),
                 "prod": ("VW_PROD_API_HOST", "https://prod-api.velowind.com"),
             }
             if environment not in hosts:
-                raise ValueError("api_environment / VW_API_ENV must be uat or prod")
+                raise ValueError("api_environment / VW_API_ENV must be test, uat or prod")
             variable, default_host = hosts[environment]
             raw = os.environ.get(variable, default_host)
+    return normalize_note_api_base_url(raw)
+
+
+def normalize_note_api_base_url(raw) -> str:
     base = str(raw or "").strip().rstrip("/")
     parsed = urlsplit(base)
     if (parsed.scheme != "https" or not parsed.hostname or parsed.username
