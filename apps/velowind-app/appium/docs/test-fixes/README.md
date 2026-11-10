@@ -6,6 +6,12 @@
 
 | 问题 / 检索词 | 记录 | 已确认范围 |
 | --- | --- | --- |
+| AI 看不到截图/XML、源码截断、缺历史正文、过早转人工 | [证据与受控补证](2026-11-10-triage-evidence-protocol.md) | 新增运行源码快照、函数/依赖提取、XML与已审查图像输入、相关历史/YAML、两轮受控补证及阻断分流；139项回归通过，真实旧报告回放已写回，旧dirty快照缺失仍保留人工接续 |
+| 点赞、Unable to tap bottom action、post-detail-bottom-like-action | [底部互动标识](2026-11-10-ios-note-bottom-action-ids.md) | 原XML确认固定name导致旧定位失败；保留已有修补，42定向单元通过，原完整真机1 passed（7步）；232 helpers通过、5项旧mock失败基线复现；互动未清理 |
+| Locked、iPhone锁屏、setup建会话失败 | [锁屏阻止会话](2026-11-09-ios-locked-device.md) | 原报告确认锁屏，用户解锁后按完整命令验证中；入队开启及worker复用已确认 |
+| VW_API_ENV=prod、登录清理共用配置、ios-appium.prod.yaml | [iOS 共用环境配置](2026-11-07-ios-shared-environment-config.md) | 11月9日复发确认解析器缺失：基线7失败2通过，恢复后113项通过、实际生产文件共用读取已核对；原请求确认普通密码、响应Incorrect password；真机登录删除未验证 |
+| once静默、队列为空、AI诊断写回Allure、历史失败导入 | [终端与Allure反馈](2026-11-07-triage-cli-allure-feedback.md) | 11月9日确认关闭入队且worker退出；补诊断及HTTP回写完成；新增自动补启动，32项通过；原broken/清理失败保持 |
+| AI失败诊断、Codex、自动修复分支、Taiga去重 | [AI 诊断框架](2026-11-07-ai-failure-triage.md) | 真机两轮取证、真实Codex诊断分流已验证；109项本轮定向通过；真实修复闭环及Taiga建单未验证 |
 | iOS 拍摄视频、使用视频、Playback / Done、recording could not be completed | [系统视频确认](2026-11-06-ios-camera-native-video-confirm.md) | 已补两级预览确认，96单元通过；真机setup因设备离线失败，完整流程与清理待验证 |
 | 图片比对、pixel-delta-too-high、大图黑边、全屏 Image bounds | [大图内容区域](2026-11-06-ios-image-viewer-content-bounds.md) | 目标真机1 passed且新增笔记API删除成功；245单元通过、5项历史mock失败，原失败笔记未清理 |
 | 发布后详情打不开、post-detail-title、我的笔记新版 Tab | [详情标题标识误读](2026-11-06-ios-published-detail-title-id.md) | 已修正，22项定向单元通过；真机原笔记打开与标题核验通过；全文件232通过5项mock失败，完整发布未重跑、原笔记未清理 |

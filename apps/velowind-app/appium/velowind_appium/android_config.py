@@ -49,8 +49,18 @@ def _env_text(name: str) -> Optional[str]:
     return normalized or None
 
 
+def resolve_android_config_file() -> Path:
+    explicit = _env_text("VW_APPIUM_CONFIG_FILE")
+    production = (_env_text("VW_API_ENV") or "").lower() == "prod"
+    config_path = Path(explicit).expanduser() if explicit else (
+        DEFAULT_CONFIG_FILE.with_name("android-appium.prod.yaml") if production else DEFAULT_CONFIG_FILE)
+    if production and not explicit and not config_path.is_file():
+        raise FileNotFoundError("Production Android Appium configuration not found: " + str(config_path))
+    return config_path
+
+
 def _read_yaml_config() -> Dict[str, object]:
-    config_path = Path(os.environ.get("VW_APPIUM_CONFIG_FILE", str(DEFAULT_CONFIG_FILE))).expanduser()
+    config_path = resolve_android_config_file()
     if not config_path.exists():
         return {}
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}

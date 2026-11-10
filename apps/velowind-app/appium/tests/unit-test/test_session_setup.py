@@ -487,7 +487,7 @@ def test_pytest_runtest_makereport_can_capture_final_page_for_passed_test(monkey
 @pytest.mark.parametrize("phase,failed,expected", [
     ("setup", True, ["test_demo-setup"]),
     ("setup", False, []),
-    ("teardown", True, []),
+    ("teardown", True, ["test_demo-teardown"]),
     ("call", True, ["test_demo"]),
 ])
 def test_failed_setup_captures_debug_artifacts(monkeypatch, phase, failed, expected):
@@ -1963,3 +1963,18 @@ def test_ensure_logged_in_for_publish_entry_unwinds_my_notes_detail(monkeypatch)
     assert session.ensure_logged_in_for_publish_entry(object(), object()) is False
     assert pages[0] == "home"
     assert ("top-back", "my-note-detail") in events
+
+
+@pytest.mark.parametrize('error', [AssertionError('expected failure'), pytest.fail.Exception('explicit failure')])
+def test_step_failure_records_label_and_preserves_exception(error, monkeypatch):
+    from types import SimpleNamespace
+    request = SimpleNamespace(node=SimpleNamespace())
+    captures = []
+    monkeypatch.setenv('VW_APPIUM_CAPTURE_EACH_STEP', 'false')
+    execute = conftest.step.__wrapped__(captures.append, request)
+    def fail():
+        raise error
+    with pytest.raises(type(error)) as caught:
+        execute('diagnostic-probe', fail)
+    assert caught.value is error
+    assert request.node._failure_triage_step == '01-diagnostic-probe'

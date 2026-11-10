@@ -32,9 +32,16 @@ def load_environment_accounts():
     """Return None when disabled; validate every candidate before touching the App."""
     path = os.environ.get("VW_APPIUM_ENVIRONMENT_ACCOUNTS")
     if path is None:
-        setting = _read_yaml_config().get("environment_login", {})
+        if os.environ.get("VW_APPIUM_PLATFORM", "ios").strip().lower() == "android":
+            from .android_config import _read_yaml_config as read_config
+        else:
+            read_config = _read_yaml_config
+        setting = read_config().get("environment_login", {})
         path = setting.get("candidates_file") if isinstance(setting, dict) else None
-    if path is None and os.environ.get("VW_API_ENV") is not None and DEFAULT_ENVIRONMENT_ACCOUNTS.is_file():
+    if (path is None and os.environ.get("VW_APPIUM_PLATFORM", "ios").strip().lower() != "ios"
+            and os.environ.get("VW_API_ENV") is not None
+            and os.environ["VW_API_ENV"].strip().lower() != "prod"
+            and DEFAULT_ENVIRONMENT_ACCOUNTS.is_file()):
         path = DEFAULT_ENVIRONMENT_ACCOUNTS
     if path is None:
         return None

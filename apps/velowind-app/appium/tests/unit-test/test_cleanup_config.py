@@ -25,7 +25,7 @@ cleanup:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("VW_APPIUM_CLEANUP_CONFIG_FILE", str(config_file))
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
 
     config = load_cleanup_config()
 
@@ -39,7 +39,7 @@ cleanup:
 
 
 def test_load_cleanup_config_uses_safe_defaults(monkeypatch):
-    monkeypatch.setenv("VW_APPIUM_CLEANUP_CONFIG_FILE", "/tmp/missing-cleanup.yaml")
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", "/tmp/missing-cleanup.yaml")
 
     config = load_cleanup_config()
 
@@ -62,7 +62,7 @@ cleanup:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("VW_APPIUM_CLEANUP_CONFIG_FILE", str(config_file))
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
 
     config = load_cleanup_config()
 
@@ -81,6 +81,6 @@ def test_load_cleanup_config_accepts_string_boolean(tmp_path, monkeypatch):
         "cleanup:\n  delete_published_note_after_success: 'yes'\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("VW_APPIUM_CLEANUP_CONFIG_FILE", str(config_file))
+    monkeypatch.setenv("VW_APPIUM_CONFIG_FILE", str(config_file))
 
     assert load_cleanup_config().delete_published_note_after_success is True

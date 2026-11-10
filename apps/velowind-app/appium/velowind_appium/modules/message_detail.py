@@ -5849,6 +5849,21 @@ def _ios_bottom_action_entries(page_source: str) -> list[tuple[str, int, int, in
     if detail is not None:
         root = detail
 
+    action_ids = ("post-detail-bottom-like-action", "post-detail-bottom-favorite-action",
+                  "post-detail-bottom-comment-action")
+    identified = {}
+    for element in root.iter():
+        attrs = element.attrib
+        name = attrs.get("name")
+        if name not in action_ids or attrs.get("visible") == "false" or attrs.get("enabled") == "false":
+            continue
+        rect = _source_element_rect(attrs)
+        count = attrs.get("label", "").strip()
+        if rect is not None and count.isdigit():
+            identified[name] = (count, *rect)
+    if all(name in identified for name in action_ids):
+        return [identified[name] for name in action_ids]
+
     rows: dict[int, list[tuple[str, int, int, int, int]]] = {}
     for element in root.iter():
         attributes = element.attrib

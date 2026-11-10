@@ -1,0 +1,20 @@
+{
+  "ai_timeout": 300,
+  "unit_timeout": 300,
+  "device_timeout": 1800,
+  "max_attempts": 2,
+  "context_files": [
+    "apps/velowind-app/appium/velowind_appium/modules/home_feed.py",
+    "apps/velowind-app/appium/docs/test-fixes/2026-09-15-ios-publish-cleanup.md"
+  ],
+  "validation": {},
+  "taiga": {
+    "api_url": "https://project.velowind.com/taiga/api/v1",
+    "project_slug": "velowind-app",
+    "token_env": "VW_TRIAGE_TAIGA_TOKEN"
+  },
+  "agent_auth_mode": "chatgpt",
+  "max_evidence_rounds": 2,
+  "diagnosis_timeout": 600,
+  "context_chars": 100000
+}

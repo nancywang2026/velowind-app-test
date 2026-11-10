@@ -19,29 +19,33 @@ VW_APPIUM_ENVIRONMENT_ACCOUNTS="$PWD/.private/message-regression/app-environment
 pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-publish-note.yaml
 ```
 
-也可在 Appium YAML 中设置 `environment_login.candidates_file`，路径相对于运行目录；显式 `VW_APPIUM_ENVIRONMENT_ACCOUNTS` 优先。设置 `VW_API_ENV` 且未指定上述清单时，会自动读取仓库 `.private/message-regression/app-environments.yaml`（若存在），因此常规 `pnpm` suite 入口无需额外指定生产 Appium 配置文件。没有任何可用清单时沿用原静态配置行为。
+也可在 Appium YAML 中设置 `environment_login.candidates_file`，路径相对于运行目录；显式 `VW_APPIUM_ENVIRONMENT_ACCOUNTS` 优先。iOS 仅在显式设置清单时启用自动识别，不再因 `VW_API_ENV` 隐式读取本地清单；默认直接使用所选 Appium YAML 的账号。Android 保留设置 `VW_API_ENV` 时读取默认私有清单的行为。
 
-`VW_API_ENV=prod` 优先尝试生产账号，`VW_API_ENV=test` 优先尝试测试账号；首选被明确拒绝后，再按清单顺序尝试其余环境。未设置变量时按原清单顺序；设置了清单中不存在的环境时在登录前报错。该变量是尝试优先级，最终环境及删除地址仍由实际登录结果确认。
+显式启用候选清单后，`VW_API_ENV=prod` 优先尝试生产账号，`VW_API_ENV=test` 优先尝试测试账号；首选被明确拒绝后，再按清单顺序尝试其余环境。未设置变量时按原清单顺序；设置了清单中不存在的环境时在登录前报错。该变量是尝试优先级，最终环境及删除地址仍由实际登录结果确认。
 
 每个 Appium 会话先退出已有登录态，按候选顺序各提交一次密码登录。明确的“密码错误”“用户不存在”“未设置密码”会继续下一组，切换前重新打开干净表单；设备错误、登录超时、未出现已登录个人页均直接失败。App 登录成功并确认已认证个人页后，立即绑定该候选环境及其 API 地址，不再请求其他环境进行核验。此识别方式依赖配置中各环境使用不同且能区分环境的凭据。
 
 匹配结果保存在当前 driver 会话，后续自动登录恢复使用匹配凭据，笔记 API 删除使用同一组用户名、密码及匹配地址，优先于静态 `VW_API_ENV` / 清理 host。发布后若登录匹配信息被替换，拒绝删除；新会话重新识别。Allure 保存候选拒绝/匹配结果和最终环境，自动识别及匹配清理的 API 附件隐藏密码与令牌。
 
-当前本地已放置默认清单，`VW_API_ENV=prod` 即可触发生产优先识别；清单与凭据保存在 Git 忽略的本地路径。Allure 的 `app-environment-login-order` 记录实际候选顺序，`note-cleanup-mode` 记录优先变量、静态 host 覆盖是否存在及匹配结果。
+清单与凭据保存在 Git 忽略的本地路径；iOS 需要显式设置上述清单才能触发候选识别。Allure 的 `app-environment-login-order` 记录实际候选顺序，`note-cleanup-mode` 记录优先变量、静态 host 覆盖是否存在及匹配结果。
 
 ### 手动选择环境
 
-当前生产真机使用独立本地配置 `ios-appium.prod.yaml`，其中包含 `device`、`login` 和 `cleanup`。该文件已加入 Git 忽略，需在 `login` 中填写有效生产凭据；默认保留 App 数据和照片授权（`no_reset: true`）。同时指定两个配置变量，使 UI 登录与 API 清理使用同一文件：
+iOS 登录与清理共用同一份 YAML，文件选择顺序为：
+
+1. 显式 `VW_APPIUM_CONFIG_FILE`；
+2. `VW_API_ENV=prod` 自动选择 `ios-appium.prod.yaml`；
+3. 其他情况选择 `ios-appium.yaml`。
+
+生产配置包含 `device`、`login` 和 `cleanup`，保存在 Git 忽略的本地文件中。生产配置缺失时报错，不回退到普通账号。普通 iOS 配置也包含 `cleanup`，iOS 不再读取独立的 `cleanup.yaml`。Android 仍使用原有清理文件。
 
 ```bash
-VW_APPIUM_CONFIG_FILE="$PWD/apps/velowind-app/appium/ios-appium.prod.yaml" \
-VW_APPIUM_CLEANUP_CONFIG_FILE="$PWD/apps/velowind-app/appium/ios-appium.prod.yaml" \
 VW_API_ENV=prod pnpm appium:ios:test:suite apps/velowind-app/appium/test-suites/ios-publish-note.yaml
 ```
 
-若使用另一个已有配置文件，将上述两个变量设为其绝对路径；该文件需包含 `login`、设备配置和 `cleanup`。已有 `VW_LOGIN_USERNAME` / `VW_LOGIN_PASSWORD` 环境变量仍优先于文件中的登录配置。
+不需要再设置 `VW_APPIUM_CLEANUP_CONFIG_FILE`；旧变量若与所选文件不同，会在配置加载时报错，请从运行配置中删除。指定其他文件时，仅设置 `VW_APPIUM_CONFIG_FILE`，该文件应同时包含设备、`login` 和 `cleanup`。已有 `VW_LOGIN_USERNAME` / `VW_LOGIN_PASSWORD` 和清理单项环境变量仍可覆盖文件字段。
 
-`VW_API_ENV=test` 使用测试环境 `https://dev-api.velowind.com`，`uat` 使用 UAT，`prod` 使用生产环境。当前真机 App 已确认为生产环境，`cleanup.yaml` 默认使用生产环境；未指定环境且 YAML 未配置地址时才回退到 UAT。
+`VW_API_ENV=test|uat` 使用普通 iOS YAML 的账号，需确保该账号适用于目标环境；API 地址分别选择测试或 UAT。生产选择生产 API 地址。
 
 ```bash
 # 测试环境
@@ -52,8 +56,8 @@ VW_API_ENV=uat pnpm appium:ios:test:profile publish
 VW_API_ENV=prod pnpm appium:ios:test:profile publish
 ```
 
-未启用自动识别时，登录与删除共用清理 API 地址，优先级为 `VW_NOTE_CLEANUP_API_BASE_URL` →
-显式 `VW_API_ENV=test|uat|prod` → `cleanup.yaml` 的 `note_cleanup_api_base_url` → UAT 默认地址。
+未启用候选识别时，清理 API 地址优先级为 `VW_NOTE_CLEANUP_API_BASE_URL` →
+显式 `VW_API_ENV=test|uat|prod` → 所选 YAML 的 `cleanup.note_cleanup_api_base_url` → UAT 默认地址。
 各环境可分别通过 `VW_TEST_API_HOST` / `VW_UAT_API_HOST` / `VW_PROD_API_HOST` 覆盖 host。
 地址支持 HTTPS origin 或带 `/api/v1/mobile` 的完整基础路径。
 环境变量只决定测试脚本的 API 请求地址，不切换已安装 App 的后端，请与 App 实际环境保持一致。
@@ -524,3 +528,7 @@ allure open <本轮allure-report目录>
 ```
 
 每轮使用独立结果目录，避免混入其他运行。导入旧记录时不补造绝对时间，耗时显示在参数中；XML 为实际存在的分组快照，不冒充逐步骤截图。
+
+## AI 失败诊断与分支修复
+
+失败自动入队，独立 Codex worker 负责分类、创建修复分支及验证；产品缺陷生成 Taiga Bug 草稿并在证据审查后提交。配置、运行方式、重跑边界和未验证项见 [AI 诊断说明](TRIAGE.md)。

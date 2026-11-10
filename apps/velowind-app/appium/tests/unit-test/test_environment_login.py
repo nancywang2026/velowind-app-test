@@ -95,12 +95,13 @@ def test_environment_preference_controls_real_attempt_order_with_fallback(manife
     assert selected.environment == (other if preferred_rejected else preferred)
 
 
-def test_vw_api_env_alone_enables_existing_default_candidate_manifest(manifest, monkeypatch):
+def test_android_test_environment_retains_default_candidate_manifest(manifest, monkeypatch):
+    monkeypatch.setenv("VW_APPIUM_PLATFORM", "android")
     monkeypatch.delenv("VW_APPIUM_ENVIRONMENT_ACCOUNTS", raising=False)
-    monkeypatch.setenv("VW_API_ENV", "prod")
+    monkeypatch.setenv("VW_API_ENV", "test")
     monkeypatch.setattr(env, "_read_yaml_config", lambda: {})
     monkeypatch.setattr(env, "DEFAULT_ENVIRONMENT_ACCOUNTS", manifest)
-    assert [a.environment for a in env.load_environment_accounts()] == ["prod", "test"]
+    assert [a.environment for a in env.load_environment_accounts()] == ["test", "prod"]
 
 
 @pytest.mark.parametrize("preferred", ["", "dev", "uat"])

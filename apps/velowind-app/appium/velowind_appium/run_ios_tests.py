@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -172,12 +173,11 @@ def build_pytest_command(
     ]
     if last_failed:
         base_command.append("--lf")
-    if run_all_failures:
-        base_command.append("--maxfail=0")
+    final_args = ["--maxfail=0"] if run_all_failures else []
 
     if args.all:
         os.environ["VW_IOS_RUN_FULL"] = "true"
-        return [*base_command, *remaining]
+        return [*base_command, *remaining, *final_args]
 
     if args.suite and args.suite_profile:
         raise ValueError("Use either --suite or --suite-profile, not both.")
@@ -191,9 +191,31 @@ def build_pytest_command(
         suite_command.extend(suite.pytest_args)
         suite_command.extend(_suite_test_paths(suite.tests))
         suite_command.extend(remaining)
-        return suite_command
+        return [*suite_command, *final_args]
 
-    return [*base_command, *(remaining or ["-m", "smoke"])]
+    return [*base_command, *(remaining or ["-m", "smoke"]), *final_args]
+
+
+def build_retry_command(cli_args: list[str]) -> list[str]:
+    # Only retry failures from this run. Passing explicit selectors for files
+    # skipped by pytest --lf can otherwise cause "not found" collection errors.
+    selectors = set()
+    for path in allure_artifacts().results.glob("*-result.json"):
+        result = json.loads(path.read_text())
+        if result.get("status") not in {"failed", "broken"}:
+            continue
+        module, separator, function = result.get("fullName", "").partition("#")
+        name = result.get("name", "")
+        if not separator or not module.startswith("tests.") or not name.startswith(function):
+            continue
+        source = TEST_PATH.joinpath(*module.split(".")[1:]).with_suffix(".py")
+        if source.resolve().is_relative_to(TEST_PATH.resolve()):
+            selectors.add(str(source) + "::" + name)
+    if not selectors:
+        return []
+    command = build_pytest_command(cli_args, clean_allure=False, last_failed=True, run_all_failures=True)
+    command = [arg for arg in command if not arg.startswith(str(TEST_PATH))]
+    return [*command, *sorted(selectors)]
 
 
 def main() -> int:
@@ -205,9 +227,11 @@ def main() -> int:
     pytest_result = _run(build_pytest_command(cli_args, clean_allure=True, run_all_failures=retry_enabled))
     if pytest_result.returncode == 1 and retry_enabled:
         print("Retrying failed pytest cases with --lf before generating Allure report.")
-        pytest_result = _run(
-            build_pytest_command(cli_args, clean_allure=False, last_failed=True, run_all_failures=True)
-        )
+        retry_command = build_retry_command(cli_args)
+        if retry_command:
+            pytest_result = _run(retry_command)
+        else:
+            print("No exact failed Allure selectors available; preserving the original failure without a blind rerun.")
     _generate_and_open_report()
     return pytest_result.returncode
 

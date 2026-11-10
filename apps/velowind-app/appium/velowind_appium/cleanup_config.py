@@ -87,6 +87,10 @@ def normalize_note_api_base_url(raw) -> str:
 
 
 def _read_yaml_config() -> dict[str, Any]:
+    if os.environ.get("VW_APPIUM_PLATFORM", "ios").strip().lower() == "ios":
+        from .config import _read_yaml_config as read_ios_config
+
+        return read_ios_config()
     config_path = Path(os.environ.get("VW_APPIUM_CLEANUP_CONFIG_FILE", str(DEFAULT_CONFIG_FILE))).expanduser()
     if not config_path.exists():
         return {}

@@ -1,6 +1,7 @@
 """Title-scoped XML selection and authenticated note deletion.
 
-Set cleanup.note_cleanup_mode in cleanup.yaml for persistent selection.
+Set cleanup.note_cleanup_mode in the selected Appium YAML for iOS
+(cleanup.yaml for Android) for persistent selection.
 VW_NOTE_CLEANUP_MODE=api|ui overrides that selection. Bulk cleanup is unchanged.
 Credentials come from app_config.login_username/login_password (existing YAML
 login settings or VW_LOGIN_USERNAME/VW_LOGIN_PASSWORD overrides). The configured

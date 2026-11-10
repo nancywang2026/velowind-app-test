@@ -16,7 +16,7 @@ from velowind_appium.session import ensure_logged_in_from_me_then_home, ensure_l
 from velowind_appium.timing import env_flag_enabled, profile_section
 
 
-pytest_plugins = ["velowind_appium.pytest_timing"]
+pytest_plugins = ["velowind_appium.pytest_timing", "velowind_appium.pytest_failure_triage"]
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -70,7 +70,19 @@ def create_test_driver(config):
 
 
 @pytest.fixture(scope="session")
-def driver(ios_config):
+def device_lease():
+    from velowind_appium.triage.store import Store
+    lock_root = Path(os.environ.get("VW_APPIUM_DEVICE_LOCK_DIR", REPO_ROOT / ".tmp/appium-triage"))
+    store = Store(lock_root)
+    try:
+        with store.lock("device-" + _test_platform()):
+            yield
+    finally:
+        store.db.close()
+
+
+@pytest.fixture(scope="session")
+def driver(ios_config, device_lease):
     with profile_section("driver.create", emit=_progress):
         app_driver = create_test_driver(ios_config)
     try:
@@ -151,7 +163,7 @@ def capture_page(driver, ios_config, request):
 
 
 @pytest.fixture
-def step(capture_page):
+def step(capture_page, request):
     counter = {"value": 0}
 
     def _step(label: str, action=None, capture: bool = False):
@@ -164,7 +176,8 @@ def step(capture_page):
                 result = action() if action is not None else None
                 _progress(f"STEP PASS  {step_label} ({time.monotonic() - started_at:.1f}s)")
                 return result
-            except Exception as exc:
+            except (Exception, pytest.fail.Exception) as exc:
+                request.node._failure_triage_step = step_label
                 _progress(
                     f"STEP FAIL  {step_label} ({time.monotonic() - started_at:.1f}s): "
                     f"{type(exc).__name__}: {exc}"
@@ -195,7 +208,7 @@ def pytest_runtest_makereport(item, call):
         if outcome is None:
             outcome = "passed" if getattr(report, "passed", False) else "failed"
         _progress(f"CASE {str(outcome).upper()} {nodeid or getattr(item, 'name', '<unknown>')}")
-    if report.when != "call" and not (report.when == "setup" and report.failed):
+    if report.when != "call" and not report.failed:
         return
 
     app_driver = item.funcargs.get("driver")
@@ -215,8 +228,14 @@ def pytest_runtest_makereport(item, call):
             attach_recorded_publish_note_image_validation_artifacts(app_driver)
         except Exception:
             pass
-        label = f"{item.name}-setup" if report.when == "setup" else item.name
-        capture_and_attach_debug_artifacts(app_driver, ios_config.artifact_dir, label=label)
+        label = f"{item.name}-{report.when}" if report.when != "call" else item.name
+        try:
+            artifacts = capture_and_attach_debug_artifacts(app_driver, ios_config.artifact_dir, label=label)
+            if not hasattr(item, "_failure_triage_artifacts"):
+                item._failure_triage_artifacts = {}
+            item._failure_triage_artifacts[report.when] = artifacts
+        except Exception:
+            _progress("Failure evidence capture unavailable; preserving original failure")
 
 
 def pytest_sessionfinish(session, exitstatus):
